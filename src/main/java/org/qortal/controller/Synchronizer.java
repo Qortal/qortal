@@ -31,7 +31,7 @@ import org.qortal.network.message.GetBlockSummariesMessage;
 import org.qortal.network.message.GetSignaturesV2Message;
 import org.qortal.network.message.Message;
 import org.qortal.network.message.SignaturesMessage;
-import org.qortal.network.message.Message.MessageType;
+import org.qortal.network.message.MessageType;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
@@ -612,7 +612,7 @@ public class Synchronizer {
 
 	/**
 	 * Returns list of peer's block summaries starting with common block with peer.
-	 * 
+	 *
 	 * @param peer
 	 * @return block summaries, or empty list if no common block, or null if there was an issue
 	 * @throws DataException
@@ -651,7 +651,7 @@ public class Synchronizer {
 					LOGGER.info(String.format("Error while trying to find common block with peer %s", peer));
 				else
 					LOGGER.debug(String.format("Error while trying to find common block with peer %s", peer));
-				
+
 				// No response - give up this time
 				return SynchronizationResult.NO_REPLY;
 			}

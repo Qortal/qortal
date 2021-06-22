@@ -10,6 +10,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.Test;
+import org.qortal.network.Task;
 import org.qortal.utils.ExecuteProduceConsume;
 import org.qortal.utils.ExecuteProduceConsume.StatsSnapshot;
 
@@ -37,9 +38,7 @@ public class EPCTests {
 
 			// Sometimes produce a task
 			if (percent < TASK_PERCENT) {
-				return () -> {
-					Thread.sleep(random.nextInt(500) + 100);
-				};
+				return new SleepTask(random);
 			} else {
 				// If we don't produce a task, then maybe simulate a pause until work arrives
 				if (canIdle && percent < PAUSE_PERCENT)
@@ -133,11 +132,16 @@ public class EPCTests {
 
 		final List<Long> lastPings = new ArrayList<>(Collections.nCopies(MAX_PEERS, System.currentTimeMillis()));
 
-		class PingTask implements ExecuteProduceConsume.Task {
+		class TestPingTask implements Task {
 			private final int peerIndex;
 
-			public PingTask(int peerIndex) {
+			public TestPingTask(int peerIndex) {
 				this.peerIndex = peerIndex;
+			}
+
+			@Override
+			public String getName() {
+				return "TestPingTask";
 			}
 
 			@Override
@@ -170,7 +174,7 @@ public class EPCTests {
 
 						if (lastPing < now - PING_INTERVAL) {
 							lastPings.set(peerIndex, System.currentTimeMillis());
-							return new PingTask(peerIndex);
+							return new TestPingTask(peerIndex);
 						}
 					}
 				}
@@ -183,4 +187,21 @@ public class EPCTests {
 		testEPC(new PingEPC());
 	}
 
+	class SleepTask implements Task {
+		private final Random random;
+
+		public SleepTask(Random random) {
+			this.random = random;
+		}
+
+		@Override
+		public String getName() {
+			return "SleepTask";
+		}
+
+		@Override
+		public void perform() throws InterruptedException {
+			Thread.sleep(random.nextInt(500) + 100);
+		}
+	}
 }

@@ -13,7 +13,7 @@ import org.qortal.crypto.MemoryPoW;
 import org.qortal.network.message.ChallengeMessage;
 import org.qortal.network.message.HelloMessage;
 import org.qortal.network.message.Message;
-import org.qortal.network.message.Message.MessageType;
+import org.qortal.network.message.MessageType;
 import org.qortal.settings.Settings;
 import org.qortal.network.message.ResponseMessage;
 import org.qortal.utils.DaemonThreadFactory;

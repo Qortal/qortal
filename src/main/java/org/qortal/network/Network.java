@@ -364,11 +364,16 @@ public class Network {
             return null;
         }
 
-        class PeerConnectTask implements ExecuteProduceConsume.Task {
+        class PeerConnectTask implements Task {
             private final Peer peer;
 
             PeerConnectTask(Peer peer) {
                 this.peer = peer;
+            }
+
+            @Override
+            public String getName() {
+                return "PeerConnectTask";
             }
 
             @Override
@@ -403,56 +408,7 @@ public class Network {
             }
 
             nextBroadcastTimestamp = now + BROADCAST_INTERVAL;
-            return () -> Controller.getInstance().doNetworkBroadcast();
-        }
-
-        class ChannelTask implements ExecuteProduceConsume.Task {
-            private final SelectionKey selectionKey;
-
-            ChannelTask(SelectionKey selectionKey) {
-                this.selectionKey = selectionKey;
-            }
-
-            @Override
-            public void perform() throws InterruptedException {
-                try {
-                    LOGGER.trace("Thread {} has pending channel: {}, with ops {}",
-                            Thread.currentThread().getId(), selectionKey.channel(), selectionKey.readyOps());
-
-                    // process pending channel task
-                    if (selectionKey.isReadable()) {
-                        connectionRead((SocketChannel) selectionKey.channel());
-                    } else if (selectionKey.isAcceptable()) {
-                        acceptConnection((ServerSocketChannel) selectionKey.channel());
-                    }
-
-                    LOGGER.trace("Thread {} processed channel: {}",
-                            Thread.currentThread().getId(), selectionKey.channel());
-                } catch (CancelledKeyException e) {
-                    LOGGER.trace("Thread {} encountered cancelled channel: {}",
-                            Thread.currentThread().getId(), selectionKey.channel());
-                }
-            }
-
-            private void connectionRead(SocketChannel socketChannel) {
-                Peer peer = getPeerFromChannel(socketChannel);
-                if (peer == null) {
-                    return;
-                }
-
-                try {
-                    peer.readChannel();
-                } catch (IOException e) {
-                    if (e.getMessage() != null && e.getMessage().toLowerCase().contains("connection reset")) {
-                        peer.disconnect("Connection reset");
-                        return;
-                    }
-
-                    LOGGER.trace("[{}] Network thread {} encountered I/O error: {}", peer.getPeerConnectionId(),
-                            Thread.currentThread().getId(), e.getMessage(), e);
-                    peer.disconnect("I/O error");
-                }
-            }
+            return new BroadcastTask();
         }
 
         private Task maybeProduceChannelTask(boolean canBlock) throws InterruptedException {
@@ -500,7 +456,7 @@ public class Network {
         }
     }
 
-    private void acceptConnection(ServerSocketChannel serverSocketChannel) throws InterruptedException {
+    protected void acceptConnection(ServerSocketChannel serverSocketChannel) throws InterruptedException {
         SocketChannel socketChannel;
 
         try {
@@ -628,7 +584,7 @@ public class Network {
         this.onPeerReady(newPeer);
     }
 
-    private Peer getPeerFromChannel(SocketChannel socketChannel) {
+    protected Peer getPeerFromChannel(SocketChannel socketChannel) {
         synchronized (this.connectedPeers) {
             for (Peer peer : this.connectedPeers) {
                 if (peer.getSocketChannel() == socketChannel) {
