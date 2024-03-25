@@ -453,15 +453,22 @@ public class ArbitraryDataReader {
 
     private void decrypt() throws DataException {
         try {
-            // First try with explicit parameters (CBC mode with PKCS5 padding)
-            this.decryptUsingAlgo("AES/CBC/PKCS5Padding");
+            // First try with new parameters (GCM mode with no padding)
+            this.decryptUsingAlgo("AES/GCM/NoPadding");
 
         } catch (DataException e) {
-            LOGGER.info("Unable to decrypt using specific parameters: {}", e.getMessage());
-            // Something went wrong, so fall back to default AES params (necessary for legacy resource support)
-            this.decryptUsingAlgo("AES");
+            LOGGER.info("Unable to decrypt using new parameters: {}", e.getMessage());
+            try {
+                // Next try with old parameters (CBC mode with PKCS5 padding)
+                this.decryptUsingAlgo("AES/CBC/PKCS5Padding");
 
-            // TODO: delete files and block this resource if privateDataEnabled is false and the second attempt fails too
+            } catch (DataException f) {
+                LOGGER.info("Unable to decrypt using old parameters: {}", f.getMessage());
+                // Something went wrong, so fall back to default AES params (necessary for legacy resource support)
+                this.decryptUsingAlgo("AES");
+            }
+
+            // TODO: delete files and block this resource if privateDataEnabled is false and the final attempt fails too
         }
     }
 
