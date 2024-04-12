@@ -27,7 +27,7 @@ public abstract class TrustlessSSLSocketFactory {
 	private static final SSLContext sc;
 	static {
 		try {
-			sc = SSLContext.getInstance("SSL");
+			sc = SSLContext.getInstance("TLSv1.3");
 			sc.init(null, TRUSTLESS_MANAGER, new java.security.SecureRandom());
 		} catch (Exception e) {
 			throw new RuntimeException(e);
