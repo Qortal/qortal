@@ -45,7 +45,7 @@ public class Ravencoin extends Bitcoiny {
 				return Arrays.asList(
 					// Servers chosen on NO BASIS WHATSOEVER from various sources!
 					// Status verified at https://1209k.com/bitcoin-eye/ele.php?chain=rvn
-					new Server("electrum.qortal.link", Server.ConnectionType.SSL, 56002),
+					// offline Server("electrum.qortal.link", Server.ConnectionType.SSL, 56002),
 					new Server("electrum1.cipig.net", Server.ConnectionType.SSL, 20051),
 					new Server("electrum2.cipig.net", Server.ConnectionType.SSL, 20051),
 					new Server("electrum3.cipig.net", Server.ConnectionType.SSL, 20051),

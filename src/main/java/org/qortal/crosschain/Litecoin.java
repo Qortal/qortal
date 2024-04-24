@@ -46,12 +46,22 @@ public class Litecoin extends Bitcoiny {
 					// Servers chosen on NO BASIS WHATSOEVER from various sources!
 					// Status verified at https://1209k.com/bitcoin-eye/ele.php?chain=ltc
 					new Server("backup.electrum-ltc.org", Server.ConnectionType.SSL, 443),
+					new Server("5.161.216.180", Server.ConnectionType.SSL, 50002),
+					new Server("5.78.97.174", Server.ConnectionType.SSL, 50002),
+					new Server("46.101.3.154", Server.ConnectionType.SSL, 50002),
+					new Server("188.166.208.106", Server.ConnectionType.SSL, 50002),
 					new Server("electrum.ltc.xurious.com", Server.ConnectionType.SSL, 50002),
 					new Server("electrum.qortal.link", Server.ConnectionType.SSL, 50002),
 					new Server("electrum-ltc.petrkr.net", Server.ConnectionType.SSL, 60002),
+					new Server("electrum-ltc.qortal.online", Server.ConnectionType.SSL, 50002),
 					new Server("electrum1.cipig.net", Server.ConnectionType.SSL, 20063),
 					new Server("electrum2.cipig.net", Server.ConnectionType.SSL, 20063),
 					new Server("electrum3.cipig.net", Server.ConnectionType.SSL, 20063),
+					new Server("fallacy.fiatfaucet.com", Server.ConnectionType.SSL, 50002),
+					new Server("fury.fiatfaucet.com", Server.ConnectionType.SSL, 50002),
+					new Server("lightweight.fiatfaucet.com", Server.ConnectionType.SSL, 50002),
+					new Server("litecoin.stackwallet.com", Server.ConnectionType.SSL, 20063),
+					new Server("ltc.aftrek.org", Server.ConnectionType.SSL, 50002),
 					new Server("ltc.rentonrisk.com", Server.ConnectionType.SSL, 50002)
 				);
 			}
