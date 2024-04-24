@@ -1,6 +1,7 @@
 package org.qortal.api.resource;
 
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -26,6 +27,7 @@ import javax.ws.rs.GET;
 import javax.ws.rs.HeaderParam;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
+import javax.ws.rs.QueryParam;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import java.util.List;
@@ -261,9 +263,11 @@ public class CrossChainLitecoinResource {
 					)
 			}
 	)
-	public ServerConfigurationInfo getServerConfiguration() {
+	public ServerConfigurationInfo getServerConfiguration(@Parameter(
+		description = "Returns info for the currently connected server only"
+	) @QueryParam("current") Boolean current) {
 
-		return CrossChainUtils.buildServerConfigurationInfo(Litecoin.getInstance());
+		return CrossChainUtils.buildServerConfigurationInfo(Litecoin.getInstance(), current);
 	}
 
 	@POST
