@@ -10,9 +10,11 @@ import org.qortal.crosschain.ElectrumX.Server;
 import org.qortal.crosschain.ChainableServer.ConnectionType;
 import org.qortal.settings.Settings;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 
 public class Bitcoin extends Bitcoiny {
@@ -41,7 +43,7 @@ public class Bitcoin extends Bitcoiny {
 
 			@Override
 			public Collection<ElectrumX.Server> getServers() {
-				return Arrays.asList(
+				List<ElectrumX.Server> defaultServers = Arrays.asList(
 					// Servers chosen on NO BASIS WHATSOEVER from various sources!
 					// Status verified at https://1209k.com/bitcoin-eye/ele.php?chain=btc
 					new Server("104.198.149.61", Server.ConnectionType.SSL, 50002),
@@ -102,6 +104,35 @@ public class Bitcoin extends Bitcoiny {
 					new Server("vmd63185.contaboserver.net", Server.ConnectionType.SSL, 50002),
 					new Server("xtrum.com", Server.ConnectionType.SSL, 50002)
 				);
+
+				List<ElectrumX.Server> availableServers = new ArrayList<>();
+				Boolean useDefault = Settings.getInstance().getUseBitcoinDefaults();
+				if (useDefault == true) {
+					availableServers.addAll(defaultServers);
+				}
+
+				String[] settingsList = Settings.getInstance().getBitcoinServers();
+				if (settingsList != null) {
+					List<ElectrumX.Server> customServers = new ArrayList<>();
+					for (String setting : settingsList) {
+						String[] colonParts = setting.split(":");
+						if (colonParts.length == 2) {
+							String[] commaParts = colonParts[1].split(",");
+							if (commaParts.length == 2) {
+								String hostname = colonParts[0];
+								int port = Integer.parseInt(commaParts[0].trim());
+								String typeString = commaParts[1].trim().toUpperCase();
+								Server.ConnectionType type = Server.ConnectionType.SSL;
+								if (typeString.equals("TCP")) {
+									type = Server.ConnectionType.TCP;
+								}
+								customServers.add(new Server(hostname, type, port));
+							}
+						}
+					}
+					availableServers.addAll(customServers);
+				}
+				return availableServers;
 			}
 
 			@Override

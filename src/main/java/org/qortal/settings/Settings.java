@@ -241,6 +241,23 @@ public class Settings {
 	private DigibyteNet digibyteNet = DigibyteNet.MAIN;
 	private RavencoinNet ravencoinNet = RavencoinNet.MAIN;
 	private PirateChainNet pirateChainNet = PirateChainNet.MAIN;
+
+	// List of ElectrumX servers to attempt connections with
+	private String[] bitcoinServers = null;
+	private String[] litecoinServers = null;
+	private String[] dogecoinServers = null;
+	private String[] digibyteServers = null;
+	private String[] ravencoinServers = null;
+	private String[] pirateChainServers = null;
+
+	// Whether to connect with the default ElectrumX servers
+	private Boolean useBitcoinDefaults = true;
+	private Boolean useLitecoinDefaults = true;
+	private Boolean useDogecoinDefaults = true;
+	private Boolean useDigibyteDefaults = true;
+	private Boolean useRavencoinDefaults = true;
+	private Boolean usePirateChainDefaults = true;
+
 	// Also crosschain-related:
 	/** Whether to show SysTray pop-up notifications when trade-bot entries change state */
 	private boolean tradebotSystrayEnabled = false;
@@ -855,6 +872,44 @@ public class Settings {
 
 	public PirateChainNet getPirateChainNet() {
 		return this.pirateChainNet;
+	}
+
+	public String[] getBitcoinServers() {
+		return this.bitcoinServers;
+	}
+	public String[] getLitecoinServers() {
+		return this.litecoinServers;
+	}
+	public String[] getDogecoinServers() {
+		return this.dogecoinServers;
+	}
+	public String[] getDigibyteServers() {
+		return this.digibyteServers;
+	}
+	public String[] getRavencoinServers() {
+		return this.ravencoinServers;
+	}
+	public String[] getPirateChainServers() {
+		return this.pirateChainServers;
+	}
+
+	public Boolean getUseBitcoinDefaults() {
+		return this.useBitcoinDefaults;
+	}
+	public Boolean getUseLitecoinDefaults() {
+		return this.useLitecoinDefaults;
+	}
+	public Boolean getUseDogecoinDefaults() {
+		return this.useDogecoinDefaults;
+	}
+	public Boolean getUseDigibyteDefaults() {
+		return this.useDigibyteDefaults;
+	}
+	public Boolean getUseRavencoinDefaults() {
+		return this.useRavencoinDefaults;
+	}
+	public Boolean getUsePirateChainDefaults() {
+		return this.usePirateChainDefaults;
 	}
 
 	public int getMaxTradeOfferAttempts() {
