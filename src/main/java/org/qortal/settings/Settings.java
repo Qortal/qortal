@@ -367,6 +367,9 @@ public class Settings {
 	/** Whether to serve QDN data without authentication */
 	private boolean qdnAuthBypassEnabled = true;
 
+	/** Whether to accept CHAT transactions without authentication */
+	private boolean chatAuthBypassEnabled = false;
+
 	/** Limit threads per message type */
 	private Set<ThreadLimit> maxThreadsPerMessageType = new HashSet<>();
 
@@ -1108,6 +1111,10 @@ public class Settings {
 			return true;
 		}
 		return this.qdnAuthBypassEnabled;
+	}
+
+	public boolean isChatAuthBypassEnabled() {
+		return this.chatAuthBypassEnabled;
 	}
 
 	public Integer getMaxThreadsForMessageType(MessageType messageType) {
