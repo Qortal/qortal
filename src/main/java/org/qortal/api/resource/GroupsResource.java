@@ -166,6 +166,45 @@ public class GroupsResource {
 	}
 
 	@GET
+	@Path("/search")
+	@Operation(
+		summary = "Search group name and description fields",
+		responses = {
+			@ApiResponse(
+				description = "group info",
+				content = @Content(
+					mediaType = MediaType.APPLICATION_JSON,
+					array = @ArraySchema(schema = @Schema(implementation = GroupData.class))
+				)
+			)
+		}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE})
+	public List<GroupData> searchGroups(@Parameter(
+		description = "Query (searches name and description fields)"
+	) @QueryParam("query") String query, @Parameter(
+		ref = "limit"
+	) @QueryParam("limit") Integer limit, @Parameter(
+		ref = "offset"
+	) @QueryParam("offset") Integer offset, @Parameter(
+		ref = "reverse"
+	) @QueryParam("reverse") Boolean reverse) {
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<GroupData> searchResults = repository.getGroupRepository().searchGroups(query, limit, offset, reverse);
+			searchResults.forEach(result -> {
+				try {
+					result.memberCount = repository.getGroupRepository().countGroupMembers(result.getGroupId());
+				} catch (DataException e) {
+					// Exclude memberCount for this group
+				}
+			});
+			return searchResults;
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
 	@Path("/members/{groupid}")
 	@Operation(
 		summary = "List group members",

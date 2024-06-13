@@ -288,6 +288,69 @@ public class HSQLDBGroupRepository implements GroupRepository {
 	}
 
 	@Override
+	public List<GroupData> searchGroups(String query, Integer limit, Integer offset, Boolean reverse) throws DataException {
+		StringBuilder sql = new StringBuilder(512);
+		List<Object> bindParams = new ArrayList<>();
+
+		sql.append("SELECT group_id, owner, group_name, description, created_when, updated_when, reference, is_open, "
+				+ "approval_threshold, min_block_delay, max_block_delay, creation_group_id, reduced_group_name "
+				+ "FROM Groups");
+
+		// Handle general query matches
+		if (query != null) {
+			String queryWildcard = String.format("%%%s%%", query.toLowerCase());
+			sql.append(" WHERE (LCASE(group_name) LIKE ? OR LCASE(description) LIKE ?)");
+			bindParams.add(queryWildcard); bindParams.add(queryWildcard);
+		}
+
+		sql.append(" ORDER BY group_name");
+
+		if (reverse != null && reverse)
+			sql.append(" DESC");
+
+		HSQLDBRepository.limitOffsetSql(sql, limit, offset);
+
+		List<GroupData> groups = new ArrayList<>();
+
+		try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), bindParams.toArray())) {
+			if (resultSet == null)
+				return groups;
+
+			do {
+				int groupId = resultSet.getInt(1);
+				String owner = resultSet.getString(2);
+				String groupName = resultSet.getString(3);
+				String description = resultSet.getString(4);
+				long created = resultSet.getLong(5);
+
+				// Special handling for possibly-NULL "updated" column
+				Long updated = resultSet.getLong(6);
+				if (updated == 0 && resultSet.wasNull())
+					updated = null;
+
+				byte[] reference = resultSet.getBytes(7);
+				boolean isOpen = resultSet.getBoolean(8);
+
+				ApprovalThreshold approvalThreshold = ApprovalThreshold.valueOf(resultSet.getInt(9));
+
+				int minBlockDelay = resultSet.getInt(10);
+				int maxBlockDelay = resultSet.getInt(11);
+
+				int creationGroupId = resultSet.getInt(12);
+				String reducedGroupName = resultSet.getString(13);
+
+				groups.add(new GroupData(groupId, owner, groupName, description, created, updated, isOpen,
+						approvalThreshold, minBlockDelay, maxBlockDelay,
+						reference, creationGroupId, reducedGroupName));
+			} while (resultSet.next());
+
+			return groups;
+		} catch (SQLException e) {
+			throw new DataException("Unable to fetch groups from repository", e);
+		}
+	}
+
+	@Override
 	public void save(GroupData groupData) throws DataException {
 		HSQLDBSaver saveHelper = new HSQLDBSaver("Groups");
 
