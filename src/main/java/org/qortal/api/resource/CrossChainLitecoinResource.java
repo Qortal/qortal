@@ -14,7 +14,7 @@ import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.Security;
 import org.qortal.api.model.crosschain.AddressRequest;
-import org.qortal.api.model.crosschain.LitecoinSendRequest;
+import org.qortal.api.model.crosschain.BitcoinySendRequest;
 import org.qortal.crosschain.AddressInfo;
 import org.qortal.crosschain.ChainableServer;
 import org.qortal.crosschain.ElectrumX;
@@ -203,7 +203,7 @@ public class CrossChainLitecoinResource {
 			content = @Content(
 				mediaType = MediaType.APPLICATION_JSON,
 				schema = @Schema(
-					implementation = LitecoinSendRequest.class
+					implementation = BitcoinySendRequest.class
 				)
 			)
 		),
@@ -215,10 +215,10 @@ public class CrossChainLitecoinResource {
 	)
 	@ApiErrors({ApiError.INVALID_PRIVATE_KEY, ApiError.INVALID_CRITERIA, ApiError.INVALID_ADDRESS, ApiError.FOREIGN_BLOCKCHAIN_BALANCE_ISSUE, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE})
 	@SecurityRequirement(name = "apiKey")
-	public String sendBitcoin(@HeaderParam(Security.API_KEY_HEADER) String apiKey, LitecoinSendRequest litecoinSendRequest) {
+	public String sendBitcoin(@HeaderParam(Security.API_KEY_HEADER) String apiKey, BitcoinySendRequest litecoinSendRequest) {
 		Security.checkApiCallAllowed(request);
 
-		if (litecoinSendRequest.litecoinAmount <= 0)
+		if (litecoinSendRequest.coinAmount <= 0)
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
 
 		if (litecoinSendRequest.feePerByte != null && litecoinSendRequest.feePerByte <= 0)
@@ -234,7 +234,7 @@ public class CrossChainLitecoinResource {
 
 		Transaction spendTransaction = litecoin.buildSpend(litecoinSendRequest.xprv58,
 				litecoinSendRequest.receivingAddress,
-				litecoinSendRequest.litecoinAmount,
+				litecoinSendRequest.coinAmount,
 				litecoinSendRequest.feePerByte);
 
 		if (spendTransaction == null)
