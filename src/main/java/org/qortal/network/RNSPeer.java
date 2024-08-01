@@ -191,12 +191,10 @@ public class RNSPeer {
     }
 
     public void packetTimedOut(PacketReceipt receipt) {
-        log.info("packet timed out");
+        log.info("packet timed out, receipt status: {}", receipt.getStatus());
         if (receipt.getStatus() == PacketReceiptStatus.FAILED) {
-            log.info("packet timed out, receipt status: {}", PacketReceiptStatus.FAILED);
             this.peerTimedOut = true;
-            peerLink.teardown();
-            //this.deleteMe = true;
+            this.peerLink.teardown();
         }
     }
 
@@ -230,14 +228,22 @@ public class RNSPeer {
     /** Utility methods */
     public void pingRemote() {
         var link = this.peerLink;
-        log.info("pinging remote: {}", link);
-        var data = "ping".getBytes(UTF_8);
-        link.setPacketCallback(this::linkPacketReceived);
-        Packet pingPacket = new Packet(link, data);
-        PacketReceipt packetReceipt = pingPacket.send();
-        //packetReceipt.setTimeout(3L);
-        packetReceipt.setTimeoutCallback(this::packetTimedOut);
-        packetReceipt.setDeliveryCallback(this::packetDelivered);
+        if (nonNull(link)) {
+            if (peerLink.getStatus() == ACTIVE) {
+                log.info("pinging remote: {}", link);
+                var data = "ping".getBytes(UTF_8);
+                link.setPacketCallback(this::linkPacketReceived);
+                Packet pingPacket = new Packet(link, data);
+                PacketReceipt packetReceipt = pingPacket.send();
+                // Note: don't setTimeout, we want it to timeout with FAIL if not deliverable
+                //packetReceipt.setTimeout(5000L);
+                packetReceipt.setTimeoutCallback(this::packetTimedOut);
+                packetReceipt.setDeliveryCallback(this::packetDelivered);
+            } else {
+                log.info("can't send ping to a peer {} with (link) status: {}",
+                    Hex.encodeHexString(peerLink.getDestination().getHash()), peerLink.getStatus());
+            }
+        }
     }
 
     //public void shutdownLink(Link link) {

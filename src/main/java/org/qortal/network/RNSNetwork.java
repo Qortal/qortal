@@ -27,7 +27,6 @@ import static io.reticulum.identity.IdentityKnownDestination.recall;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 //import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
 import static io.reticulum.constant.ReticulumConstant.CONFIG_FILE_NAME;
-import lombok.extern.slf4j.Slf4j;
 import lombok.Data;
 //import lombok.Setter;
 //import lombok.Getter;
@@ -61,6 +60,11 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.codec.binary.Hex;
 
+// logging
+import lombok.extern.slf4j.Slf4j;
+//import org.slf4j.Logger;
+//import org.slf4j.LoggerFactory;
+
 @Data
 @Slf4j
 public class RNSNetwork {
@@ -68,8 +72,8 @@ public class RNSNetwork {
     Reticulum reticulum;
     //private static final String APP_NAME = "qortal";
     static final String APP_NAME = RNSCommon.APP_NAME;
-    //static final String defaultConfigPath = new String(".reticulum"); // if empty will look in Reticulums default paths
-    static final String defaultConfigPath = RNSCommon.defaultRNSConfigPath;
+    static final String defaultConfigPath = new String(".reticulum"); // if empty will look in Reticulums default paths
+    //static final String defaultConfigPath = RNSCommon.defaultRNSConfigPath;
     //private final String defaultConfigPath = Settings.getInstance().getDefaultRNSConfigPathForReticulum();
     private static Integer MAX_PEERS = 12;
     //private final Integer MAX_PEERS = Settings.getInstance().getMaxReticulumPeers();
@@ -86,16 +90,23 @@ public class RNSNetwork {
     //private volatile boolean isShuttingDown = false;
     //private int totalThreadCount = 0;
     //// TODO: settings - MaxReticulumPeers, MaxRNSNetworkThreadPoolSize (if needed)
+
+    //private static final Logger logger = LoggerFactory.getLogger(RNSNetwork.class);
     
     // Constructor
     private RNSNetwork () {
+        log.info("RNSNetwork constructor");
         try {
+            //String configPath = new java.io.File(defaultConfigPath).getCanonicalPath();
+            log.info("creating config from {}", defaultConfigPath);
             initConfig(defaultConfigPath);
+            //reticulum = new Reticulum(configPath);
             reticulum = new Reticulum(defaultConfigPath);
-            log.info("reticulum instance created: {}", reticulum.toString());
         } catch (IOException e) {
             log.error("unable to create Reticulum network", e);
         }
+        log.info("reticulum instance created");
+        log.info("reticulum instance created: {}", reticulum);
 
         //        Settings.getInstance().getMaxRNSNetworkThreadPoolSize(),   // statically set to 5 below
         //ExecutorService RNSNetworkExecutor = new ThreadPoolExecutor(1,
@@ -167,7 +178,20 @@ public class RNSNetwork {
         //rnsNetworkEPC.start();
     }
 
-    //@Synchronized
+    private void initConfig(String configDir) throws IOException {
+        File configDir1 = new File(defaultConfigPath);
+        if (!configDir1.exists()) {
+            configDir1.mkdir();
+        }
+        var configPath = Path.of(configDir1.getAbsolutePath());
+        Path configFile = configPath.resolve(CONFIG_FILE_NAME);
+
+        if (Files.notExists(configFile)) {
+            var defaultConfig = this.getClass().getClassLoader().getResourceAsStream("reticulum_default_config.yml");
+            Files.copy(defaultConfig, configFile, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
     public void shutdown() {
         isShuttingDown = true;
         log.info("shutting down Reticulum");
@@ -194,28 +218,21 @@ public class RNSNetwork {
         }
         // gracefully close links of peers that point to us
         for (Link l: incomingLinks) {
-            var data = concatArrays("close::".getBytes(UTF_8),l.getDestination().getHash());
-            Packet closePacket = new Packet(l, data);
-            var packetReceipt = closePacket.send();
-            packetReceipt.setTimeout(3L);
-            packetReceipt.setDeliveryCallback(this::closePacketDelivered);
-            packetReceipt.setTimeoutCallback(this::packetTimedOut);
+            sendCloseToRemote(l);
         }
         // Note: we still need to get the packet timeout callback to work...
         reticulum.exitHandler();
     }
 
-    private void initConfig(String configDir) throws IOException {
-        File configDir1 = new File(defaultConfigPath);
-        if (!configDir1.exists()) {
-            configDir1.mkdir();
-        }
-        var configPath = Path.of(configDir1.getAbsolutePath());
-        Path configFile = configPath.resolve(CONFIG_FILE_NAME);
-
-        if (Files.notExists(configFile)) {
-            var defaultConfig = this.getClass().getClassLoader().getResourceAsStream("reticulum_default_config.yml");
-            Files.copy(defaultConfig, configFile, StandardCopyOption.REPLACE_EXISTING);
+    public void sendCloseToRemote(Link link) {
+        if (nonNull(link)) {
+            var data = concatArrays("close::".getBytes(UTF_8),link.getDestination().getHash());
+            Packet closePacket = new Packet(link, data);
+            var packetReceipt = closePacket.send();
+            packetReceipt.setDeliveryCallback(this::closePacketDelivered);
+            packetReceipt.setTimeoutCallback(this::packetTimedOut);
+        } else {
+            log.debug("can't send to null link");
         }
     }
 
@@ -236,10 +253,7 @@ public class RNSNetwork {
     }
 
     public void packetTimedOut(PacketReceipt receipt) {
-        log.info("packet timed out");
-        if (receipt.getStatus() == PacketReceiptStatus.FAILED) {
-            log.info("packet timed out, receipt status: {}", PacketReceiptStatus.FAILED);
-        }
+        log.info("packet timed out, receipt status: {}", receipt.getStatus());
     }
 
     public void clientConnected(Link link) {
@@ -504,11 +518,28 @@ public class RNSNetwork {
                     p.shutdown();
                     peerList.remove(p);
                 }
+            } else {
+                peerList.remove(p);
             }
         }
         //removeExpiredPeers(this.linkedPeers);
         log.info("number of links (linkedPeers) after prunig: {}", peerList.size());
-        log.info("we have {} non-initiator links, list: {}", incomingLinks.size(), incomingLinks);
+        //log.info("we have {} non-initiator links, list: {}", incomingLinks.size(), incomingLinks);
+        var activePeerCount = 0;
+        var lps =  RNSNetwork.getInstance().getLinkedPeers();
+        for (RNSPeer p: lps) {
+            pLink = p.getPeerLink();
+            p.pingRemote();
+            try {
+                TimeUnit.SECONDS.sleep(2); // allow for peers to disconnect gracefully
+            } catch (InterruptedException e) {
+                log.error("exception: {}", e);
+            }
+            if ((nonNull(pLink) && (pLink.getStatus() == ACTIVE))) {
+                activePeerCount = activePeerCount + 1;
+            }
+        }
+        log.info("we have {} active peers", activePeerCount);
         maybeAnnounce(getBaseDestination());
     }
 

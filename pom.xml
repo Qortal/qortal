@@ -6,6 +6,10 @@
 	<version>4.5.1</version>
 	<packaging>jar</packaging>
 	<properties>
+    <!--
+    <maven.compiler.source>11</maven.compiler.source>
+    <maven.compiler.target>11</maven.compiler.target>
+    -->
 		<skipTests>true</skipTests>
 		<altcoinj.version>7dc8c6f</altcoinj.version>
 		<bitcoinj.version>0.15.10</bitcoinj.version>
@@ -36,14 +40,15 @@
 		<jsoup.version>1.17.2</jsoup.version>
 		<junit-jupiter-engine.version>5.10.0</junit-jupiter-engine.version>
 		<lifecycle-mapping.version>1.0.0</lifecycle-mapping.version>
-		<log4j.version>2.23.0</log4j.version>
+		<log4j.version>2.22.1</log4j.version>
 		<mail.version>1.5.0-b01</mail.version>
 		<maven-build-helper-plugin.version>3.5.0</maven-build-helper-plugin.version>
 		<maven-compiler-plugin.version>3.12.1</maven-compiler-plugin.version>
 		<maven-dependency-plugin.version>3.6.1</maven-dependency-plugin.version>
 		<maven-jar-plugin.version>3.3.0</maven-jar-plugin.version>
 		<maven-package-info-plugin.version>1.1.0</maven-package-info-plugin.version>
-		<maven-plugin.version>2.16.2</maven-plugin.version>
+		<!--<maven-plugin.version>2.16.2</maven-plugin.version>-->
+		<maven-plugin.version>3.12.1</maven-plugin.version>
 		<maven-reproducible-build-plugin.version>0.16</maven-reproducible-build-plugin.version>
 		<maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
 		<maven-shade-plugin.version>3.5.2</maven-shade-plugin.version>
@@ -52,13 +57,15 @@
 		<protobuf.version>3.25.3</protobuf.version>
 		<replacer.version>1.5.3</replacer.version>
 		<simplemagic.version>1.17</simplemagic.version>
-		<slf4j.version>1.7.36</slf4j.version>
 		<swagger-api.version>2.0.10</swagger-api.version>
 		<swagger-ui.version>5.11.8</swagger-ui.version>
 		<upnp.version>1.2</upnp.version>
 		<xz.version>1.9</xz.version>
    	<lombok.version>1.18.30</lombok.version>
-   	<jackson.version>2.14.3</jackson.version>
+   	<jackson.version>2.16.1</jackson.version>
+		<slf4j.version>2.0.12</slf4j.version>
+    <nitrite.version>4.3.0</nitrite.version>
+    <junit.version>5.9.2</junit.version>
 	</properties>
 	<build>
 		<sourceDirectory>src/main/java</sourceDirectory>
@@ -442,6 +449,10 @@
 			<id>project.local</id>
 			<name>project</name>
 			<url>file:${project.basedir}/lib</url>
+      <snapshots>
+        <enabled>true</enabled>
+        <updatePolicy>always</updatePolicy>
+      </snapshots>
 		</repository>
 		<!-- jitpack for build-on-demand of altcoinj -->
 		<repository>
@@ -453,6 +464,26 @@
       </snapshots>
 		</repository>
 	</repositories>
+     <!--
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.dizitart</groupId>
+        <artifactId>nitrite-bom</artifactId>
+        <version>${nitrite.version}</version>
+        <scope>import</scope>
+        <type>pom</type>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.logging.log4j</groupId>
+        <artifactId>log4j-bom</artifactId>
+        <version>${log4j.version}</version>
+        <scope>import</scope>
+        <type>pom</type>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+     -->
 	<dependencies>
 		<!-- https://mvnrepository.com/artifact/org.codehaus.mojo/build-helper-maven-plugin -->
 		<dependency>
@@ -578,7 +609,17 @@
 			<artifactId>guava</artifactId>
 			<version>${guava.version}</version>
 		</dependency>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+			<version>${slf4j.version}</version>
+		</dependency>
 		<!-- Logging: log4j2 -->
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-slf4j2-impl</artifactId>
+			<version>${log4j.version}</version>
+		</dependency>
 		<dependency>
 			<groupId>org.apache.logging.log4j</groupId>
 			<artifactId>log4j-core</artifactId>
@@ -589,24 +630,11 @@
 			<artifactId>log4j-api</artifactId>
 			<version>${log4j.version}</version>
 		</dependency>
-		<!-- redirect slf4j to log4j2 -->
-		<dependency>
-			<groupId>org.apache.logging.log4j</groupId>
-			<artifactId>log4j-slf4j-impl</artifactId>
-			<version>${log4j.version}</version>
-		</dependency>
-		<!-- redirect java.utils.logging to log4j2 -->
-		<dependency>
-			<groupId>org.apache.logging.log4j</groupId>
-			<artifactId>log4j-jul</artifactId>
-			<version>${log4j.version}</version>
-		</dependency>
-		<!-- Logging: slf4j used by Jetty/Jersey -->
-		<dependency>
-			<groupId>org.slf4j</groupId>
-			<artifactId>slf4j-api</artifactId>
-			<version>${slf4j.version}</version>
-		</dependency>
+     <dependency>
+        <groupId>org.apache.logging.log4j</groupId>
+        <artifactId>log4j-jul</artifactId>
+        <version>${log4j.version}</version>
+      </dependency> 
 		<!-- Servlet related -->
 		<dependency>
 			<groupId>javax.servlet</groupId>
@@ -795,97 +823,129 @@
 			<artifactId>jaxb-runtime</artifactId>
 			<version>${jaxb-runtime.version}</version>
 		</dependency>
+		<!-- reticulum_network_stack -->
 		<dependency>
 			<groupId>io.reticulum</groupId>
     		<artifactId>reticulum-network-stack</artifactId>
         <version>1.0-SNAPSHOT</version>
 		</dependency>
-		<!-- reticulum_network_stack -->
-		<!-- https://mvnrepository.com/artifact/com.fasterxml.jackson.dataformat/jackson-dataformat-yaml -->
-    	<dependency>
-    		<groupId>com.fasterxml.jackson.dataformat</groupId>
-    		<artifactId>jackson-dataformat-yaml</artifactId>
-    		<version>${jackson.version}</version>
-    	</dependency>
-		<dependency>
-			<groupId>com.fasterxml.jackson.core</groupId>
-			<artifactId>jackson-databind</artifactId>
-			<version>${jackson.version}</version>
-		</dependency>
-    	<dependency>
-    		<groupId>org.projectlombok</groupId>
-    		<artifactId>lombok</artifactId>
-    		<version>${lombok.version}</version>
-    		<scope>provided</scope>
-    	</dependency>
-        <dependency>
-            <groupId>commons-codec</groupId>
-            <artifactId>commons-codec</artifactId>
-            <version>1.15</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.commons</groupId>
-            <artifactId>commons-collections4</artifactId>
-            <version>4.4</version>
-        </dependency>
-        <dependency>
-            <groupId>org.msgpack</groupId>
-            <artifactId>jackson-dataformat-msgpack</artifactId>
-            <version>0.9.3</version>
-        </dependency>
-		<!-- https://mvnrepository.com/artifact/org.slf4j/slf4j-api -->
-		<!--
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-            <version>2.0.9</version>
-        </dependency>
-		-->
-        <!-- https://mvnrepository.com/artifact/io.netty/netty-all -->
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
-            <version>4.1.92.Final</version>
-        </dependency>
-        <dependency>
-            <groupId>org.bouncycastle</groupId>
-            <artifactId>bcpkix-jdk15on</artifactId>
-            <version>${bouncycastle.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.macasaet.fernet</groupId>
-            <artifactId>fernet-java8</artifactId>
-            <version>1.4.2</version>
-        </dependency>
-        <!--
-        <dependency>
-            <groupId>org.apache.commons</groupId>
-            <artifactId>commons-compress</artifactId>
-            <version>1.25.0</version>
-        </dependency>
-        -->
-        <dependency>
-            <groupId>com.igormaznitsa</groupId>
-            <artifactId>jbbp</artifactId>
-            <version>2.0.4</version>
-        </dependency>
-        <dependency>
-            <groupId>com.github.seancfoley</groupId>
-            <artifactId>ipaddress</artifactId>
-            <version>5.4.0</version>
-        </dependency>
-		<dependency>
-            <groupId>org.msgpack</groupId>
-            <artifactId>msgpack-core</artifactId>
-            <version>0.9.6</version>
-        </dependency>
-		<!--
-        <dependency>
-            <groupId>org.mockito</groupId>
-            <artifactId>mockito-junit-jupiter</artifactId>
-            <version>5.2.0</version>
-            <scope>test</scope>
-        </dependency>
-		-->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <!-- https://mvnrepository.com/artifact/commons-codec/commons-codec -->
+    <dependency>
+      <groupId>commons-codec</groupId>
+      <artifactId>commons-codec</artifactId>
+      <version>1.16.1</version>
+    </dependency>
+    <!-- already declared earlier
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-lang3</artifactId>
+      <version>3.14.0</version>
+    </dependency>
+    -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-collections4</artifactId>
+      <version>4.4</version>
+    </dependency>
+    <!-- already declared earlier
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-compress</artifactId>
+      <version>1.26.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+    -->
+    <!-- note: covered ? -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.dataformat</groupId>
+      <artifactId>jackson-dataformat-yaml</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.yaml</groupId>
+      <artifactId>snakeyaml</artifactId>
+      <version>2.2</version>
+    </dependency>
+    <dependency>
+      <groupId>org.msgpack</groupId>
+      <artifactId>jackson-dataformat-msgpack</artifactId>
+      <version>0.9.8</version>
+    </dependency>
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <version>${lombok.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcpkix-jdk15on</artifactId>
+      <version>1.70</version>
+    </dependency>
+    <dependency>
+      <groupId>com.macasaet.fernet</groupId>
+      <artifactId>fernet-java8</artifactId>
+      <version>1.5.0</version>
+    </dependency>
+    <dependency>
+      <groupId>com.igormaznitsa</groupId>
+      <artifactId>jbbp</artifactId>
+      <version>2.0.6</version>
+    </dependency>
+    <dependency>
+      <groupId>io.netty</groupId>
+      <artifactId>netty-all</artifactId>
+      <!--<version>4.1.106.Final</version>-->
+      <version>5.0.0.Alpha2</version>
+    </dependency>
+    <dependency>
+      <groupId>com.github.seancfoley</groupId>
+      <artifactId>ipaddress</artifactId>
+      <version>5.4.2</version>
+    </dependency>
+    <!-- Nitrite Modules -->
+    <dependency>
+        <groupId>org.dizitart</groupId>
+        <artifactId>nitrite</artifactId>
+        <version>${nitrite.version}</version>
+    </dependency>
+    <dependency>
+        <groupId>org.dizitart</groupId>
+        <artifactId>nitrite-mvstore-adapter</artifactId>
+        <version>${nitrite.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <version>2.3.230</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2-mvstore</artifactId>
+      <version>2.3.230</version>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-junit-jupiter</artifactId>
+      <version>5.10.0</version>
+      <scope>test</scope>
+    </dependency>
+
 	</dependencies>
 </project>
