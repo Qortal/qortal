@@ -77,8 +77,12 @@ public class AES {
         return secret;
     }
 
-    public static IvParameterSpec generateIv() {
-        byte[] iv = new byte[16];
+    public static IvParameterSpec generateIv(String algorithm) {
+        int ivSize = 12;
+        if (algorithm != "AES/GCM/NoPadding") {
+            ivSize = 16;
+        }
+        byte[] iv = new byte[ivSize];
         new SecureRandom().nextBytes(iv);
         return new IvParameterSpec(iv);
     }
@@ -91,13 +95,13 @@ public class AES {
         File inputFile = new File(inputFilePath);
         File outputFile = new File(outputFilePath);
 
-        IvParameterSpec iv = AES.generateIv();
+        IvParameterSpec iv = AES.generateIv(algorithm);
         Cipher cipher = Cipher.getInstance(algorithm);
         cipher.init(Cipher.ENCRYPT_MODE, key, iv);
         FileInputStream inputStream = new FileInputStream(inputFile);
         FileOutputStream outputStream = new FileOutputStream(outputFile);
 
-        // Prepend the output stream with the 16 byte initialization vector
+        // Prepend the output stream with the 12 byte initialization vector
         outputStream.write(iv.getIV());
 
         byte[] buffer = new byte[1024];
@@ -132,8 +136,13 @@ public class AES {
         FileInputStream inputStream = new FileInputStream(encryptedFile);
         FileOutputStream outputStream = new FileOutputStream(decryptedFile);
 
-        // Read the initialization vector from the first 16 bytes of the file
-        byte[] iv = new byte[16];
+        // Read the initialization vector from the first 12 bytes of the file
+        int ivSize = 12;
+        // Use 16 bytes for the initialization vector in other encryption modes
+        if (algorithm != "AES/GCM/NoPadding") {
+            ivSize = 16;
+        }
+        byte[] iv = new byte[ivSize];
         inputStream.read(iv);
         Cipher cipher = Cipher.getInstance(algorithm);
         cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(iv));
@@ -191,11 +200,19 @@ public class AES {
                 .decode(cipherText)));
     }
 
-    public static long getEncryptedFileSize(long inFileSize) {
+    public static long getCbcEncryptedFileSize(long inFileSize) {
         // To calculate the resulting file size, add 16 (for the IV), then round up to the nearest multiple of 16
         final int ivSize = 16;
         final int chunkSize = 16;
         final int expectedSize = Math.round((inFileSize + ivSize) / chunkSize) * chunkSize + chunkSize;
+        return expectedSize;
+    }
+
+    public static long getGcmEncryptedFileSize(long inFileSize) {
+        // To calculate the resulting file size, add 16 (for the IV), then round up to the nearest multiple of 16
+        final int ivSize = 12;
+        final int tagSize = 16;
+        final int expectedSize = (int) (inFileSize + ivSize + tagSize);
         return expectedSize;
     }
 
