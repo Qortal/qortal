@@ -19,6 +19,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
+import java.util.List;
+import org.json.JSONArray;
 
 
 @Path("/lists")
@@ -28,6 +30,22 @@ public class ListsResource {
 	@Context
 	HttpServletRequest request;
 
+	@GET
+	@Operation(
+		summary = "Fetch all lists",
+		responses = {
+            @ApiResponse(
+                description = "A JSON array of list names",
+                content = @Content(mediaType = MediaType.APPLICATION_JSON, array = @ArraySchema(schema = @Schema(implementation = String.class)))
+            )
+        }
+	)
+	@SecurityRequirement(name = "apiKey")
+	public String getAllLists(@HeaderParam(Security.API_KEY_HEADER) String apiKey) {
+    	Security.checkApiCallAllowed(request);
+    	List<String> listNames = ResourceListManager.getInstance().getAllListNames();
+    	return new JSONArray(listNames).toString();
+	}
 
 	@POST
 	@Path("/{listName}")
