@@ -12,6 +12,7 @@ public class ApiOnlineAccount {
 	protected byte[] rewardSharePublicKey;
 	protected String minterAddress;
 	protected String recipientAddress;
+	protected int minterLevel;
 
 	// Constructors
 
@@ -19,12 +20,13 @@ public class ApiOnlineAccount {
 	protected ApiOnlineAccount() {
 	}
 
-	public ApiOnlineAccount(long timestamp, byte[] signature, byte[] rewardSharePublicKey, String minterAddress, String recipientAddress) {
+	public ApiOnlineAccount(long timestamp, byte[] signature, byte[] rewardSharePublicKey, String minterAddress, String recipientAddress, int minterLevel) {
 		this.timestamp = timestamp;
 		this.signature = signature;
 		this.rewardSharePublicKey = rewardSharePublicKey;
 		this.minterAddress = minterAddress;
 		this.recipientAddress = recipientAddress;
+		this.minterLevel = minterLevel;
 	}
 
 	public long getTimestamp() {
@@ -45,6 +47,10 @@ public class ApiOnlineAccount {
 
 	public String getRecipientAddress() {
 		return this.recipientAddress;
+	}
+
+	public int getMinterLevel() {
+		return this.minterLevel;
 	}
 
 }

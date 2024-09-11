@@ -295,6 +295,26 @@ public class Account {
 	}
 
 	/**
+	 * Returns 'effective' minting level, or zero if account does not exist/cannot mint.
+	 * <p>
+	 * For founder accounts with no penalty, this returns 11, in order to list them separately.
+	 * 
+	 * @return 0+
+	 * @throws DataException
+	 */
+	public int getEffectiveMintingLevelWithFounders() throws DataException {
+		AccountData accountData = this.repository.getAccountRepository().getAccount(this.address);
+		if (accountData == null)
+			return 0;
+
+		// Founders are listed as level 11, as long as they have no penalty
+		if (Account.isFounder(accountData.getFlags()) && accountData.getBlocksMintedPenalty() == 0)
+			return 11;
+
+		return accountData.getLevel();
+	}
+
+	/**
 	 * Returns 'effective' minting level, or zero if reward-share does not exist.
 	 * 
 	 * @param repository
@@ -314,7 +334,7 @@ public class Account {
 	/**
 	 * Returns 'effective' minting level, with a fix for the zero level.
 	 * <p>
-	 * For founder accounts with no penalty, this returns "founderEffectiveMintingLevel" from blockchain config.
+	 * For founder accounts with no penalty, this returns 11, in order to list them separately.
 	 *
 	 * @param repository
 	 * @param rewardSharePublicKey
@@ -331,6 +351,6 @@ public class Account {
 			return 0;
 
 		Account rewardShareMinter = new Account(repository, rewardShareData.getMinter());
-		return rewardShareMinter.getEffectiveMintingLevel();
+		return rewardShareMinter.getEffectiveMintingLevelWithFounders();
 	}
 }
