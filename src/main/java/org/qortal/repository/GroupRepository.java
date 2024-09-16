@@ -36,6 +36,8 @@ public interface GroupRepository {
 		return getGroupsWithMember(member, null, null, null);
 	}
 
+	public List<GroupData> searchGroups(String query, Integer limit, Integer offset, Boolean reverse) throws DataException;
+
 	public void save(GroupData groupData) throws DataException;
 
 	public void delete(int groupId) throws DataException;
