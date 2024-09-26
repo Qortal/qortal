@@ -70,7 +70,7 @@ public class DevProxyService {
 					throw new RuntimeException("Failed to start SSL API due to broken keystore");
 
 				// BouncyCastle-specific SSLContext build
-				SSLContext sslContext = SSLContext.getInstance("TLS", "BCJSSE");
+				SSLContext sslContext = SSLContext.getInstance("TLSv1.3", "BCJSSE");
 				KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance("PKIX", "BCJSSE");
 
 				KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType(), "BC");
