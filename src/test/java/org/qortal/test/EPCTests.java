@@ -173,7 +173,7 @@ public class EPCTests {
 			}
 		}
 
-		System.out.println(String.format("Pings should start after %s seconds", PING_INTERVAL));
+		System.out.println(String.format("Pings should start after %s milliseconds", PING_INTERVAL));
 
 		testEPC(new PingEPC());
 	}
