@@ -272,7 +272,8 @@ public class Settings {
 	private String[] bootstrapHosts = new String[] {
 		"http://bootstrap.qortal.org",
 		"http://bootstrap2.qortal.org",
-		"http://bootstrap3.qortal.org"
+		"http://bootstrap3.qortal.org",
+		"http://bootstrap4.qortal.org"
 	};
 
 	// Auto-update sources
