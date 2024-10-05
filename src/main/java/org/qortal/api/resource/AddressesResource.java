@@ -20,9 +20,7 @@ import org.qortal.asset.Asset;
 import org.qortal.controller.LiteNode;
 import org.qortal.controller.OnlineAccountsManager;
 import org.qortal.crypto.Crypto;
-import org.qortal.data.account.AccountData;
-import org.qortal.data.account.AccountPenaltyData;
-import org.qortal.data.account.RewardShareData;
+import org.qortal.data.account.*;
 import org.qortal.data.network.OnlineAccountData;
 import org.qortal.data.network.OnlineAccountLevel;
 import org.qortal.data.transaction.PublicizeTransactionData;
@@ -52,6 +50,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Path("/addresses")
@@ -630,4 +629,160 @@ public class AddressesResource {
 		}
 	}
 
+	@GET
+	@Path("/sponsorship/{address}")
+	@Operation(
+			summary = "Returns sponsorship statistics for an account",
+			description = "Returns sponsorship statistics for an account, excluding the recipients that get real reward shares",
+			responses = {
+					@ApiResponse(
+							description = "the statistics",
+							content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = SponsorshipReport.class))
+					)
+			}
+	)
+	@ApiErrors({ApiError.INVALID_ADDRESS, ApiError.ADDRESS_UNKNOWN,  ApiError.REPOSITORY_ISSUE})
+	public SponsorshipReport getSponsorshipReport(
+			@PathParam("address") String address,
+			@QueryParam(("realRewardShareRecipient")) String[] realRewardShareRecipients) {
+		if (!Crypto.isValidAddress(address))
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			SponsorshipReport report = repository.getAccountRepository().getSponsorshipReport(address, realRewardShareRecipients);
+			// Not found?
+			if (report == null)
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.ADDRESS_UNKNOWN);
+
+			return report;
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
+	@Path("/sponsorship/{address}/sponsor")
+	@Operation(
+			summary = "Returns sponsorship statistics for an account's sponsor",
+			description = "Returns sponsorship statistics for an account's sponsor, excluding the recipients that get real reward shares",
+			responses = {
+					@ApiResponse(
+							description = "the statistics",
+							content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = SponsorshipReport.class))
+					)
+			}
+	)
+	@ApiErrors({ApiError.INVALID_ADDRESS, ApiError.ADDRESS_UNKNOWN,  ApiError.REPOSITORY_ISSUE})
+	public SponsorshipReport getSponsorshipReportForSponsor(
+			@PathParam("address") String address,
+			@QueryParam("realRewardShareRecipient") String[] realRewardShareRecipients) {
+		if (!Crypto.isValidAddress(address))
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+
+			// get sponsor
+			Optional<String> sponsor = repository.getAccountRepository().getSponsor(address);
+
+			// if there is not sponsor, throw error
+			if(sponsor.isEmpty()) throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.ADDRESS_UNKNOWN);
+
+			// get report for sponsor
+			SponsorshipReport report = repository.getAccountRepository().getSponsorshipReport(sponsor.get(), realRewardShareRecipients);
+
+			// Not found?
+			if (report == null)
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.ADDRESS_UNKNOWN);
+
+			return report;
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
+	@Path("/mintership/{address}")
+	@Operation(
+			summary = "Returns mintership statistics for an account",
+			description = "Returns mintership statistics for an account",
+			responses = {
+					@ApiResponse(
+							description = "the statistics",
+							content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = MintershipReport.class))
+					)
+			}
+	)
+	@ApiErrors({ApiError.INVALID_ADDRESS, ApiError.ADDRESS_UNKNOWN,  ApiError.REPOSITORY_ISSUE})
+	public MintershipReport getMintershipReport(@PathParam("address") String address,
+												@QueryParam("realRewardShareRecipient") String[] realRewardShareRecipients ) {
+		if (!Crypto.isValidAddress(address))
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+
+			// get sponsorship report for minter, fetch a list of one minter
+			SponsorshipReport report = repository.getAccountRepository().getMintershipReport(address, account -> List.of(account));
+
+			// Not found?
+			if (report == null)
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.ADDRESS_UNKNOWN);
+
+			// since the report is for one minter, must get sponsee count separately
+			int sponseeCount = repository.getAccountRepository().getSponseeAddresses(address, realRewardShareRecipients).size();
+
+			// since the report is for one minter, must get the first name from a array of names that should be size 1
+			String name = report.getNames().length > 0 ? report.getNames()[0] : null;
+
+			// transform sponsorship report to mintership report
+			MintershipReport mintershipReport
+				= new MintershipReport(
+					report.getAddress(),
+					report.getLevel(),
+					report.getBlocksMinted(),
+					report.getAdjustments(),
+					report.getPenalties(),
+					report.isTransfer(),
+					name,
+					sponseeCount,
+					report.getAvgBalance(),
+					report.getArbitraryCount(),
+					report.getTransferAssetCount(),
+					report.getTransferPrivsCount(),
+					report.getSellCount(),
+					report.getSellAmount(),
+					report.getBuyCount(),
+					report.getBuyAmount()
+			);
+
+			return mintershipReport;
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
+	@Path("/levels/{minLevel}")
+	@Operation(
+			summary = "Return accounts with levels greater than or equal to input",
+			responses = {
+					@ApiResponse(
+							description = "online accounts",
+							content = @Content(mediaType = MediaType.APPLICATION_JSON, array = @ArraySchema(schema = @Schema(implementation = AddressLevelPairing.class)))
+					)
+			}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE})
+
+	public List<AddressLevelPairing> getAddressLevelPairings(@PathParam("minLevel") int minLevel) {
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+
+			// get the level address pairings
+			List<AddressLevelPairing> pairings = repository.getAccountRepository().getAddressLevelPairings(minLevel);
+
+			return pairings;
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
 }

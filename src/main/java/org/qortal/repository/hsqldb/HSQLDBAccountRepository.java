@@ -1,5 +1,7 @@
 package org.qortal.repository.hsqldb;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.qortal.asset.Asset;
 import org.qortal.data.account.*;
 import org.qortal.repository.AccountRepository;
@@ -8,20 +10,28 @@ import org.qortal.repository.DataException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.qortal.utils.Amounts.prettyAmount;
 
 public class HSQLDBAccountRepository implements AccountRepository {
 
+	public static final String SELL = "sell";
+	public static final String BUY = "buy";
 	protected HSQLDBRepository repository;
 
 	public HSQLDBAccountRepository(HSQLDBRepository repository) {
 		this.repository = repository;
 	}
 
+	protected static final Logger LOGGER = LogManager.getLogger(HSQLDBAccountRepository.class);
 	// General account
 
 	@Override
@@ -1147,4 +1157,389 @@ public class HSQLDBAccountRepository implements AccountRepository {
 		}
 	}
 
+	@Override
+	public SponsorshipReport getSponsorshipReport(String address, String[] realRewardShareRecipients) throws DataException {
+
+		List<String> sponsees = getSponseeAddresses(address, realRewardShareRecipients);
+
+		return getMintershipReport(address, account -> sponsees);
+	}
+
+	@Override
+	public SponsorshipReport getMintershipReport(String account, Function<String, List<String>> addressFetcher) throws DataException {
+
+		try {
+			ResultSet accountResultSet = getAccountResultSet(account);
+
+			if( accountResultSet == null ) throw new DataException("Unable to fetch account info from repository");
+
+			int level = accountResultSet.getInt(2);
+			int blocksMinted = accountResultSet.getInt(3);
+			int adjustments = accountResultSet.getInt(4);
+			int penalties = accountResultSet.getInt(5);
+			boolean transferPrivs = accountResultSet.getBoolean(6);
+
+			List<String> sponseeAddresses = addressFetcher.apply(account);
+
+			if( sponseeAddresses.isEmpty() ){
+				return new SponsorshipReport(account, level, blocksMinted, adjustments, penalties, transferPrivs, new String[0], 0,  0,0, 0, 0, 0, 0, 0, 0, 0);
+			}
+			else {
+				return produceSponsorShipReport(account, level, blocksMinted, adjustments, penalties, sponseeAddresses, transferPrivs);
+			}
+		}
+		 catch (Exception e) {
+			LOGGER.error(e.getMessage(), e);
+			throw new DataException("Unable to fetch account info from repository", e);
+		}
+	}
+
+	@Override
+	public List<String> getSponseeAddresses(String account, String[] realRewardShareRecipients) throws DataException {
+		StringBuffer sponseeSql = new StringBuffer();
+
+		sponseeSql.append( "SELECT DISTINCT t.recipient sponsees " );
+		sponseeSql.append( "FROM REWARDSHARETRANSACTIONS t ");
+		sponseeSql.append( "INNER JOIN ACCOUNTS a on t.minter_public_key = a.public_key ");
+		sponseeSql.append( "WHERE account = ? and t.recipient != a.account");
+
+		try {
+			ResultSet sponseeResultSet;
+
+			// if there are real reward share recipeints to exclude
+			if (realRewardShareRecipients != null && realRewardShareRecipients.length > 0) {
+
+				// add constraint to where clause
+				sponseeSql.append(" and t.recipient NOT IN (");
+				sponseeSql.append(String.join(", ", Collections.nCopies(realRewardShareRecipients.length, "?")));
+				sponseeSql.append(")");
+
+				// Create a new array to hold both
+				String[] combinedArray = new String[realRewardShareRecipients.length + 1];
+
+				// Add the single string to the first position
+				combinedArray[0] = account;
+
+				// Copy the elements from realRewardShareRecipients to the combinedArray starting from index 1
+				System.arraycopy(realRewardShareRecipients, 0, combinedArray, 1, realRewardShareRecipients.length);
+
+				sponseeResultSet = this.repository.checkedExecute(sponseeSql.toString(), combinedArray);
+			}
+			else {
+				sponseeResultSet = this.repository.checkedExecute(sponseeSql.toString(), account);
+			}
+
+			List<String> sponseeAddresses;
+
+			if( sponseeResultSet == null ) {
+				sponseeAddresses = new ArrayList<>(0);
+			}
+			else {
+				sponseeAddresses = new ArrayList<>();
+
+				do {
+					sponseeAddresses.add(sponseeResultSet.getString(1));
+				} while (sponseeResultSet.next());
+			}
+
+			return sponseeAddresses;
+		}
+		catch (SQLException e) {
+			throw new DataException("can't get sponsees from blockchain data", e);
+		}
+	}
+
+	@Override
+	public Optional<String> getSponsor(String address) throws DataException {
+
+		StringBuffer sponsorSql = new StringBuffer();
+
+		sponsorSql.append( "SELECT DISTINCT account, level, blocks_minted, blocks_minted_adjustment, blocks_minted_penalty ");
+		sponsorSql.append( "FROM REWARDSHARETRANSACTIONS t ");
+		sponsorSql.append( "INNER JOIN ACCOUNTS a on a.public_key = t.minter_public_key ");
+		sponsorSql.append( "WHERE recipient = ? and recipient != account ");
+
+		try {
+			ResultSet sponseeResultSet = this.repository.checkedExecute(sponsorSql.toString(), address);
+
+			if( sponseeResultSet == null ){
+				return Optional.empty();
+			}
+			else {
+				return Optional.ofNullable( sponseeResultSet.getString(1));
+			}
+		} catch (SQLException e) {
+			throw new DataException("can't get sponsor from blockchain data", e);
+		}
+	}
+
+	@Override
+	public List<AddressLevelPairing> getAddressLevelPairings(int minLevel) throws DataException {
+
+		StringBuffer accLevelSql = new StringBuffer(51);
+
+		accLevelSql.append( "SELECT account,level FROM ACCOUNTS WHERE level >= ?" );
+
+		try {
+			ResultSet accountLevelResultSet = this.repository.checkedExecute(accLevelSql.toString(),minLevel);
+
+			List<AddressLevelPairing> addressLevelPairings;
+
+			if( accountLevelResultSet == null ) {
+				addressLevelPairings = new ArrayList<>(0);
+			}
+			else {
+				addressLevelPairings = new ArrayList<>();
+
+				do {
+					AddressLevelPairing pairing
+						= new AddressLevelPairing(
+							accountLevelResultSet.getString(1),
+							accountLevelResultSet.getInt(2)
+					);
+					addressLevelPairings.add(pairing);
+				} while (accountLevelResultSet.next());
+			}
+			return addressLevelPairings;
+		} catch (SQLException e) {
+			throw new DataException("Can't get addresses for this level from blockchain data", e);
+		}
+	}
+
+	/**
+	 * Produce Sponsorship Report
+	 *
+	 * @param address                the account address for the sponsor
+	 * @param level                  the sponsor's level
+	 * @param blocksMinted           the blocks minted by the sponsor
+	 * @param blocksMintedAdjustment
+	 * @param blocksMintedPenalty
+	 * @param sponseeAddresses
+	 * @param transferPrivs true if this account was involved in a TRANSFER_PRIVS transaction
+	 * @return the report
+	 * @throws SQLException
+	 */
+	private SponsorshipReport produceSponsorShipReport(
+			String address,
+			int level,
+			int blocksMinted,
+			int blocksMintedAdjustment,
+			int blocksMintedPenalty,
+			List<String> sponseeAddresses,
+			boolean transferPrivs) throws SQLException, DataException {
+
+		int sponseeCount = sponseeAddresses.size();
+
+		// get the registered names of the sponsees
+		ResultSet namesResultSet = getNamesResultSet(sponseeAddresses, sponseeCount);
+
+		List<String> sponseeNames;
+
+		if( namesResultSet != null ) {
+			sponseeNames = getNames(namesResultSet, sponseeCount);
+		}
+		else {
+			sponseeNames = new ArrayList<>(0);
+		}
+
+		// get the average balance of the sponsees
+		ResultSet avgBalanceResultSet = getAverageBalanceResultSet(sponseeAddresses, sponseeCount);
+		int avgBalance = avgBalanceResultSet.getInt(1);
+
+		// count the arbitrary and transfer asset transactions for all sponsees
+		ResultSet txTypeResultSet = getTxTypeResultSet(sponseeAddresses, sponseeCount);
+
+		int arbitraryCount;
+		int transferAssetCount;
+		int transferPrivsCount;
+
+		if( txTypeResultSet != null) {
+
+			Map<Integer, Integer> countsByType = new HashMap<>(2);
+
+			do{
+				Integer type = txTypeResultSet.getInt(1);
+
+				if( type != null ) {
+					countsByType.put(type, txTypeResultSet.getInt(2));
+				}
+			} while( txTypeResultSet.next());
+
+			arbitraryCount = countsByType.getOrDefault(10, 0);
+			transferAssetCount = countsByType.getOrDefault(12, 0);
+			transferPrivsCount = countsByType.getOrDefault(40, 0);
+		}
+		// no rows -> no counts
+		else {
+			arbitraryCount = 0;
+			transferAssetCount = 0;
+			transferPrivsCount = 0;
+		}
+
+		ResultSet sellResultSet = getSellResultSet(sponseeAddresses, sponseeCount);
+
+		int sellCount;
+		int	sellAmount;
+
+		// if there are sell results, then fill in the sell amount/counts
+		if( sellResultSet != null ) {
+			sellCount = sellResultSet.getInt(1);
+			sellAmount = sellResultSet.getInt(2);
+		}
+		// no rows -> no counts/amounts
+		else {
+			sellCount = 0;
+			sellAmount = 0;
+		}
+
+		ResultSet buyResultSet = getBuyResultSet(sponseeAddresses, sponseeCount);
+
+		int buyCount;
+		int buyAmount;
+
+		// if there are buy results, then fill in the buy amount/counts
+		if( buyResultSet != null ) {
+			buyCount = buyResultSet.getInt(1);
+			buyAmount = buyResultSet.getInt(2);
+		}
+		// no rows -> no counts/amounts
+		else {
+			buyCount = 0;
+			buyAmount = 0;
+		}
+
+		return new SponsorshipReport(
+				address,
+				level,
+				blocksMinted,
+				blocksMintedAdjustment,
+				blocksMintedPenalty,
+				transferPrivs,
+				sponseeNames.toArray(new String[sponseeNames.size()]),
+				sponseeCount,
+				sponseeCount - sponseeNames.size(),
+				avgBalance,
+				arbitraryCount,
+				transferAssetCount,
+				transferPrivsCount,
+				sellCount,
+				sellAmount,
+				buyCount,
+				buyAmount);
+	}
+
+	private ResultSet getBuyResultSet(List<String> addresses, int addressCount) throws SQLException {
+
+		StringBuffer sql = new StringBuffer();
+		sql.append("SELECT COUNT(*) count, SUM(amount)/100000000 amount ");
+		sql.append("FROM ACCOUNTS a ");
+		sql.append("INNER JOIN ATTRANSACTIONS tx ON tx.recipient = a.account ");
+		sql.append("INNER JOIN ATS ats ON ats.at_address = tx.at_address ");
+		sql.append("WHERE a.account IN ( ");
+		sql.append(String.join(", ", Collections.nCopies(addressCount, "?")));
+		sql.append(") ");
+		sql.append("AND a.account = tx.recipient AND a.public_key != ats.creator AND asset_id = 0 ");
+		String[] sponsees = addresses.toArray(new String[addressCount]);
+		ResultSet buySellResultSet = this.repository.checkedExecute(sql.toString(), sponsees);
+
+		return buySellResultSet;
+	}
+
+	private ResultSet getSellResultSet(List<String> addresses, int addressCount) throws SQLException {
+
+		StringBuffer sql = new StringBuffer();
+		sql.append("SELECT COUNT(*) count, SUM(amount)/100000000 amount ");
+		sql.append("FROM ATS ats ");
+		sql.append("INNER JOIN ACCOUNTS a ON a.public_key = ats.creator ");
+		sql.append("INNER JOIN ATTRANSACTIONS tx ON tx.at_address = ats.at_address ");
+		sql.append("WHERE a.account IN ( ");
+		sql.append(String.join(", ", Collections.nCopies(addressCount, "?")));
+		sql.append(") ");
+		sql.append("AND a.account != tx.recipient AND asset_id = 0 ");
+		String[] sponsees = addresses.toArray(new String[addressCount]);
+
+		return this.repository.checkedExecute(sql.toString(), sponsees);
+	}
+
+	private ResultSet getAccountResultSet(String account) throws SQLException {
+
+		StringBuffer accountSql = new StringBuffer();
+
+		accountSql.append( "SELECT DISTINCT a.account, a.level, a.blocks_minted, a.blocks_minted_adjustment, a.blocks_minted_penalty, tx.sender IS NOT NULL as transfer ");
+		accountSql.append( "FROM ACCOUNTS a ");
+		accountSql.append( "LEFT JOIN TRANSFERPRIVSTRANSACTIONS tx on a.public_key = tx.sender or a.account = tx.recipient ");
+		accountSql.append( "WHERE account = ? ");
+
+		ResultSet accountResultSet = this.repository.checkedExecute( accountSql.toString(), account);
+
+		return accountResultSet;
+	}
+
+
+	private ResultSet getTxTypeResultSet(List<String> sponseeAddresses, int sponseeCount) throws SQLException {
+		StringBuffer txTypeTotalsSql = new StringBuffer();
+		// Transaction Types, int values
+		// ARBITRARY = 10
+		// TRANSFER_ASSET = 12
+		// txTypeTotalsSql.append("
+		txTypeTotalsSql.append("SELECT type, count(*) ");
+		txTypeTotalsSql.append("FROM TRANSACTIONPARTICIPANTS ");
+		txTypeTotalsSql.append("INNER JOIN TRANSACTIONS USING (signature) ");
+		txTypeTotalsSql.append("where participant in ( ");
+		txTypeTotalsSql.append(String.join(", ", Collections.nCopies(sponseeCount, "?")));
+		txTypeTotalsSql.append(") and type in (10, 12, 40) ");
+		txTypeTotalsSql.append("group by type order by type");
+
+		String[] sponsees = sponseeAddresses.toArray(new String[sponseeCount]);
+		ResultSet txTypeResultSet = this.repository.checkedExecute(txTypeTotalsSql.toString(), sponsees);
+		return txTypeResultSet;
+	}
+
+	private ResultSet getAverageBalanceResultSet(List<String> sponseeAddresses, int sponseeCount) throws SQLException {
+		StringBuffer avgBalanceSql = new StringBuffer();
+		avgBalanceSql.append("SELECT avg(balance)/100000000 FROM ACCOUNTBALANCES ");
+		avgBalanceSql.append("WHERE account in (");
+		avgBalanceSql.append(String.join(", ", Collections.nCopies(sponseeCount, "?")));
+		avgBalanceSql.append(") and ASSET_ID = 0");
+
+		String[] sponsees = sponseeAddresses.toArray(new String[sponseeCount]);
+		return this.repository.checkedExecute(avgBalanceSql.toString(), sponsees);
+	}
+
+	/**
+	 * Get Names
+	 *
+	 * @param namesResultSet the result set to get the names from, can't be null
+	 * @param count the number of potential names
+	 *
+	 * @return the names
+	 *
+	 * @throws SQLException
+	 */
+	private static List<String> getNames(ResultSet namesResultSet, int count) throws SQLException {
+
+		List<String> names = new ArrayList<>(count);
+
+		do{
+			String name = namesResultSet.getString(1);
+
+			if( name != null ) {
+				names.add(name);
+			}
+		} while( namesResultSet.next() );
+
+		return names;
+	}
+
+	private ResultSet getNamesResultSet(List<String> sponseeAddresses, int sponseeCount) throws SQLException {
+		StringBuffer namesSql = new StringBuffer();
+		namesSql.append("SELECT name FROM NAMES ");
+		namesSql.append("WHERE owner in (");
+		namesSql.append(String.join(", ", Collections.nCopies(sponseeCount, "?")));
+		namesSql.append(")");
+
+		String[] sponsees = sponseeAddresses.toArray(new String[sponseeCount]);
+		ResultSet namesResultSet = this.repository.checkedExecute(namesSql.toString(), sponsees);
+		return namesResultSet;
+	}
 }

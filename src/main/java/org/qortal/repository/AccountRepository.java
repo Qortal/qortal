@@ -3,7 +3,9 @@ package org.qortal.repository;
 import org.qortal.data.account.*;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
 public interface AccountRepository {
 
@@ -131,7 +133,42 @@ public interface AccountRepository {
 	/** Returns all account balances for given assetID, optionally excluding zero balances. */
 	public List<AccountBalanceData> getAssetBalances(long assetId, Boolean excludeZero) throws DataException;
 
-	/** How to order results when fetching asset balances. */
+	public SponsorshipReport getSponsorshipReport(String address, String[] realRewardShareRecipients) throws DataException;
+
+	/**
+	 * Get Sponsorship Report
+	 *
+	 * @param address        the account address
+	 * @param addressFetcher fetches the addresses that this method will aggregate
+	 * @return the report
+	 * @throws DataException
+	 */
+	public SponsorshipReport getMintershipReport(String address, Function<String, List<String>> addressFetcher) throws DataException;
+
+	/**
+	 * Get Sponsee Addresses
+	 *
+	 * @param account                   the sponsor's account address
+	 * @param realRewardShareRecipients the recipients that get real reward shares, not sponsorship
+	 * @return the sponsee addresses
+	 * @throws DataException
+	 */
+	public List<String> getSponseeAddresses(String account, String[] realRewardShareRecipients) throws DataException;
+
+	/**
+	 * Get Sponsor
+	 *
+	 * @param address the address of the account
+	 *
+	 * @return the address of accounts sponsor, empty if not sponsored
+	 *
+	 * @throws DataException
+	 */
+	public Optional<String> getSponsor(String address) throws DataException;
+
+	public List<AddressLevelPairing> getAddressLevelPairings(int minLevel) throws DataException;
+
+    /** How to order results when fetching asset balances. */
 	public enum BalanceOrdering {
 		/** assetID first, then balance, then account address */
 		ASSET_BALANCE_ACCOUNT,

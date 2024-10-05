@@ -228,6 +228,49 @@ public class ArbitraryResource {
 	}
 
 	@GET
+	@Path("/resources/searchsimple")
+	@Operation(
+			summary = "Search arbitrary resources available on chain, optionally filtered by service.",
+			responses = {
+					@ApiResponse(
+							content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = ArbitraryResourceData.class))
+					)
+			}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE})
+	public List<ArbitraryResourceData> searchResourcesSimple(
+			@QueryParam("service") Service service,
+			@Parameter(description = "Identifier (searches identifier field only)") @QueryParam("identifier") String identifier,
+			@Parameter(description = "Name (searches name field only)") @QueryParam("name") List<String> names,
+			@Parameter(description = "Prefix only (if true, only the beginning of fields are matched)") @QueryParam("prefix") Boolean prefixOnly,
+			@Parameter(description = "Case insensitive (ignore leter case on search)") @QueryParam("caseInsensitive") Boolean caseInsensitive,
+			@Parameter(description = "Creation date before timestamp") @QueryParam("before") Long before,
+			@Parameter(description = "Creation date after timestamp") @QueryParam("after") Long after,
+			@Parameter(ref = "limit") @QueryParam("limit") Integer limit,
+			@Parameter(ref = "offset") @QueryParam("offset") Integer offset,
+			@Parameter(ref = "reverse") @QueryParam("reverse") Boolean reverse) {
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+
+			boolean usePrefixOnly = Boolean.TRUE.equals(prefixOnly);
+			boolean ignoreCase = Boolean.TRUE.equals(caseInsensitive);
+
+			List<ArbitraryResourceData> resources = repository.getArbitraryRepository()
+					.searchArbitraryResourcesSimple(service, identifier, names, usePrefixOnly,
+							before, after, limit, offset, reverse, ignoreCase);
+
+			if (resources == null) {
+				return new ArrayList<>();
+			}
+
+			return resources;
+
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
 	@Path("/resource/status/{service}/{name}")
 	@Operation(
 			summary = "Get status of arbitrary resource with supplied service and name",

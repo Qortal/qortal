@@ -44,6 +44,17 @@ public interface ArbitraryRepository {
 
 	public List<ArbitraryResourceData> searchArbitraryResources(Service service, String query, String identifier, List<String> names, String title, String description, boolean prefixOnly, List<String> namesFilter, boolean defaultResource, SearchMode mode, Integer minLevel, Boolean followedOnly, Boolean excludeBlocked, Boolean includeMetadata, Boolean includeStatus, Long before, Long after, Integer limit, Integer offset, Boolean reverse) throws DataException;
 
+	List<ArbitraryResourceData> searchArbitraryResourcesSimple(
+			Service service,
+			String identifier,
+			List<String> names,
+			boolean prefixOnly,
+			Long before,
+			Long after,
+			Integer limit,
+			Integer offset,
+			Boolean reverse,
+			Boolean caseInsensitive) throws DataException;
 
 	// Arbitrary resources cache save/load
 

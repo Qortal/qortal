@@ -954,6 +954,128 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 		}
 	}
 
+	@Override
+	public List<ArbitraryResourceData> searchArbitraryResourcesSimple(
+			Service service,
+			String identifier,
+			List<String> names,
+			boolean prefixOnly,
+			Long before,
+			Long after,
+			Integer limit,
+			Integer offset,
+			Boolean reverse,
+			Boolean caseInsensitive) throws DataException {
+		StringBuilder sql = new StringBuilder(512);
+		List<Object> bindParams = new ArrayList<>();
+
+		sql.append("SELECT name, service, identifier, size, status, created_when, updated_when ");
+		sql.append("FROM ArbitraryResourcesCache ");
+		sql.append("WHERE name IS NOT NULL");
+
+		if (service != null) {
+			sql.append(" AND service = ?");
+			bindParams.add(service.value);
+		}
+
+		// Handle identifier matches
+		if (identifier != null) {
+			if(caseInsensitive || prefixOnly) {
+				// Search anywhere in the identifier, unless "prefixOnly" has been requested
+				String queryWildcard = getQueryWildcard(identifier, prefixOnly, caseInsensitive);
+				sql.append(caseInsensitive ? " AND LCASE(identifier) LIKE ?" : " AND identifier LIKE ?");
+				bindParams.add(queryWildcard);
+			}
+			else {
+				sql.append(" AND identifier = ?");
+				bindParams.add(identifier);
+			}
+		}
+
+		// Handle name searches
+		if (names != null && !names.isEmpty()) {
+			sql.append(" AND (");
+
+			if( caseInsensitive || prefixOnly ) {
+				for (int i = 0; i < names.size(); ++i) {
+					// Search anywhere in the name, unless "prefixOnly" has been requested
+					String queryWildcard = getQueryWildcard(names.get(i), prefixOnly, caseInsensitive);
+					if (i > 0) sql.append(" OR ");
+					sql.append(caseInsensitive ? "LCASE(name) LIKE ?" : "name LIKE ?");
+					bindParams.add(queryWildcard);
+				}
+			}
+			else {
+				for (int i = 0; i < names.size(); ++i) {
+					if (i > 0) sql.append(" OR ");
+					sql.append("name = ?");
+					bindParams.add(names.get(i));
+				}
+			}
+
+			sql.append(")");
+		}
+
+		// Timestamp range
+		if (before != null) {
+			sql.append(" AND created_when < ?");
+			bindParams.add(before);
+		}
+		if (after != null) {
+			sql.append(" AND created_when > ?");
+			bindParams.add(after);
+		}
+
+		sql.append(" ORDER BY created_when");
+
+		if (reverse != null && reverse) {
+			sql.append(" DESC");
+		}
+
+		HSQLDBRepository.limitOffsetSql(sql, limit, offset);
+
+		List<ArbitraryResourceData> arbitraryResources = new ArrayList<>();
+
+		try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), bindParams.toArray())) {
+			if (resultSet == null)
+				return arbitraryResources;
+
+			do {
+				String nameResult = resultSet.getString(1);
+				Service serviceResult = Service.valueOf(resultSet.getInt(2));
+				String identifierResult = resultSet.getString(3);
+				Integer sizeResult = resultSet.getInt(4);
+				Integer status = resultSet.getInt(5);
+				Long created = resultSet.getLong(6);
+				Long updated = resultSet.getLong(7);
+
+				if (Objects.equals(identifierResult, "default")) {
+					// Map "default" back to null. This is optional but probably less confusing than returning "default".
+					identifierResult = null;
+				}
+
+				ArbitraryResourceData arbitraryResourceData = new ArbitraryResourceData();
+				arbitraryResourceData.name = nameResult;
+				arbitraryResourceData.service = serviceResult;
+				arbitraryResourceData.identifier = identifierResult;
+				arbitraryResourceData.size = sizeResult;
+				arbitraryResourceData.created = created;
+				arbitraryResourceData.updated = (updated == 0) ? null : updated;
+
+				arbitraryResources.add(arbitraryResourceData);
+			} while (resultSet.next());
+
+			return arbitraryResources;
+		} catch (SQLException e) {
+			throw new DataException("Unable to fetch simple arbitrary resources from repository", e);
+		}
+	}
+
+	private static String getQueryWildcard(String value, boolean prefixOnly, boolean caseInsensitive) {
+		String valueToUse = caseInsensitive ? value.toLowerCase() : value;
+		return prefixOnly ? String.format("%s%%", valueToUse) : valueToUse;
+	}
+
 
 	// Arbitrary resources cache save/load
 
