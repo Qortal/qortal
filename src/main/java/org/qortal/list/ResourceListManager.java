@@ -208,4 +208,12 @@ public class ResourceListManager {
         return list.getList().size();
     }
 
+    public List<String> getAllListNames() {
+        List<String> listNames = new ArrayList<>();
+        for (ResourceList list : this.lists) {
+            listNames.add(list.getName());
+        }
+        return listNames;
+    }
+
 }
