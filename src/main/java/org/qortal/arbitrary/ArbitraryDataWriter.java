@@ -295,7 +295,7 @@ public class ArbitraryDataWriter {
             // Encrypt the file with AES
             LOGGER.info("Encrypting...");
             this.aesKey = AES.generateKey(256);
-            AES.encryptFile("AES/CBC/PKCS5Padding", this.aesKey, this.filePath.toString(), this.encryptedPath.toString());
+            AES.encryptFile("AES/GCM/NoPadding", this.aesKey, this.filePath.toString(), this.encryptedPath.toString());
 
             // Delete the input file
             if (FilesystemUtils.pathInsideDataOrTempPath(this.filePath)) {

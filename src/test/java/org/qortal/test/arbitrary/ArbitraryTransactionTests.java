@@ -444,7 +444,7 @@ public class ArbitraryTransactionTests extends Common {
             String identifier = null; // Not used for this test
             Service service = Service.ARBITRARY_DATA;
             int chunkSize = 1000;
-            int dataLength = 239; // Max possible size. Becomes 256 bytes after encryption.
+            int dataLength = 228; // Max possible size. Becomes 256 bytes after encryption.
 
             // Register the name to Alice
             RegisterNameTransactionData transactionData = new RegisterNameTransactionData(TestTransaction.generateBase(alice), name, "");
@@ -499,7 +499,7 @@ public class ArbitraryTransactionTests extends Common {
             String identifier = null; // Not used for this test
             Service service = Service.ARBITRARY_DATA;
             int chunkSize = 1000;
-            int dataLength = 239; // Max possible size. Becomes 256 bytes after encryption.
+            int dataLength = 228; // Max possible size. Becomes 256 bytes after encryption.
 
             String title = "Test title";
             String description = "Test description";
@@ -563,7 +563,7 @@ public class ArbitraryTransactionTests extends Common {
             String identifier = null; // Not used for this test
             Service service = Service.ARBITRARY_DATA;
             int chunkSize = 1000;
-            int dataLength = 240; // Min possible size. Becomes 257 bytes after encryption.
+            int dataLength = 229; // Min possible size. Becomes 257 bytes after encryption.
 
             // Register the name to Alice
             RegisterNameTransactionData transactionData = new RegisterNameTransactionData(TestTransaction.generateBase(alice), name, "");

@@ -197,7 +197,7 @@ public class ArbitraryDataTransactionBuilder {
 
             // We can't use PATCH for on-chain data because this requires the .qortal directory, which can't be put on chain
             final boolean isSingleFileResource = FilesystemUtils.isSingleFileResource(this.path, false);
-            final boolean shouldUseOnChainData = (isSingleFileResource && AES.getEncryptedFileSize(FilesystemUtils.getSingleFileContents(path).length) <= ArbitraryTransaction.MAX_DATA_SIZE);
+            final boolean shouldUseOnChainData = (isSingleFileResource && AES.getGcmEncryptedFileSize(FilesystemUtils.getSingleFileContents(path).length) <= ArbitraryTransaction.MAX_DATA_SIZE);
             if (shouldUseOnChainData) {
                 LOGGER.info("Data size is small enough to go on chain - using PUT");
                 return Method.PUT;
@@ -245,7 +245,7 @@ public class ArbitraryDataTransactionBuilder {
 
             // Single file resources are handled differently, especially for very small data payloads, as these go on chain
             final boolean isSingleFileResource = FilesystemUtils.isSingleFileResource(path, false);
-            final boolean shouldUseOnChainData = (isSingleFileResource && AES.getEncryptedFileSize(FilesystemUtils.getSingleFileContents(path).length) <= ArbitraryTransaction.MAX_DATA_SIZE);
+            final boolean shouldUseOnChainData = (isSingleFileResource && AES.getGcmEncryptedFileSize(FilesystemUtils.getSingleFileContents(path).length) <= ArbitraryTransaction.MAX_DATA_SIZE);
 
             // Use zip compression if data isn't going on chain
             Compression compression = shouldUseOnChainData ? Compression.NONE : Compression.ZIP;

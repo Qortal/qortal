@@ -32,7 +32,7 @@ public class ArbitraryEncryptionTests extends Common {
     }
 
     @Test
-    public void testEncryption() throws IOException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, BadPaddingException, InvalidKeyException {
+    public void testCbcEncryption() throws IOException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, BadPaddingException, InvalidKeyException {
         String enclosingFolderName = "data";
         Path inputFilePath = Files.createTempFile("inputFile", null);
         Path outputDirectory = Files.createTempDirectory("outputDirectory");
@@ -76,7 +76,7 @@ public class ArbitraryEncryptionTests extends Common {
     }
 
     @Test
-    public void testEncryptionSizeOverhead() throws IOException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, BadPaddingException, InvalidKeyException {
+    public void testCbcEncryptionSizeOverhead() throws IOException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, BadPaddingException, InvalidKeyException {
         for (int size = 1; size < 256; size++) {
             String enclosingFolderName = "data";
             Path inputFilePath = Files.createTempFile("inputFile", null);
@@ -104,7 +104,106 @@ public class ArbitraryEncryptionTests extends Common {
             assertTrue(Files.exists(inputFilePath));
             assertTrue(Files.exists(outputFilePath));
 
-            final long expectedSize = AES.getEncryptedFileSize(inputFilePath.toFile().length());
+            final long expectedSize = AES.getCbcEncryptedFileSize(inputFilePath.toFile().length());
+            System.out.println(String.format("Plaintext size: %d bytes, Ciphertext size: %d bytes", inputFilePath.toFile().length(), outputFilePath.toFile().length()));
+
+            // Ensure encryption added a fixed amount of space to the output file
+            assertEquals(expectedSize, outputFilePath.toFile().length());
+
+            // Ensure encrypted file's hash differs from the original
+            assertFalse(Arrays.equals(Crypto.digest(inputFilePath.toFile()), Crypto.digest(outputFilePath.toFile())));
+
+            // Create paths for decrypting
+            Path decryptedDirectory = Files.createTempDirectory("decryptedDirectory");
+            Path decryptedFile = Paths.get(decryptedDirectory.toString(), enclosingFolderName, inputFilePath.getFileName().toString());
+            decryptedDirectory.toFile().deleteOnExit();
+            assertFalse(Files.exists(decryptedFile));
+
+            // Now decrypt...
+            AES.decryptFile(algorithm, aesKey, outputFilePath.toString(), decryptedFile.toString());
+
+            // Ensure resulting file exists
+            assertTrue(Files.exists(decryptedFile));
+
+            // And make sure it matches the original input file
+            assertTrue(Arrays.equals(Crypto.digest(inputFilePath.toFile()), Crypto.digest(decryptedFile.toFile())));
+        }
+    }
+
+    @Test
+    public void testGcmEncryption() throws IOException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, BadPaddingException, InvalidKeyException {
+        String enclosingFolderName = "data";
+        Path inputFilePath = Files.createTempFile("inputFile", null);
+        Path outputDirectory = Files.createTempDirectory("outputDirectory");
+        Path outputFilePath = Paths.get(outputDirectory.toString(), enclosingFolderName);
+        inputFilePath.toFile().deleteOnExit();
+        outputDirectory.toFile().deleteOnExit();
+
+        // Write random data to the input file
+        byte[] data = new byte[10];
+        new Random().nextBytes(data);
+        Files.write(inputFilePath, data, StandardOpenOption.CREATE);
+
+        assertTrue(Files.exists(inputFilePath));
+        assertFalse(Files.exists(outputFilePath));
+
+        // Encrypt...
+        String algorithm = "AES/GCM/NoPadding";
+        SecretKey aesKey = AES.generateKey(256);
+        AES.encryptFile(algorithm, aesKey, inputFilePath.toString(), outputFilePath.toString());
+
+        assertTrue(Files.exists(inputFilePath));
+        assertTrue(Files.exists(outputFilePath));
+
+        // Ensure encrypted file's hash differs from the original
+        assertFalse(Arrays.equals(Crypto.digest(inputFilePath.toFile()), Crypto.digest(outputFilePath.toFile())));
+
+        // Create paths for decrypting
+        Path decryptedDirectory = Files.createTempDirectory("decryptedDirectory");
+        Path decryptedFile = Paths.get(decryptedDirectory.toString(), enclosingFolderName, inputFilePath.getFileName().toString());
+        decryptedDirectory.toFile().deleteOnExit();
+        assertFalse(Files.exists(decryptedFile));
+
+        // Now decrypt...
+        AES.decryptFile(algorithm, aesKey, outputFilePath.toString(), decryptedFile.toString());
+
+        // Ensure resulting file exists
+        assertTrue(Files.exists(decryptedFile));
+
+        // And make sure it matches the original input file
+        assertTrue(Arrays.equals(Crypto.digest(inputFilePath.toFile()), Crypto.digest(decryptedFile.toFile())));
+    }
+
+    @Test
+    public void testGcmEncryptionSizeOverhead() throws IOException, NoSuchAlgorithmException, InvalidAlgorithmParameterException, NoSuchPaddingException, IllegalBlockSizeException, BadPaddingException, InvalidKeyException {
+        for (int size = 1; size < 256; size++) {
+            String enclosingFolderName = "data";
+            Path inputFilePath = Files.createTempFile("inputFile", null);
+            Path outputDirectory = Files.createTempDirectory("outputDirectory");
+            Path outputFilePath = Paths.get(outputDirectory.toString(), enclosingFolderName);
+            inputFilePath.toFile().deleteOnExit();
+            outputDirectory.toFile().deleteOnExit();
+
+            // Write random data to the input file
+            byte[] data = new byte[size];
+            new Random().nextBytes(data);
+            Files.write(inputFilePath, data, StandardOpenOption.CREATE);
+
+            assertTrue(Files.exists(inputFilePath));
+            assertFalse(Files.exists(outputFilePath));
+
+            // Ensure input file is the same size as the data
+            assertEquals(size, inputFilePath.toFile().length());
+
+            // Encrypt...
+            String algorithm = "AES/GCM/NoPadding";
+            SecretKey aesKey = AES.generateKey(256);
+            AES.encryptFile(algorithm, aesKey, inputFilePath.toString(), outputFilePath.toString());
+
+            assertTrue(Files.exists(inputFilePath));
+            assertTrue(Files.exists(outputFilePath));
+
+            final long expectedSize = AES.getGcmEncryptedFileSize(inputFilePath.toFile().length());
             System.out.println(String.format("Plaintext size: %d bytes, Ciphertext size: %d bytes", inputFilePath.toFile().length(), outputFilePath.toFile().length()));
 
             // Ensure encryption added a fixed amount of space to the output file
