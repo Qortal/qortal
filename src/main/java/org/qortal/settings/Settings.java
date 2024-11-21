@@ -281,7 +281,8 @@ public class Settings {
 	// Auto-update sources
 	private String[] autoUpdateRepos = new String[] {
 		"https://github.com/Qortal/qortal/raw/%s/qortal.update",
-		"https://raw.githubusercontent.com@151.101.16.133/Qortal/qortal/%s/qortal.update"
+		"https://raw.githubusercontent.com@151.101.16.133/Qortal/qortal/%s/qortal.update",
+		"https://gitea.qortal.org/Qortal/qortal/raw/branch/%s/qortal.update"
 	};
 
 	// Lists
