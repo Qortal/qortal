@@ -14,7 +14,7 @@ import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.Security;
 import org.qortal.api.model.crosschain.AddressRequest;
-import org.qortal.api.model.crosschain.RavencoinSendRequest;
+import org.qortal.api.model.crosschain.BitcoinySendRequest;
 import org.qortal.crosschain.AddressInfo;
 import org.qortal.crosschain.ChainableServer;
 import org.qortal.crosschain.ElectrumX;
@@ -203,7 +203,7 @@ public class CrossChainRavencoinResource {
 			content = @Content(
 				mediaType = MediaType.APPLICATION_JSON,
 				schema = @Schema(
-					implementation = RavencoinSendRequest.class
+					implementation = BitcoinySendRequest.class
 				)
 			)
 		),
@@ -215,10 +215,10 @@ public class CrossChainRavencoinResource {
 	)
 	@ApiErrors({ApiError.INVALID_PRIVATE_KEY, ApiError.INVALID_CRITERIA, ApiError.INVALID_ADDRESS, ApiError.FOREIGN_BLOCKCHAIN_BALANCE_ISSUE, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE})
 	@SecurityRequirement(name = "apiKey")
-	public String sendBitcoin(@HeaderParam(Security.API_KEY_HEADER) String apiKey, RavencoinSendRequest ravencoinSendRequest) {
+	public String sendBitcoin(@HeaderParam(Security.API_KEY_HEADER) String apiKey, BitcoinySendRequest ravencoinSendRequest) {
 		Security.checkApiCallAllowed(request);
 
-		if (ravencoinSendRequest.ravencoinAmount <= 0)
+		if (ravencoinSendRequest.coinAmount <= 0)
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
 
 		if (ravencoinSendRequest.feePerByte != null && ravencoinSendRequest.feePerByte <= 0)
@@ -234,7 +234,7 @@ public class CrossChainRavencoinResource {
 
 		Transaction spendTransaction = ravencoin.buildSpend(ravencoinSendRequest.xprv58,
 				ravencoinSendRequest.receivingAddress,
-				ravencoinSendRequest.ravencoinAmount,
+				ravencoinSendRequest.coinAmount,
 				ravencoinSendRequest.feePerByte);
 
 		if (spendTransaction == null)

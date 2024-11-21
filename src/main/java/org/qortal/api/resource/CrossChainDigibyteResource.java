@@ -14,7 +14,7 @@ import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.Security;
 import org.qortal.api.model.crosschain.AddressRequest;
-import org.qortal.api.model.crosschain.DigibyteSendRequest;
+import org.qortal.api.model.crosschain.BitcoinySendRequest;
 import org.qortal.crosschain.AddressInfo;
 import org.qortal.crosschain.ChainableServer;
 import org.qortal.crosschain.ElectrumX;
@@ -203,7 +203,7 @@ public class CrossChainDigibyteResource {
 			content = @Content(
 				mediaType = MediaType.APPLICATION_JSON,
 				schema = @Schema(
-					implementation = DigibyteSendRequest.class
+					implementation = BitcoinySendRequest.class
 				)
 			)
 		),
@@ -215,10 +215,10 @@ public class CrossChainDigibyteResource {
 	)
 	@ApiErrors({ApiError.INVALID_PRIVATE_KEY, ApiError.INVALID_CRITERIA, ApiError.INVALID_ADDRESS, ApiError.FOREIGN_BLOCKCHAIN_BALANCE_ISSUE, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE})
 	@SecurityRequirement(name = "apiKey")
-	public String sendBitcoin(@HeaderParam(Security.API_KEY_HEADER) String apiKey, DigibyteSendRequest digibyteSendRequest) {
+	public String sendBitcoin(@HeaderParam(Security.API_KEY_HEADER) String apiKey, BitcoinySendRequest digibyteSendRequest) {
 		Security.checkApiCallAllowed(request);
 
-		if (digibyteSendRequest.digibyteAmount <= 0)
+		if (digibyteSendRequest.coinAmount <= 0)
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
 
 		if (digibyteSendRequest.feePerByte != null && digibyteSendRequest.feePerByte <= 0)
@@ -234,7 +234,7 @@ public class CrossChainDigibyteResource {
 
 		Transaction spendTransaction = digibyte.buildSpend(digibyteSendRequest.xprv58,
 				digibyteSendRequest.receivingAddress,
-				digibyteSendRequest.digibyteAmount,
+				digibyteSendRequest.coinAmount,
 				digibyteSendRequest.feePerByte);
 
 		if (spendTransaction == null)
