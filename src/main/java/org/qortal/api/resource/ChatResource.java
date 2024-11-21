@@ -22,6 +22,7 @@ import org.qortal.data.transaction.TransactionData;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
+import org.qortal.settings.Settings;
 import org.qortal.transaction.ChatTransaction;
 import org.qortal.transaction.Transaction;
 import org.qortal.transaction.Transaction.TransactionType;
@@ -273,7 +274,8 @@ public class ChatResource {
 	@ApiErrors({ApiError.TRANSACTION_INVALID, ApiError.TRANSFORMATION_ERROR, ApiError.REPOSITORY_ISSUE})
 	@SecurityRequirement(name = "apiKey")
 	public String buildChat(@HeaderParam(Security.API_KEY_HEADER) String apiKey, ChatTransactionData transactionData) {
-		Security.checkApiCallAllowed(request);
+		if (!Settings.getInstance().isChatAuthBypassEnabled())
+			Security.checkApiCallAllowed(request);
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
 			ChatTransaction chatTransaction = (ChatTransaction) Transaction.fromData(repository, transactionData);
