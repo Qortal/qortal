@@ -45,7 +45,7 @@ public class Digibyte extends Bitcoiny {
 				return Arrays.asList(
 					// Servers chosen on NO BASIS WHATSOEVER from various sources!
 					// Status verified at https://1209k.com/bitcoin-eye/ele.php?chain=dgb
-					new Server("electrum.qortal.link", Server.ConnectionType.SSL, 55002),
+					// offline Server("electrum.qortal.link", Server.ConnectionType.SSL, 55002),
 					new Server("electrum1.cipig.net", Server.ConnectionType.SSL, 20059),
 					new Server("electrum2.cipig.net", Server.ConnectionType.SSL, 20059),
 					new Server("electrum3.cipig.net", Server.ConnectionType.SSL, 20059)
