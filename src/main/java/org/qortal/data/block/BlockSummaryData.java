@@ -1,7 +1,13 @@
 package org.qortal.data.block;
 
+import org.qortal.account.Account;
+import org.qortal.repository.DataException;
+import org.qortal.repository.Repository;
+import org.qortal.repository.RepositoryManager;
+
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
+import javax.xml.bind.annotation.XmlElement;
 import java.util.Arrays;
 
 @XmlAccessorType(XmlAccessType.FIELD)
@@ -103,6 +109,18 @@ public class BlockSummaryData {
 		this.minterLevel = minterLevel;
 	}
 
+	@XmlElement(name = "minterAddress")
+	public String getMinterAddress() {
+		if (this.minterPublicKey == null) {
+			return "Unknown";
+		}
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			return Account.getRewardShareMintingAddress(repository, this.minterPublicKey);
+		} catch (DataException e) {
+			// Log the exception as needed
+			return "Unknown";
+		}
+	}
 
 	@Override
 	public boolean equals(Object o) {
