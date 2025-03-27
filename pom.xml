@@ -10,6 +10,7 @@
 		<skipTests>true</skipTests>
 
 		<altcoinj.version>7dc8c6f</altcoinj.version>
+		<altcoinj.version>7dc8c6f</altcoinj.version>
 		<bitcoinj.version>0.15.10</bitcoinj.version>
 		<bouncycastle.version>1.70</bouncycastle.version>
 		<build.timestamp>${maven.build.timestamp}</build.timestamp>
@@ -49,6 +50,7 @@
 		<maven-reproducible-build-plugin.version>0.17</maven-reproducible-build-plugin.version>
 		<maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
 		<maven-shade-plugin.version>3.6.0</maven-shade-plugin.version>
+		<maven-install-plugin.version>3.1.3</maven-install-plugin.version>
 		<maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
 		<protobuf.version>3.25.3</protobuf.version>
 		<replacer.version>1.5.3</replacer.version>
@@ -303,6 +305,30 @@
 					</archive>
 				</configuration>
 			</plugin>
+			<!-- Copy modified hsqldb.jar to install / modified MANIFEST.MF-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-install-plugin</artifactId>
+				<version>${maven-install-plugin.version}</version>
+				<configuration>
+					<groupId>org.hsqldb</groupId>
+					<artifactId>hsqldb</artifactId>
+					<version>${hsqldb.version}</version>
+					<packaging>jar</packaging>
+				</configuration>
+				<executions>
+					<execution>
+						<phase>install</phase>
+						<goals>
+							<goal>install-file</goal>
+						</goals>
+						<configuration>
+							<file>${project.basedir}/lib/org/hsqldb/hsqldb/${hsqldb.version}/hsqldb.jar</file>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-shade-plugin</artifactId>
@@ -450,7 +476,7 @@
 			<scope>provided</scope>
 			<!-- needed for build, not for runtime -->
 		</dependency>
-		<!-- HSQLDB for repository -->
+		<!-- HSQLDB for repository should use local version with Sealed: false -->
 		<dependency>
 			<groupId>org.hsqldb</groupId>
 			<artifactId>hsqldb</artifactId>

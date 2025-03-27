@@ -15,20 +15,31 @@ Building the future one block at a time. Welcome to Qortal.
 
 # Building the Qortal Core from Source
 
-## Build / run
+## Build / Run
 
 - Requires Java 11. OpenJDK 11 recommended over Java SE.
 - Install Maven
 - Use Maven to fetch dependencies and build: `mvn clean package`
+- Update Maven dependencies: `mvn install` 
 - Built JAR should be something like `target/qortal-1.0.jar`
 - Create basic *settings.json* file: `echo '{}' > settings.json`
 - Run JAR in same working directory as *settings.json*: `java -jar target/qortal-1.0.jar`
 - Wrap in shell script, add JVM flags, redirection, backgrounding, etc. as necessary.
 - Or use supplied example shell script: *start.sh*
 
+## IntelliJ IDEA Configuration
+
+- Run -> Edit Configurations
+- Add New Application
+- Name: qortal
+- SDK: java 11
+- Main Class: org.qortal.controller.Controller
+- Program arguments: settings.json -Dlog4j.configurationFile=log4j2.properties -ea
+- Environment variables: Djava.net.preferIPv4Stack=false
+
 # Using a pre-built Qortal 'jar' binary
 
-If you would prefer to utilize a released version of Qortal, you may do so by downloading one of the available releases from the releases page, that are also linked on https://qortal.org and https://qortal.dev. 
+If you prefer to utilize a released version of Qortal, you may do so by downloading one of the available releases from the releases page, that are also linked on https://qortal.org and https://qortal.dev. 
 
 # Learning Q-App Development
 

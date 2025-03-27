@@ -1,0 +1,5 @@
+This is the production hsqldb-2.7.4 with the manifest file updated 
+
+Sealed: false
+
+Allows the addition of the custom Qortal HSQLDBPool and Monitoring Classes
