@@ -30,6 +30,9 @@
 	"blockRewardBatchStartHeight": 999999000,
 	"blockRewardBatchSize": 10,
 	"blockRewardBatchAccountsBlockCount": 3,
+	"mintingGroupIds": [
+		{ "height": 0, "ids": [ 2 ]}
+	],
 	"rewardsByHeight": [
 		{ "height": 1, "reward": 100 },
 		{ "height": 11, "reward": 10 },
@@ -102,7 +105,12 @@
 		"onlyMintWithNameHeight": 9999999999990,
 		"groupMemberCheckHeight": 9999999999999,
 		"decreaseOnlineAccountsDifficultyTimestamp": 9999999999999,
-		"removeOnlyMintWithNameHeight": 9999999999999
+		"removeOnlyMintWithNameHeight": 9999999999999,
+		"fixBatchRewardHeight": 9999999999999,
+		"adminsReplaceFoundersHeight": 9999999999999,
+		"ignoreLevelForRewardShareHeight": 9999999999999,
+		"nullGroupMembershipHeight": 20,
+		"adminQueryFixHeight": 9999999999999
 	},
 	"genesisInfo": {
 		"version": 4,
@@ -118,8 +126,12 @@
 			{ "type": "GENESIS", "recipient": "Qci5m9k4rcwe4ruKrZZQKka4FzUUMut3er", "amount": "1000000" },
 
 			{ "type": "CREATE_GROUP", "creatorPublicKey": "2tiMr5LTpaWCgbRvkPK8TFd7k63DyHJMMFFsz9uBf1ZP", "groupName": "dev-group", "description": "developer group", "isOpen": false, "approvalThreshold": "PCT100", "minimumBlockDelay": 0, "maximumBlockDelay": 1440 },
+			{ "type": "CREATE_GROUP", "creatorPublicKey": "2tiMr5LTpaWCgbRvkPK8TFd7k63DyHJMMFFsz9uBf1ZP", "groupName": "MINTER", "description": "Minter group", "isOpen": false, "approvalThreshold": "PCT100", "minimumBlockDelay": 0, "maximumBlockDelay": 1440 },
 
 			{ "type": "UPDATE_GROUP", "ownerPublicKey": "2tiMr5LTpaWCgbRvkPK8TFd7k63DyHJMMFFsz9uBf1ZP", "groupId": 1, "newOwner": "QdSnUy6sUiEnaN87dWmE92g1uQjrvPgrWG", "newDescription": "developer group", "newIsOpen": false, "newApprovalThreshold": "PCT40", "minimumBlockDelay": 10, "maximumBlockDelay": 1440 },
+			{ "type": "UPDATE_GROUP", "ownerPublicKey": "2tiMr5LTpaWCgbRvkPK8TFd7k63DyHJMMFFsz9uBf1ZP", "groupId": 2, "newOwner": "QdSnUy6sUiEnaN87dWmE92g1uQjrvPgrWG", "newDescription": "Minter group", "newIsOpen": true, "newApprovalThreshold": "PCT40", "minimumBlockDelay": 1, "maximumBlockDelay": 1440 },
+
+			{ "type": "JOIN_GROUP", "joinerPublicKey": "2tiMr5LTpaWCgbRvkPK8TFd7k63DyHJMMFFsz9uBf1ZP", "groupId": 2},
 
 			{ "type": "ISSUE_ASSET", "issuerPublicKey": "2tiMr5LTpaWCgbRvkPK8TFd7k63DyHJMMFFsz9uBf1ZP", "assetName": "TEST", "description": "test asset", "data": "", "quantity": "1000000", "isDivisible": true, "fee": 0 },
 			{ "type": "ISSUE_ASSET", "issuerPublicKey": "C6wuddsBV3HzRrXUtezE7P5MoRXp5m3mEDokRDGZB6ry", "assetName": "OTHER", "description": "other test asset", "data": "", "quantity": "1000000", "isDivisible": true, "fee": 0 },
@@ -134,6 +146,7 @@
 			{ "type": "ACCOUNT_LEVEL", "target": "Qci5m9k4rcwe4ruKrZZQKka4FzUUMut3er", "level": 5 },
 			{ "type": "ACCOUNT_LEVEL", "target": "QaUpHNhT3Ygx6avRiKobuLdusppR5biXjL", "level": 5 },
 			{ "type": "ACCOUNT_LEVEL", "target": "Qci5m9k4rcwe4ruKrZZQKka4FzUUMut3er", "level": 6 }
+
 		]
 	}
 }

@@ -644,8 +644,10 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	}
 
 	/**
-	 * Performs RPC call, with automatic reconnection to different server if needed.
-	 * <p>
+	 * <p>Performs RPC call, with automatic reconnection to different server if needed.
+	 * </p>
+	 * @param method String representation of the RPC call value
+	 * @param params a list of Objects passed to the method of the Remote Server
 	 * @return "result" object from within JSON output
 	 * @throws ForeignBlockchainException if server returns error or something goes wrong
 	 */

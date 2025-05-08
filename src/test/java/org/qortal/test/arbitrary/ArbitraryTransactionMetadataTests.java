@@ -27,6 +27,7 @@ import org.qortal.transaction.RegisterNameTransaction;
 import org.qortal.utils.Base58;
 import org.qortal.utils.NTP;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -410,13 +411,13 @@ public class ArbitraryTransactionMetadataTests extends Common {
             assertEquals(3, arbitraryDataFile.getMetadata().getFiles().size());
             assertTrue(arbitraryDataFile.getMetadata().getFiles().contains("file.txt"));
             assertTrue(arbitraryDataFile.getMetadata().getFiles().contains("image1.jpg"));
-            assertTrue(arbitraryDataFile.getMetadata().getFiles().contains("subdirectory/config.json"));
+            assertTrue(arbitraryDataFile.getMetadata().getFiles().contains("subdirectory" + File.separator + "config.json"));
 
             // Ensure the file list can be read back out again, when specified to be included
             ArbitraryResourceMetadata resourceMetadata = ArbitraryResourceMetadata.fromTransactionMetadata(arbitraryDataFile.getMetadata(), true);
             assertTrue(resourceMetadata.getFiles().contains("file.txt"));
             assertTrue(resourceMetadata.getFiles().contains("image1.jpg"));
-            assertTrue(resourceMetadata.getFiles().contains("subdirectory/config.json"));
+            assertTrue(resourceMetadata.getFiles().contains("subdirectory" + File.separator + "config.json"));
 
             // Ensure it's not returned when specified to be excluded
             // The entire object will be null because there is no metadata

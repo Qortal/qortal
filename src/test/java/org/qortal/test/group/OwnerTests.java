@@ -5,15 +5,14 @@ import org.junit.Before;
 import org.junit.Test;
 import org.qortal.account.PrivateKeyAccount;
 import org.qortal.data.transaction.AddGroupAdminTransactionData;
-import org.qortal.data.transaction.CreateGroupTransactionData;
 import org.qortal.data.transaction.JoinGroupTransactionData;
 import org.qortal.data.transaction.RemoveGroupAdminTransactionData;
-import org.qortal.group.Group.ApprovalThreshold;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
 import org.qortal.test.common.BlockUtils;
 import org.qortal.test.common.Common;
+import org.qortal.test.common.GroupUtils;
 import org.qortal.test.common.TransactionUtils;
 import org.qortal.test.common.transaction.TestTransaction;
 import org.qortal.transaction.Transaction.ValidationResult;
@@ -39,7 +38,7 @@ public class OwnerTests extends Common {
 			PrivateKeyAccount bob = Common.getTestAccount(repository, "bob");
 
 			// Create group
-			int groupId = createGroup(repository, alice, "open-group", true);
+			int groupId = GroupUtils.createGroup(repository, alice, "open-group", true);
 
 			// Attempt to promote non-member
 			ValidationResult result = addGroupAdmin(repository, alice, groupId, bob.getAddress());
@@ -83,7 +82,7 @@ public class OwnerTests extends Common {
 			PrivateKeyAccount bob = Common.getTestAccount(repository, "bob");
 
 			// Create group
-			int groupId = createGroup(repository, alice, "open-group", true);
+			int groupId = GroupUtils.createGroup(repository, alice, "open-group", true);
 
 			// Attempt to demote non-member
 			ValidationResult result = removeGroupAdmin(repository, alice, groupId, bob.getAddress());
@@ -131,19 +130,6 @@ public class OwnerTests extends Common {
 			// Should NOT be OK
 			assertNotSame(ValidationResult.OK, result);
 		}
-	}
-
-	private Integer createGroup(Repository repository, PrivateKeyAccount owner, String groupName, boolean isOpen) throws DataException {
-		String description = groupName + " (description)";
-
-		ApprovalThreshold approvalThreshold = ApprovalThreshold.ONE;
-		int minimumBlockDelay = 10;
-		int maximumBlockDelay = 1440;
-
-		CreateGroupTransactionData transactionData = new CreateGroupTransactionData(TestTransaction.generateBase(owner), groupName, description, isOpen, approvalThreshold, minimumBlockDelay, maximumBlockDelay);
-		TransactionUtils.signAndMint(repository, transactionData, owner);
-
-		return repository.getGroupRepository().fromGroupName(groupName).getGroupId();
 	}
 
 	private ValidationResult joinGroup(Repository repository, PrivateKeyAccount joiner, int groupId) throws DataException {

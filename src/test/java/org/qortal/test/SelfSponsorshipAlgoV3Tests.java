@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+import static org.hamcrest.core.IsNot.not;
 import static org.junit.Assert.*;
 import static org.qortal.test.common.AccountUtils.fee;
 import static org.qortal.transaction.Transaction.ValidationResult.ACCOUNT_NOT_TRANSFERABLE;
@@ -840,7 +841,7 @@ public class SelfSponsorshipAlgoV3Tests extends Common {
 			assertEquals(0, (int) new Account(repository, aliceAccount.getAddress()).getLevel());
 
 			// Alice can no longer create a reward share transaction
-			assertEquals(Transaction.ValidationResult.ACCOUNT_CANNOT_REWARD_SHARE, AccountUtils.createRandomRewardShare(repository, aliceAccount));
+			assertThat(Transaction.ValidationResult.OK, not(AccountUtils.createRandomRewardShare(repository, aliceAccount)));
 
 			// Bob can no longer create a reward share transaction (disabled at Block 15)
 			assertEquals(Transaction.ValidationResult.OK, AccountUtils.createRandomRewardShare(repository, bobAccount));

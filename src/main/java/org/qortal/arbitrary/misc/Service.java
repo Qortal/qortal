@@ -37,7 +37,7 @@ public enum Service {
             if (files != null && files[0] != null) {
                 final String extension = FilenameUtils.getExtension(files[0].getName()).toLowerCase();
                 // We must allow blank file extensions because these are used by data published from a plaintext or base64-encoded string
-                final List<String> allowedExtensions = Arrays.asList("zip", "pdf", "txt", "odt", "ods", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "");
+                final List<String> allowedExtensions = Arrays.asList("qortal", "zip", "pdf", "txt", "odt", "ods", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "");
                 if (extension == null || !allowedExtensions.contains(extension)) {
                     return ValidationResult.INVALID_FILE_EXTENSION;
                 }

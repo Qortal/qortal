@@ -11,6 +11,7 @@ import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
 import org.qortal.test.common.BlockUtils;
 import org.qortal.test.common.Common;
+import org.qortal.test.common.GroupUtils;
 import org.qortal.test.common.TransactionUtils;
 import org.qortal.test.common.transaction.TestTransaction;
 import org.qortal.transaction.Transaction.ValidationResult;
@@ -78,7 +79,7 @@ public class AdminTests extends Common {
 			int groupId = createGroup(repository, alice, "open-group", true);
 
 			// Bob to join
-			joinGroup(repository, bob, groupId);
+			GroupUtils.joinGroup(repository, bob, groupId);
 
 			// Promote Bob to admin
 			addGroupAdmin(repository, alice, groupId, bob.getAddress());

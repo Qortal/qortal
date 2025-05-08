@@ -16,5 +16,6 @@
   "listsPath": "lists-test",
   "storagePolicy": "FOLLOWED_OR_VIEWED",
   "maxStorageCapacity": 104857600,
-  "arrrDefaultBirthday": 1900000
+  "arrrDefaultBirthday": 1900000,
+  "archivingPause": 5
 }

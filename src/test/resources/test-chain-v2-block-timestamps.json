@@ -25,6 +25,9 @@
 	"blockRewardBatchStartHeight": 999999000,
 	"blockRewardBatchSize": 10,
 	"blockRewardBatchAccountsBlockCount": 3,
+	"mintingGroupIds": [
+		{ "height": 0, "ids": [ 1 ]}
+	],
 	"rewardsByHeight": [
 		{ "height": 1, "reward": 100 },
 		{ "height": 11, "reward": 10 },
@@ -98,7 +101,12 @@
 		"onlyMintWithNameHeight": 9999999999990,
 		"groupMemberCheckHeight": 9999999999999,
 		"decreaseOnlineAccountsDifficultyTimestamp": 9999999999999,
-		"removeOnlyMintWithNameHeight": 9999999999999
+		"removeOnlyMintWithNameHeight": 9999999999999,
+		"fixBatchRewardHeight": 9999999999999,
+		"adminsReplaceFoundersHeight": 9999999999999,
+		"ignoreLevelForRewardShareHeight": 9999999999999,
+		"nullGroupMembershipHeight": 20,
+		"adminQueryFixHeight": 9999999999999
 	},
 	"genesisInfo": {
 		"version": 4,
