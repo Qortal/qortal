@@ -616,6 +616,8 @@ public class Settings {
 
 	// Related to Reticulum networking
 
+	/** Preferred network: tcpip or reticulum */
+	private String preferredNetwork = "reticulum";
 	/** Maximum number of Reticulum peers allowed. */
 	private int reticulumMaxPeers = 55;
 	/** Minimum number of Reticulum peers desired. */
@@ -1378,6 +1380,10 @@ public class Settings {
 
 	public boolean isConnectionPoolMonitorEnabled() {
 		return connectionPoolMonitorEnabled;
+	}
+
+	public String getPreferredNetwork () {
+		return this.preferredNetwork.toLowerCase(Locale.getDefault());
 	}
 
 	public int getReticulumMaxPeers() {

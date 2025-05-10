@@ -108,8 +108,8 @@ public class RNSPeer {
 
     // for qortal networking
     private static final int RESPONSE_TIMEOUT = 3000; // [ms]
-    private static final int PING_INTERVAL = 34_000; // [ms]
-    private static final long LINK_PING_INTERVAL = 34 * 1000L; // ms
+    private static final int PING_INTERVAL = 55_000; // [ms]
+    private static final long LINK_PING_INTERVAL = 55 * 1000L; // ms
     private byte[] messageMagic;  // set in message creating classes
     private Long lastPing = null;      // last (packet) ping roundtrip time [ms]
     private Long lastPingSent = null;  // time last (packet) ping was sent, or null if not started.
@@ -370,7 +370,7 @@ public class RNSPeer {
                         break;
 
                     case PONG:
-                        //log.info("PONG received");
+                        log.trace("PONG received");
                         break;
 
                     // Do we need this ? (no need to relay peer list...)
@@ -378,30 +378,30 @@ public class RNSPeer {
                     //    onPeersV2Message(peer, message);
                     //    break;
 
-                    case BLOCK_SUMMARIES:
-                        // from Synchronizer
-                        addToQueue(message);
-                        break;
-
-                    case BLOCK_SUMMARIES_V2:
-                        // from Synchronizer
-                        addToQueue(message);
-                        break;
-
-                    case SIGNATURES:
-                        // from Synchronizer
-                        addToQueue(message);
-                        break;
-
-                    case BLOCK:
-                        // from Synchronizer
-                        addToQueue(message);
-                        break;
-
-                    case BLOCK_V2:
-                        // from Synchronizer
-                        addToQueue(message);
-                        break;
+                    //case BLOCK_SUMMARIES:
+                    //    // from Synchronizer
+                    //    addToQueue(message);
+                    //    break;
+                    //
+                    //case BLOCK_SUMMARIES_V2:
+                    //    // from Synchronizer
+                    //    addToQueue(message);
+                    //     break;
+                    //
+                    //case SIGNATURES:
+                    //    // from Synchronizer
+                    //    addToQueue(message);
+                    //    break;
+                    //
+                    //case BLOCK:
+                    //    // from Synchronizer
+                    //    addToQueue(message);
+                     //    break;
+                    //
+                    //case BLOCK_V2:
+                    //    // from Synchronizer
+                    //    addToQueue(message);
+                    //    break;
 
                     default:
                         log.info("default - type {} message received ({} bytes)", message.getType(), data.length);
@@ -419,7 +419,7 @@ public class RNSPeer {
     }
 
     /**
-     * we need to queue all incomming messages that follow request/response
+     * we need to queue all incoming messages that follow request/response
      * with explicit handling of the response message.
      */
     public void addToQueue(Message message) {
@@ -499,10 +499,12 @@ public class RNSPeer {
 
     public void packetTimedOut(PacketReceipt receipt) {
         log.info("packet timed out, receipt status: {}", receipt.getStatus());
-        if (receipt.getStatus() == PacketReceiptStatus.FAILED) {
-            this.peerTimedOut = true;
-            this.peerLink.teardown();
-        }
+        //if (receipt.getStatus() == PacketReceiptStatus.FAILED) {
+        //    this.peerTimedOut = true;
+        //    this.peerLink.teardown();
+        //}
+        this.peerTimedOut = true;
+        this.peerLink.teardown();
     }
 
     /** Link Request callbacks */ 
