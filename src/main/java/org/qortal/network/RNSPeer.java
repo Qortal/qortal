@@ -99,17 +99,17 @@ public class RNSPeer {
     int sendStreamId = 0;
     private Boolean isInitiator;
     private Boolean deleteMe = false;
-    private Boolean isVacant = true;
+    //private Boolean isVacant = true;
     private Long lastPacketRtt = null;
-    private byte[] emptyBuffer = {0,0,0,0,0};
+    //private byte[] emptyBuffer = {0,0,0,0,0};
 
     private Double requestResponseProgress;
     @Setter(AccessLevel.PACKAGE) private Boolean peerTimedOut = false;
 
     // for qortal networking
     private static final int RESPONSE_TIMEOUT = 3000; // [ms]
-    private static final int PING_INTERVAL = 34_000; // [ms]
-    private static final long LINK_PING_INTERVAL = 34 * 1000L; // ms
+    private static final int PING_INTERVAL = 55_000; // [ms]
+    private static final long LINK_PING_INTERVAL = 55 * 1000L; // ms
     private byte[] messageMagic;  // set in message creating classes
     private Long lastPing = null;      // last (packet) ping roundtrip time [ms]
     private Long lastPingSent = null;  // time last (packet) ping was sent, or null if not started.
@@ -144,7 +144,7 @@ public class RNSPeer {
         initPeerLink();
         //setCreationTimestamp(System.currentTimeMillis());
         this.creationTimestamp = Instant.now();
-        this.isVacant = true;
+        //this.isVacant = true;
         this.replyQueues = new ConcurrentHashMap<>();
         this.pendingMessages = new LinkedBlockingQueue<>();
         this.peerData = new RNSPeerData(dhash);
@@ -164,7 +164,7 @@ public class RNSPeer {
         this.lastAccessTimestamp = Instant.now();
         this.lastLinkProbeTimestamp = null;
         this.isInitiator = false;
-        this.isVacant = false;
+        //this.isVacant = false;
 
         //this.peerLink.setLinkEstablishedCallback(this::linkEstablished);
         //this.peerLink.setLinkClosedCallback(this::linkClosed);
@@ -223,8 +223,7 @@ public class RNSPeer {
             log.info("creating buffer - peerLink status: {}, channel: {}", this.peerLink.getStatus(), channel);
             this.peerBuffer = Buffer.createBidirectionalBuffer(receiveStreamId, sendStreamId, channel, this::peerBufferReady);
         }
-        //return getPeerBuffer();
-        return this.peerBuffer;
+        return getPeerBuffer();
     }
 
     public Link getOrInitPeerLink() {
@@ -342,10 +341,10 @@ public class RNSPeer {
         //log.trace("peerBufferReady - data bytes: {}", data.length);
         this.lastAccessTimestamp = Instant.now();
 
-        if (ByteBuffer.wrap(data, 0, emptyBuffer.length).equals(ByteBuffer.wrap(emptyBuffer, 0, emptyBuffer.length))) {
-            log.info("peerBufferReady - empty buffer detected (length: {})", data.length);
-        }
-        else {    
+        //if (ByteBuffer.wrap(data, 0, emptyBuffer.length).equals(ByteBuffer.wrap(emptyBuffer, 0, emptyBuffer.length))) {
+        //    log.info("peerBufferReady - empty buffer detected (length: {})", data.length);
+        //}
+        //else {
             try {
                 //log.info("***> creating message from {} bytes", data.length);
                 Message message = Message.fromByteBuffer(bb);
@@ -370,7 +369,7 @@ public class RNSPeer {
                         break;
 
                     case PONG:
-                        //log.info("PONG received");
+                        log.trace("PONG received");
                         break;
 
                     // Do we need this ? (no need to relay peer list...)
@@ -378,30 +377,30 @@ public class RNSPeer {
                     //    onPeersV2Message(peer, message);
                     //    break;
 
-                    case BLOCK_SUMMARIES:
-                        // from Synchronizer
-                        addToQueue(message);
-                        break;
-
-                    case BLOCK_SUMMARIES_V2:
-                        // from Synchronizer
-                        addToQueue(message);
-                        break;
-
-                    case SIGNATURES:
-                        // from Synchronizer
-                        addToQueue(message);
-                        break;
-
-                    case BLOCK:
-                        // from Synchronizer
-                        addToQueue(message);
-                        break;
-
-                    case BLOCK_V2:
-                        // from Synchronizer
-                        addToQueue(message);
-                        break;
+                    //case BLOCK_SUMMARIES:
+                    //    // from Synchronizer
+                    //    addToQueue(message);
+                    //    break;
+                    //
+                    //case BLOCK_SUMMARIES_V2:
+                    //    // from Synchronizer
+                    //    addToQueue(message);
+                    //     break;
+                    //
+                    //case SIGNATURES:
+                    //    // from Synchronizer
+                    //    addToQueue(message);
+                    //    break;
+                    //
+                    //case BLOCK:
+                    //    // from Synchronizer
+                    //    addToQueue(message);
+                     //    break;
+                    //
+                    //case BLOCK_V2:
+                    //    // from Synchronizer
+                    //    addToQueue(message);
+                    //    break;
 
                     default:
                         log.info("default - type {} message received ({} bytes)", message.getType(), data.length);
@@ -415,11 +414,11 @@ public class RNSPeer {
                 log.error("{} from peer {}", e, this);
                 log.info("{} from peer {}", e, this);
             }
-        }
+        //}
     }
 
     /**
-     * we need to queue all incomming messages that follow request/response
+     * we need to queue all incoming messages that follow request/response
      * with explicit handling of the response message.
      */
     public void addToQueue(Message message) {
@@ -500,9 +499,12 @@ public class RNSPeer {
     public void packetTimedOut(PacketReceipt receipt) {
         log.info("packet timed out, receipt status: {}", receipt.getStatus());
         if (receipt.getStatus() == PacketReceiptStatus.FAILED) {
+            log.info("packet timed out, receipt status: {}", PacketReceiptStatus.FAILED);
             this.peerTimedOut = true;
             this.peerLink.teardown();
         }
+        //this.peerTimedOut = true;
+        //this.peerLink.teardown();
     }
 
     /** Link Request callbacks */ 
