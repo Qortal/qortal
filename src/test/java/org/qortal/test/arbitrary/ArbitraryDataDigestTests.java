@@ -6,11 +6,13 @@ import org.qortal.arbitrary.ArbitraryDataDigest;
 import org.qortal.repository.DataException;
 import org.qortal.test.common.Common;
 
+import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.UUID;
 
 import static org.junit.Assert.assertEquals;
@@ -25,7 +27,10 @@ public class ArbitraryDataDigestTests extends Common {
 
     @Test
     public void testDirectoryDigest() throws IOException, DataException {
-        Path dataPath = Paths.get("src/test/resources/arbitrary/demo1");
+        String dataPathString = "src" + File.separator + "test" + File.separator + "resources" + File.separator + "arbitrary" + File.separator + "demo1";
+        Path dataPath = Paths.get(dataPathString);
+
+        // expectedHash is calculated for Linux
         String expectedHash58 = "DKyMuonWKoneJqiVHgw26Vk1ytrZG9PGsE9xfBg3GKDp";
 
         // Ensure directory exists
@@ -35,6 +40,13 @@ public class ArbitraryDataDigestTests extends Common {
         // Compute a hash
         ArbitraryDataDigest digest = new ArbitraryDataDigest(dataPath);
         digest.compute();
+        // Assert Fails, Expected: DKyMuonWKoneJqiVHgw26Vk1ytrZG9PGsE9xfBg3GKDp
+        //               Actual  : HbvgC6sfhFtDvmDXfPXVUcCUyZ5rM1NzX488qHmMpMB4
+        // This might be failing because Windows turns "/" (47) to "\" (92)
+        // Or maybe a fail due to \n [13] VS \r\n [13,10] in .txt files
+        // Confirmed the read in windows has \r\n
+        // Could be a combination of both
+        System.out.printf("Hash: %s \n", Arrays.toString(digest.getHash()));
         assertEquals(expectedHash58, digest.getHash58());
 
         // Write a random file to .qortal/cache to ensure it isn't being included in the digest function

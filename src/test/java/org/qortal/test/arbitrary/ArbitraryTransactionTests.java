@@ -440,7 +440,7 @@ public class ArbitraryTransactionTests extends Common {
 
             PrivateKeyAccount alice = Common.getTestAccount(repository, "alice");
             String publicKey58 = Base58.encode(alice.getPublicKey());
-            String name = "TEST"; // Can be anything for this test
+            String name = "TEST-testOnChainData"; // Can be anything for this test
             String identifier = null; // Not used for this test
             Service service = Service.ARBITRARY_DATA;
             int chunkSize = 1000;

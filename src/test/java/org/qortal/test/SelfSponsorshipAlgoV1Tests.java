@@ -15,10 +15,7 @@ import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
 import org.qortal.settings.Settings;
-import org.qortal.test.common.AccountUtils;
-import org.qortal.test.common.BlockUtils;
-import org.qortal.test.common.Common;
-import org.qortal.test.common.TransactionUtils;
+import org.qortal.test.common.*;
 import org.qortal.test.common.transaction.TestTransaction;
 import org.qortal.transaction.Transaction;
 import org.qortal.transaction.TransferPrivsTransaction;
@@ -28,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+import static org.hamcrest.core.IsNot.not;
 import static org.junit.Assert.*;
 import static org.qortal.test.common.AccountUtils.fee;
 import static org.qortal.transaction.Transaction.ValidationResult.ACCOUNT_NOT_TRANSFERABLE;
@@ -836,7 +834,10 @@ public class SelfSponsorshipAlgoV1Tests extends Common {
 			assertEquals(0, (int) new Account(repository, aliceAccount.getAddress()).getLevel());
 
 			// Alice can no longer create a reward share transaction
-			assertEquals(Transaction.ValidationResult.ACCOUNT_CANNOT_REWARD_SHARE, AccountUtils.createRandomRewardShare(repository, aliceAccount));
+			// Used to Chehck for ACCOUNT_CANNOT_REWARD_SHARE / Updated post canMint() function changes
+			// canMint returns False because reward penality  != 0 (account.java:240)
+			// Causes trip in RewardShareTransaction.java:126, Returns NOT_MINTING_ACCOUNT
+			assertThat(Transaction.ValidationResult.OK, not(AccountUtils.createRandomRewardShare(repository, aliceAccount)));
 
 			// ... but Bob still can
 			assertEquals(Transaction.ValidationResult.OK, AccountUtils.createRandomRewardShare(repository, bobAccount));

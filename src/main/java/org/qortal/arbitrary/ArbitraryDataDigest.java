@@ -5,8 +5,10 @@ import org.qortal.utils.Base58;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -44,12 +46,22 @@ public class ArbitraryDataDigest {
                 continue;
             }
 
+            // Account for \ VS / : Linux VS Windows
+            String pathString = relativePath.toString();
+
+            if(relativePath.getFileSystem().toString().contains("Windows")) {
+                pathString = pathString.replace("\\","/");
+            }
+
             // Hash path
-            byte[] filePathBytes = relativePath.toString().getBytes(StandardCharsets.UTF_8);
+            byte[] filePathBytes = pathString.getBytes(StandardCharsets.UTF_8);
+            System.out.printf("Path: %s \n", pathString);
+            System.out.printf("Path Byte Array: %s \n", Arrays.toString(filePathBytes));
             sha256.update(filePathBytes);
 
             // Hash contents
             byte[] fileContent = Files.readAllBytes(path);
+            System.out.printf("File Content: %s \n", Arrays.toString(fileContent));
             sha256.update(fileContent);
         }
         this.hash = sha256.digest();
