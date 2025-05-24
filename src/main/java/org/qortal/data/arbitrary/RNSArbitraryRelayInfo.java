@@ -61,7 +61,7 @@ public class RNSArbitraryRelayInfo {
         if (other == this)
             return true;
 
-        if (!(other instanceof ArbitraryRelayInfo))
+        if (!(other instanceof RNSArbitraryRelayInfo))
             return false;
 
         RNSArbitraryRelayInfo otherRelayInfo = (RNSArbitraryRelayInfo) other;
