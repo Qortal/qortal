@@ -98,9 +98,10 @@ public class DeterminedNetworkParams extends NetworkParameters implements Altcoi
 
         LOGGER.info( "Creating Genesis Block ...");
 
+        // BitcoinJ v16 has a new native method for this
         //this.genesisBlock = CoinParamsUtil.createGenesisBlockFromRequest(this, request);
 
-        LOGGER.info("Created Genesis Block: genesisBlock = " + genesisBlock );
+//        LOGGER.info("Created Genesis Block: genesisBlock = " + genesisBlock );
 
         // this is 100 for each coin from what I can tell
         this.spendableCoinbaseDepth = 100;
@@ -113,8 +114,9 @@ public class DeterminedNetworkParams extends NetworkParameters implements Altcoi
 //
 //        LOGGER.info("request = " + request);
 //
-//        checkState(genesisHash.equals(request.getExpectedGenesisHash()));
-        this.alertSigningKey = Hex.decode(request.getPubKey());
+//        checkState(genesisHash.equals(request.getExpectedGenesisHash()))
+//        alertSigningKey is removed in v16
+//        this.alertSigningKey = Hex.decode(request.getPubKey());
 
         this.majorityEnforceBlockUpgrade = request.getMajorityEnforceBlockUpgrade();
         this.majorityRejectBlockOutdated = request.getMajorityRejectBlockOutdated();
@@ -219,6 +221,12 @@ public class DeterminedNetworkParams extends NetworkParameters implements Altcoi
         } catch (CheckpointEncounteredException ex) {
             // Just have to take it on trust then
         }
+    }
+
+    @Override
+    public Block getGenesisBlock() {
+        //ToDo: Finish
+        return null;
     }
 
     /**

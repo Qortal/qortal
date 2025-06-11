@@ -184,6 +184,11 @@ public class LegacyZcashAddress extends Address {
         return p2sh ? ScriptType.P2SH : ScriptType.P2PKH;
     }
 
+    @Override
+    public int compareTo(Address address) {
+        return this.toString().compareTo(address.toString());
+    }
+
     /**
      * Given an address, examines the version byte and attempts to find a matching NetworkParameters. If you aren't sure
      * which network the address is intended for (eg, it was provided by a user), you can use this to decide if it is

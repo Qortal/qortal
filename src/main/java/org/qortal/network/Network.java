@@ -714,6 +714,7 @@ public class Network {
         // We can't block here so use tryRepository(). We don't NEED to connect a new peer.
         try (Repository repository = RepositoryManager.tryRepository()) {
             if (repository == null) {
+                LOGGER.warn("Unable to get repository connection : Network.getConnectablePeer()");
                 return null;
             }
 
@@ -1499,6 +1500,7 @@ public class Network {
         // Pruning peers isn't critical so no need to block for a repository instance.
         try (Repository repository = RepositoryManager.tryRepository()) {
             if (repository == null) {
+                LOGGER.warn("Unable to get repository connection : Network.prunePeers()");
                 return;
             }
 
@@ -1567,6 +1569,7 @@ public class Network {
             // Merging peers isn't critical so don't block for a repository instance.
             try (Repository repository = RepositoryManager.tryRepository()) {
                 if (repository == null) {
+                    LOGGER.warn("Unable to get repository connection : Network.opportunisticMergePeers()");
                     return;
                 }
 

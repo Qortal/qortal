@@ -3,19 +3,20 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>org.qortal</groupId>
 	<artifactId>qortal</artifactId>
-	<version>4.7.1</version>
+	<version>4.7.2</version>
 	<packaging>jar</packaging>
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-		<skipTests>true</skipTests>
+		<skipJUnitTests>true</skipJUnitTests>
 
-		<altcoinj.version>7dc8c6f</altcoinj.version>
-		<altcoinj.version>7dc8c6f</altcoinj.version>
-		<bitcoinj.version>0.15.10</bitcoinj.version>
-		<bouncycastle.version>1.70</bouncycastle.version>
+		<!-- <altcoinj.version>7dc8c6f</altcoinj.version> qortal github BC v15.6-->
+		<altcoinj.version>d7cf6ac</altcoinj.version> <!-- BC v16 / Updated Abstract Classes / alertSigningKey -->
+		<bitcoinj.version>0.16.3</bitcoinj.version>
+		<bouncycastle.version>1.73</bouncycastle.version>
 		<build.timestamp>${maven.build.timestamp}</build.timestamp>
-		<ciyam-at.version>1.4.2</ciyam-at.version>
-		<commons-net.version>3.8.0</commons-net.version>
+		<ciyam-at.version>1b731d1</ciyam-at.version> <!-- This is the hash for v1.4.3 -->
+		<!-- <ciyam-at.version>1.4.3</ciyam-at.version> -->
+		<commons-net.version>3.9.0</commons-net.version>
 		<commons-text.version>1.12.0</commons-text.version>
 		<commons-io.version>2.18.0</commons-io.version>
 		<commons-compress.version>1.27.1</commons-compress.version>
@@ -23,7 +24,7 @@
 		<dagger.version>1.2.2</dagger.version>
 		<extendedset.version>0.12.3</extendedset.version>
 		<git-commit-id-plugin.version>4.9.10</git-commit-id-plugin.version>
-		<grpc.version>1.68.1</grpc.version>
+		<grpc.version>1.68.3</grpc.version>
 		<guava.version>33.3.1-jre</guava.version>
 		<hamcrest-library.version>2.2</hamcrest-library.version>
 		<homoglyph.version>1.2.1</homoglyph.version>
@@ -33,7 +34,7 @@
 		<javax.servlet-api.version>4.0.1</javax.servlet-api.version>
 		<jaxb-runtime.version>2.3.9</jaxb-runtime.version>
 		<jersey.version>2.42</jersey.version>
-		<jetty.version>9.4.56.v20240826</jetty.version>
+		<jetty.version>9.4.57.v20241219</jetty.version>
 		<json-simple.version>1.1.1</json-simple.version>
 		<json.version>20240303</json.version>
 		<jsoup.version>1.18.1</jsoup.version>
@@ -51,11 +52,13 @@
 		<maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
 		<maven-shade-plugin.version>3.6.0</maven-shade-plugin.version>
 		<maven-install-plugin.version>3.1.3</maven-install-plugin.version>
-		<maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
-		<protobuf.version>3.25.3</protobuf.version>
+		<maven-surefire-plugin.version>3.5.3</maven-surefire-plugin.version>
+		<protobuf.version>3.25.7</protobuf.version>
 		<replacer.version>1.5.3</replacer.version>
 		<simplemagic.version>1.17</simplemagic.version>
 		<slf4j.version>1.7.36</slf4j.version>
+		<!-- <swagger-api.version>2.2.30</swagger-api.version> need code upgrade -->
+		<!-- <swagger-api.version>2.1.13</swagger-api.version> need code upgrade -->
 		<swagger-api.version>2.0.10</swagger-api.version>
 		<swagger-ui.version>5.18.2</swagger-ui.version>
 		<upnp.version>1.2</upnp.version>
@@ -291,19 +294,23 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-jar-plugin</artifactId>
 				<version>${maven-jar-plugin.version}</version>
-				<configuration>
-					<archive>
-						<manifest>
-							<addDefaultEntries>false</addDefaultEntries>
-							<addDefaultImplementationEntries>true</addDefaultImplementationEntries>
-						</manifest>
-						<manifestEntries>
-							<Last-Commit-Id>${git.commit.id.full}</Last-Commit-Id>
-							<Last-Commit-Time>${git.commit.time}</Last-Commit-Time>
-							<Reproducible-Build>true</Reproducible-Build>
-						</manifestEntries>
-					</archive>
-				</configuration>
+				<executions>
+					<execution>
+						<configuration>
+							<archive>
+								<manifest>
+									<addDefaultEntries>false</addDefaultEntries>
+									<addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+								</manifest>
+								<manifestEntries>
+									<Last-Commit-Id>${git.commit.id.full}</Last-Commit-Id>
+									<Last-Commit-Time>${git.commit.time}</Last-Commit-Time>
+									<Reproducible-Build>true</Reproducible-Build>
+								</manifestEntries>
+							</archive>
+						</configuration>
+					</execution>
+				</executions>
 			</plugin>
 			<!-- Copy modified hsqldb.jar to install / modified MANIFEST.MF-->
 			<plugin>
@@ -378,6 +385,7 @@
 					</execution>
 				</executions>
 			</plugin>
+			<!-- Removed, now use Maven reproducible by default v4.0, IntelliJ v2025.1 and later -->
 			<plugin>
 				<groupId>io.github.zlika</groupId>
 				<artifactId>reproducible-build-maven-plugin</artifactId>
@@ -400,7 +408,7 @@
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>${maven-surefire-plugin.version}</version>
 				<configuration>
-					<skipTests>${skipTests}</skipTests>
+					<skipTests>${skipJUnitTests}</skipTests>
 				</configuration>
 			</plugin>
 		</plugins>
@@ -484,7 +492,7 @@
 		</dependency>
 		<!-- CIYAM AT (automated transactions) -->
 		<dependency>
-			<groupId>org.ciyam</groupId>
+			<groupId>com.github.iceburst</groupId>
 			<artifactId>AT</artifactId>
 			<version>${ciyam-at.version}</version>
 		</dependency>
@@ -502,7 +510,7 @@
 		</dependency>
 		<!-- For Litecoin, etc. support, requires bitcoinj -->
 		<dependency>
-			<groupId>com.github.qortal</groupId>
+			<groupId>com.github.iceburst</groupId>
 			<artifactId>altcoinj</artifactId>
 			<version>${altcoinj.version}</version>
 		</dependency>
