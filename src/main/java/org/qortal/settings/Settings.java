@@ -614,12 +614,14 @@ public class Settings {
 		}
 	}
 
-	// Related to Reticulum networking
+	// Related to mesh networking
 
+	/** Preferred network: "tcpip" or "reticulum" */
+	private String preferredNetwork = "reticulum";
 	/** Maximum number of Reticulum peers allowed. */
 	private int reticulumMaxPeers = 55;
 	/** Minimum number of Reticulum peers desired. */
-	private int reticulumMinDesiredPeers = 3;
+	private int reticulumMinDesiredPeers = 8;
 	/** Maximum number of task executor network threads */
 	private int reticulumMaxNetworkThreadPoolSize = 89;
 
@@ -1378,6 +1380,10 @@ public class Settings {
 
 	public boolean isConnectionPoolMonitorEnabled() {
 		return connectionPoolMonitorEnabled;
+	}
+
+	public String getPreferredNetwork () {
+		return this.preferredNetwork.toLowerCase(Locale.getDefault());
 	}
 
 	public int getReticulumMaxPeers() {

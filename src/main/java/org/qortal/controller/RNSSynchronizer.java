@@ -218,7 +218,7 @@ public class RNSSynchronizer extends Thread {
 			return true;
 
 		// Needs a mutable copy of the unmodifiableList
-		List<RNSPeer> peers = new ArrayList<>(RNSNetwork.getInstance().getImmutableActiveLinkedPeers());
+		List<RNSPeer> peers = new ArrayList<>(RNSNetwork.getInstance().getActiveImmutableLinkedPeers());
 
 		//// Disregard peers that have "misbehaved" recently
 		//peers.removeIf(Controller.hasMisbehaved);
@@ -395,7 +395,7 @@ public class RNSSynchronizer extends Thread {
 	}
 
 	private boolean checkRecoveryModeForPeers(List<RNSPeer> qualifiedPeers) {
-		List<RNSPeer> linkedPeers = RNSNetwork.getInstance().getImmutableActiveLinkedPeers();
+		List<RNSPeer> linkedPeers = RNSNetwork.getInstance().getActiveImmutableLinkedPeers();
 
 		if (!linkedPeers.isEmpty()) {
 			// There is at least one handshaked peer

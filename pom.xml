@@ -52,6 +52,7 @@
 		<maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
 		<protobuf.version>3.25.3</protobuf.version>
 		<replacer.version>1.5.3</replacer.version>
+		<reticulum.version>8623ce3</reticulum.version>
 		<simplemagic.version>1.17</simplemagic.version>
 		<swagger-api.version>2.0.10</swagger-api.version>
 		<swagger-ui.version>5.18.2</swagger-ui.version>
@@ -512,6 +513,13 @@
 			<artifactId>altcoinj</artifactId>
 			<version>${altcoinj.version}</version>
 		</dependency>
+		<!-- Build Reticulum from Source -->
+		<dependency>
+			<!--<groupId>com.github.sergst83</groupId>-->
+			<groupId>com.github.jschulthess</groupId>
+			<artifactId>reticulum-network-stack</artifactId>
+			<version>${reticulum.version}</version>
+		</dependency>
 		<!-- Utilities -->
 		<dependency>
 			<groupId>com.googlecode.json-simple</groupId>
@@ -804,12 +812,6 @@
 			<groupId>org.glassfish.jaxb</groupId>
 			<artifactId>jaxb-runtime</artifactId>
 			<version>${jaxb-runtime.version}</version>
-		</dependency>
-		<!-- reticulum_network_stack -->
-		<dependency>
-			<groupId>io.reticulum</groupId>
-    		<artifactId>reticulum-network-stack</artifactId>
-        <version>1.0-SNAPSHOT</version>
 		</dependency>
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>

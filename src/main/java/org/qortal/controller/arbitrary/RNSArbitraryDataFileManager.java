@@ -204,12 +204,12 @@ public class RNSArbitraryDataFileManager extends Thread {
             Message getArbitraryDataFileMessage = new GetArbitraryDataFileMessage(signature, hash);
 
             Message response = null;
-            //// TODO - revisit (doesn't work with Reticulum)
-            //try {
-            //    response = peer.getResponseWithTimeout(getArbitraryDataFileMessage, (int) ArbitraryDataManager.ARBITRARY_REQUEST_TIMEOUT);
-            //} catch (InterruptedException e) {
-            //    // Will return below due to null response
-            //}
+            // TODO - revisit with RNS
+            try {
+                response = peer.getResponseWithTimeout(getArbitraryDataFileMessage, (int) ArbitraryDataManager.ARBITRARY_REQUEST_TIMEOUT);
+            } catch (InterruptedException e) {
+                // Will return below due to null response
+            }
             arbitraryDataFileRequests.remove(hash58);
             LOGGER.trace(String.format("Removed hash %.8s from arbitraryDataFileRequests", hash58));
 

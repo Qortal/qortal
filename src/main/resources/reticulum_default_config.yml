@@ -64,9 +64,9 @@ interfaces:
   # local IPv6 is enabled in your operating system, which
   # should be enabled by default in almost any OS. See
   # the Reticulum Manual for more configuration options.
-  #"Default Interface":
-  #  type: AutoInterface
-  #  enabled: true
+  "Default Interface":
+    type: AutoInterface
+    enabled: true
 
   # This interface enables communication with a "backbone"
   # server over TCP.
@@ -76,7 +76,7 @@ interfaces:
     enabled: true
     target_host: phantom.mobilefabrik.com
     target_port: 4242
-    #network_name: qortal
+    network_name: qortal
 
   # This interface turns this Reticulum instance into a
   # server other clients can connect to over TCP.
@@ -88,6 +88,6 @@ interfaces:
   #  type: TCPServerInterface
   #  enabled: true
   #  listen_ip: 0.0.0.0
-  #  listen_port: 3434
-  #  #network_name: qortal
+  #  listen_port: 4242
+  #  network_name: qortal
 

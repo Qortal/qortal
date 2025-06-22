@@ -543,8 +543,8 @@ public class Controller extends Thread {
 		LOGGER.info("Starting synchronizer");
 		Synchronizer.getInstance().start();
 
-		//LOGGER.info("Starting synchronizer over Reticulum");
-		//RNSSynchronizer.getInstance().start();
+		LOGGER.info("Starting synchronizer over Reticulum");
+		RNSSynchronizer.getInstance().start();
 
 		LOGGER.info("Starting block minter");
 		blockMinter = new BlockMinter();
@@ -743,6 +743,73 @@ public class Controller extends Thread {
 				}
 			}
 		}, 3*60*1000, 3*60*1000);
+		//Timer syncFromGenesisRNS = new Timer();
+		//syncFromGenesisRNS.schedule(new TimerTask() {
+		//	@Override
+		//	public void run() {
+		//		LOGGER.debug("Start sync from genesis check (RNS).");
+		//		boolean canBootstrap = Settings.getInstance().getBootstrap();
+		//		boolean needsArchiveRebuildRNS = false;
+		//		int checkHeightRNS = 0;
+		//
+		//		try (final Repository repository = RepositoryManager.getRepository()){
+		//			needsArchiveRebuildRNS = (repository.getBlockArchiveRepository().fromHeight(2) == null);
+		//			checkHeightRNS = repository.getBlockRepository().getBlockchainHeight();
+		//		} catch (DataException e) {
+		//			throw new RuntimeException(e);
+		//		}
+		//
+		//		if (canBootstrap || !needsArchiveRebuildRNS || checkHeightRNS > 3) {
+		//			LOGGER.debug("Bootstrapping is enabled or we have more than 2 blocks, cancel sync from genesis check.");
+		//			syncFromGenesisRNS.cancel();
+		//			return;
+		//		}
+		//
+		//		if (needsArchiveRebuildRNS && !canBootstrap) {
+		//			LOGGER.info("Start syncing from genesis (RNS)!");
+		//			List<RNSPeer> seeds = new ArrayList<>(RNSNetwork.getInstance().getActiveImmutableLinkedPeers());
+		//
+		//			// Check if have a qualified peer to sync
+		//			if (seeds.isEmpty()) {
+		//				LOGGER.info("No connected RNSPeer(s), will try again later.");
+		//				return;
+		//			}
+		//
+		//			int index = new SecureRandom().nextInt(seeds.size());
+		//			RNSPeer syncPeer = seeds.get(index);
+		//			var syncPeerLinkAsString = syncPeer.getPeerLink().toString();
+		//			//String syncNode = String.valueOf(seeds.get(index));
+		//			//PeerAddress peerAddress = PeerAddress.fromString(syncNode);
+		//			//InetSocketAddress resolvedAddress = null;
+		//			//
+		//			//try {
+		//			//	resolvedAddress = peerAddress.toSocketAddress();
+		//			//} catch (UnknownHostException e) {
+		//			//	throw new RuntimeException(e);
+		//			//}
+		//			//
+		//			//InetSocketAddress finalResolvedAddress = resolvedAddress;
+		//			//Peer targetPeer = seeds.stream().filter(peer -> peer.getResolvedAddress().equals(finalResolvedAddress)).findFirst().orElse(null);
+		//			//RNSPeer targetPeerRNS = seeds.stream().findFirst().orElse(null);
+		//			RNSPeer targetPeerRNS = seeds.stream().filter(peer -> peer.getPeerLink().toString().equals(syncPeerLinkAsString)).findFirst().orElse(null);
+		//			RNSSynchronizer.SynchronizationResult syncResultRNS;
+		//
+		//			try {
+		//				do {
+		//					try {
+		//						syncResultRNS = RNSSynchronizer.getInstance().actuallySynchronize(targetPeerRNS, true);
+		//					} catch (InterruptedException e) {
+		//						throw new RuntimeException(e);
+		//					}
+		//				}
+		//				while (syncResultRNS == RNSSynchronizer.SynchronizationResult.OK);
+		//			} finally {
+		//				// We are syncing now, so can cancel the check
+		//				syncFromGenesisRNS.cancel();
+		//			}
+		//		}
+		//	}
+		//}, 3*60*1000, 3*60*1000);
 	}
 
 	/** Called by AdvancedInstaller's launch EXE in single-instance mode, when an instance is already running. */
@@ -858,29 +925,29 @@ public class Controller extends Thread {
 					repositoryMaintenanceInterval = getRandomRepositoryMaintenanceInterval();
 				}
 
-				//// Prune stuck/slow/old peers
-				//if (now >= prunePeersTimestamp + prunePeersInterval) {
-				//	prunePeersTimestamp = now + prunePeersInterval;
-				//
-				//	try {
-				//		LOGGER.debug("Pruning peers...");
-				//		Network.getInstance().prunePeers();
-				//	} catch (DataException e) {
-				//		LOGGER.warn(String.format("Repository issue when trying to prune peers: %s", e.getMessage()));
-				//	}
-				//}
+				// Prune stuck/slow/old peers
+				if (now >= prunePeersTimestamp + prunePeersInterval) {
+					prunePeersTimestamp = now + prunePeersInterval;
 
-				//// Q: Do we need global pruning?
-				//if (now >= pruneRNSPeersTimestamp + pruneRNSPeersInterval) {
-				//	pruneRNSPeersTimestamp = now + pruneRNSPeersInterval;
-				//
-				//	try {
-				//		LOGGER.debug("Pruning Reticulum peers...");
-				//		RNSNetwork.getInstance().prunePeers();
-				//	} catch (DataException e) {
-				//		LOGGER.warn(String.format("Repository issue when trying to prune Reticulum peers: %s", e.getMessage()));
-				//	}
-				//}
+					try {
+						LOGGER.debug("Pruning peers...");
+						Network.getInstance().prunePeers();
+					} catch (DataException e) {
+						LOGGER.warn(String.format("Repository issue when trying to prune peers: %s", e.getMessage()));
+					}
+				}
+
+				// Q: Do we need global pruning?
+				if (now >= pruneRNSPeersTimestamp + pruneRNSPeersInterval) {
+					pruneRNSPeersTimestamp = now + pruneRNSPeersInterval;
+
+					try {
+						LOGGER.debug("Pruning Reticulum peers...");
+						RNSNetwork.getInstance().prunePeers();
+					} catch (DataException e) {
+						LOGGER.warn(String.format("Repository issue when trying to prune Reticulum peers: %s", e.getMessage()));
+					}
+				}
 
 				// Delete expired transactions
 				if (now >= deleteExpiredTimestamp) {
@@ -1171,6 +1238,7 @@ public class Controller extends Thread {
 
 				LOGGER.info("Shutting down synchronizer");
 				Synchronizer.getInstance().shutdown();
+				RNSSynchronizer.getInstance().shutdown();
 
 				LOGGER.info("Shutting down API");
 				ApiService.getInstance().stop();
@@ -2311,22 +2379,22 @@ public class Controller extends Thread {
 			//	OnlineAccountsManager.getInstance().onNetworkOnlineAccountsV3Message(peer, message);
 			//	break;
 			
-			//// TODO: Compiles but much of the Manager details need to be rethought for Reticulum
-			//case GET_ARBITRARY_DATA:
-			//	// Not currently supported
-			//	break;
-			////
-			//case ARBITRARY_DATA_FILE_LIST:
-			//	RNSArbitraryDataFileListManager.getInstance().onNetworkArbitraryDataFileListMessage(peer, message);
-			//	break;
-			//
-			//case GET_ARBITRARY_DATA_FILE:
-			//	RNSArbitraryDataFileManager.getInstance().onNetworkGetArbitraryDataFileMessage(peer, message);
-			//	break;
-			//
-			//case GET_ARBITRARY_DATA_FILE_LIST:
-			//	RNSArbitraryDataFileListManager.getInstance().onNetworkGetArbitraryDataFileListMessage(peer, message);
-			//	break;
+			// TODO: Compiles but rethink for Reticulum
+			case GET_ARBITRARY_DATA:
+				// Not currently supported
+				break;
+
+			case ARBITRARY_DATA_FILE_LIST:
+				RNSArbitraryDataFileListManager.getInstance().onNetworkArbitraryDataFileListMessage(peer, message);
+				break;
+
+			case GET_ARBITRARY_DATA_FILE:
+				RNSArbitraryDataFileManager.getInstance().onNetworkGetArbitraryDataFileMessage(peer, message);
+				break;
+
+			case GET_ARBITRARY_DATA_FILE_LIST:
+				RNSArbitraryDataFileListManager.getInstance().onNetworkGetArbitraryDataFileListMessage(peer, message);
+				break;
 			//
 			case ARBITRARY_SIGNATURES:
 				// Not currently supported
@@ -2665,7 +2733,7 @@ public class Controller extends Thread {
 		peer.setChainTipData(newChainTipData);
 
 		// Potentially synchronize
-		Synchronizer.getInstance().requestSync();
+		RNSSynchronizer.getInstance().requestSync();
 	}
 
 	private void onRNSNetworkBlockSummariesV2Message(RNSPeer peer, Message message) {
@@ -2696,7 +2764,7 @@ public class Controller extends Thread {
 		peer.setChainTipSummaries(blockSummariesV2Message.getBlockSummaries());
 
 		// Potentially synchronize
-		Synchronizer.getInstance().requestSync();
+		RNSSynchronizer.getInstance().requestSync();
 	}
 
 	// ************
@@ -2918,7 +2986,7 @@ public class Controller extends Thread {
 			return true;
 
 		// Needs a mutable copy of the unmodifiableList
-		List<RNSPeer> peers = new ArrayList<>(RNSNetwork.getInstance().getImmutableActiveLinkedPeers());
+		List<RNSPeer> peers = new ArrayList<>(RNSNetwork.getInstance().getActiveImmutableLinkedPeers());
 		if (peers == null)
 			return false;
 

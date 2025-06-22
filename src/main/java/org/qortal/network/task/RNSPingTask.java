@@ -35,8 +35,8 @@ public class RNSPingTask implements Task {
         // Note: Even though getResponse would work, we can use
         //       peer.sendMessage(pingMessage) using Reticulum buffer instead.
         //       More efficient and saves room for other request/response tasks.
-        //peer.getResponse(pingMessage);
-        peer.sendMessage(pingMessage);
+        peer.getResponse(pingMessage);
+        //peer.sendMessage(pingMessage);
 
         //// task is not over here (Reticulum is asynchronous)
         //peer.setLastPing(NTP.getTime() - now);
