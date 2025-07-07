@@ -65,7 +65,7 @@ public class ArbitraryDataFileRequestThread {
                     ThreadPoolExecutor threadPoolExecutor = (ThreadPoolExecutor) value;
                     if (threadPoolExecutor.getActiveCount() == 0) {
                         if (this.executorByPeer.computeIfPresent(key, (k, v) -> null) == null) {
-                            LOGGER.info("removed executor: peer = " + key);
+                            LOGGER.trace("removed executor: peer = " + key);
                         }
                     }
                 } else {
