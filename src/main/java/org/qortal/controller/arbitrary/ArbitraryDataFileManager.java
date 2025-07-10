@@ -410,15 +410,7 @@ public void queueFileSendToPeer(Peer peer, Message fileMessage) {
             // The ID needs to match that of the original request
             message.setId(originalMessage.getId());
 
-            // if (!requestingPeer.sendMessageWithTimeout(message, (int) ArbitraryDataManager.ARBITRARY_REQUEST_TIMEOUT)) {
-            //     LOGGER.info("Failed to forward arbitrary data file to peer {}", requestingPeer);
-            //     requestingPeer.disconnect("failed to forward arbitrary data file");
-            // }
-
-            // else {
-            //     LOGGER.info("Forwarded arbitrary data file to peer {}", requestingPeer);
-            // }
-                                        getOrCreateSendManager(requestingPeer).queueMessage(message);
+            getOrCreateSendManager(requestingPeer).queueMessage(message);
 
         } catch (Exception e) {
             LOGGER.error(e.getMessage(), e);
@@ -695,13 +687,7 @@ public void queueFileSendToPeer(Peer peer, Message fileMessage) {
                 LOGGER.debug("Sending file {}...", arbitraryDataFile);
                 ArbitraryDataFileMessage arbitraryDataFileMessage = new ArbitraryDataFileMessage(signature, arbitraryDataFile);
                 arbitraryDataFileMessage.setId(message.getId());
-                // if (!peer.sendMessageWithTimeout(arbitraryDataFileMessage, (int) ArbitraryDataManager.ARBITRARY_REQUEST_TIMEOUT)) {
-                //     LOGGER.info("Couldn't send file {}", arbitraryDataFile);
-                //     // peer.disconnect("failed to send file");
-                // }
-                // else {
-                //     LOGGER.debug("Sent file {}", arbitraryDataFile);
-                // }
+
                 getOrCreateSendManager(peer).queueMessage(arbitraryDataFileMessage);
 
             }
@@ -737,7 +723,6 @@ public void queueFileSendToPeer(Peer peer, Message fileMessage) {
                 fileUnknownMessage.setId(message.getId());
                 if (!peer.sendMessage(fileUnknownMessage)) {
                     LOGGER.debug("Couldn't sent file-unknown response");
-                    // peer.disconnect("failed to send file-unknown response");
                 }
                 else {
                     LOGGER.debug("Sent file-unknown response for file {}", arbitraryDataFile);

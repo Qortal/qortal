@@ -587,9 +587,7 @@ public class ArbitraryDataFileListManager {
 
                             // Forward to requesting peer
                             LOGGER.debug("Forwarding file list with {} hashes to requesting peer: {}", hashes.size(), requestingPeer);
-                            if (!requestingPeer.sendMessage(forwardArbitraryDataFileListMessage)) {
-                                // requestingPeer.disconnect("failed to forward arbitrary data file list");
-                            }
+                            requestingPeer.sendMessage(forwardArbitraryDataFileListMessage);
                         }
                     }
                 }
@@ -787,7 +785,6 @@ public class ArbitraryDataFileListManager {
 
                     if (!peer.sendMessage(arbitraryDataFileListMessage)) {
                         LOGGER.debug("Couldn't send list of hashes");
-                        // peer.disconnect("failed to send list of hashes");
                         continue;
                     }
 
