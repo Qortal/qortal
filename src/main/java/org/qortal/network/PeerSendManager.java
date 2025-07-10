@@ -13,6 +13,7 @@ import org.qortal.network.message.Message;
 
 public class PeerSendManager {
     private static final Logger LOGGER = LogManager.getLogger(PeerSendManager.class);
+    private volatile boolean coolingDown = false;
 
     private static final int MAX_RETRIES = 15;
     private static final int BASE_RETRY_DELAY_MS = 100;
@@ -75,8 +76,18 @@ private final ExecutorService executor = Executors.newSingleThreadExecutor(new T
                                 peer,
                                 MAX_RETRIES);
                         peer.disconnect("SendMessage retries exceeded");
+                         coolingDown = true;
                          queue.clear();
-                        break;
+                        
+                        try {
+                            Thread.sleep(30_000); // Give time for peer to possibly reconnect
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                        coolingDown = false;
+
+                        continue; // Loop again in case the peer reconnects
                     }
 
                     // Throttle after successful send
@@ -95,6 +106,10 @@ private final ExecutorService executor = Executors.newSingleThreadExecutor(new T
    private volatile long lastUsed = System.currentTimeMillis();
 
 public void queueMessage(Message message) {
+    if (coolingDown) {
+        LOGGER.debug("PeerSendManager in cooldown, ignoring message {}", message.getId());
+        return; // or block/wait if you prefer
+    }
     lastUsed = System.currentTimeMillis();
     this.queue.offer(message);
 }
