@@ -102,7 +102,7 @@ public void queueFileSendToPeer(Peer peer, Message fileMessage) {
                     LOGGER.debug("Cleaned up PeerSendManager for peer {}", peer);
                 }
             }
-        }, 0, 30, TimeUnit.MINUTES);
+        }, 0, 5, TimeUnit.MINUTES);
         
     }
 
