@@ -124,7 +124,7 @@ public class ArbitraryDataFileListManager {
         if (timeSinceLastAttempt > 15 * 1000L) {
             // We haven't tried for at least 15 seconds
 
-            if (networkBroadcastCount < 3) {
+            if (networkBroadcastCount < 12) {
                 // We've made less than 3 total attempts
                 return true;
             }
@@ -134,7 +134,7 @@ public class ArbitraryDataFileListManager {
         if (timeSinceLastAttempt > 60 * 1000L) {
             // We haven't tried for at least 1 minute
 
-            if (networkBroadcastCount < 8) {
+            if (networkBroadcastCount < 40) {
                 // We've made less than 8 total attempts
                 return true;
             }
@@ -402,8 +402,8 @@ public class ArbitraryDataFileListManager {
         return true;
     }
 
-    public void deleteFileListRequestsForSignature(byte[] signature) {
-        String signature58 = Base58.encode(signature);
+    public void deleteFileListRequestsForSignature(String signature58) {
+
         for (Iterator<Map.Entry<Integer, Triple<String, Peer, Long>>> it = arbitraryDataFileListRequests.entrySet().iterator(); it.hasNext();) {
             Map.Entry<Integer, Triple<String, Peer, Long>> entry = it.next();
             if (entry == null || entry.getKey() == null || entry.getValue() == null) {
@@ -588,7 +588,7 @@ public class ArbitraryDataFileListManager {
                             // Forward to requesting peer
                             LOGGER.debug("Forwarding file list with {} hashes to requesting peer: {}", hashes.size(), requestingPeer);
                             if (!requestingPeer.sendMessage(forwardArbitraryDataFileListMessage)) {
-                                requestingPeer.disconnect("failed to forward arbitrary data file list");
+                                // requestingPeer.disconnect("failed to forward arbitrary data file list");
                             }
                         }
                     }
@@ -787,7 +787,7 @@ public class ArbitraryDataFileListManager {
 
                     if (!peer.sendMessage(arbitraryDataFileListMessage)) {
                         LOGGER.debug("Couldn't send list of hashes");
-                        peer.disconnect("failed to send list of hashes");
+                        // peer.disconnect("failed to send list of hashes");
                         continue;
                     }
 

@@ -361,7 +361,7 @@ public class ArbitraryMetadataManager {
                         // Forward to requesting peer
                         LOGGER.debug("Forwarding metadata to requesting peer: {}", requestingPeer);
                         if (!requestingPeer.sendMessage(forwardArbitraryMetadataMessage)) {
-                            requestingPeer.disconnect("failed to forward arbitrary metadata");
+                            // requestingPeer.disconnect("failed to forward arbitrary metadata");
                         }
                     }
                 }
@@ -479,7 +479,7 @@ public class ArbitraryMetadataManager {
                                 arbitraryMetadataMessage.setId(message.getId());
                                 if (!peer.sendMessage(arbitraryMetadataMessage)) {
                                     LOGGER.debug("Couldn't send metadata");
-                                    peer.disconnect("failed to send metadata");
+                                    // peer.disconnect("failed to send metadata");
                                     continue;
                                 }
                                 LOGGER.debug("Sent metadata");

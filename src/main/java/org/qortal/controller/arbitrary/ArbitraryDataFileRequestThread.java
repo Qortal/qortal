@@ -15,6 +15,7 @@ import org.qortal.settings.Settings;
 import org.qortal.utils.ArbitraryTransactionUtils;
 import org.qortal.utils.Base58;
 import org.qortal.utils.NTP;
+import org.qortal.utils.NamedThreadFactory;
 
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
@@ -37,6 +38,9 @@ import static java.lang.Thread.NORM_PRIORITY;
 public class ArbitraryDataFileRequestThread {
 
     private static final Logger LOGGER = LogManager.getLogger(ArbitraryDataFileRequestThread.class);
+
+    private static final Integer FETCHER_LIMIT_PER_PEER = Settings.getInstance().getMaxThreadsForMessageType(MessageType.GET_ARBITRARY_DATA_FILE);
+    private static final String FETCHER_THREAD_PREFIX = "Arbitrary Data Fetcher ";
 
     private ConcurrentHashMap<String, ExecutorService> executorByPeer = new ConcurrentHashMap<>();
 
@@ -64,6 +68,7 @@ public class ArbitraryDataFileRequestThread {
                 if (value instanceof ThreadPoolExecutor) {
                     ThreadPoolExecutor threadPoolExecutor = (ThreadPoolExecutor) value;
                     if (threadPoolExecutor.getActiveCount() == 0) {
+                        threadPoolExecutor.shutdown();
                         if (this.executorByPeer.computeIfPresent(key, (k, v) -> null) == null) {
                             LOGGER.trace("removed executor: peer = " + key);
                         }
@@ -147,7 +152,9 @@ public class ArbitraryDataFileRequestThread {
                             .computeIfAbsent(
                                 responseInfo.getPeer().toString(),
                                 peer -> Executors.newFixedThreadPool(
-                                        Settings.getInstance().getMaxThreadsForMessageType(MessageType.GET_ARBITRARY_DATA_FILE))
+                                    FETCHER_LIMIT_PER_PEER,
+                                    new NamedThreadFactory(FETCHER_THREAD_PREFIX + responseInfo.getPeer().toString(), NORM_PRIORITY)
+                                )
                             )
                             .execute(fetcher);
                 }
