@@ -253,14 +253,12 @@ public class ArbitraryDataFileManager extends Thread {
                 arbitraryDataFile = peersArbitraryDataFileMessage.getArbitraryDataFile();
                 byte[] fileBytes = arbitraryDataFile.getBytes();
                 if (fileBytes == null || fileBytes.length == 0) {
-                    arbitraryDataFile.delete();
                     LOGGER.debug(String.format("Failed to read bytes for file hash %s", hash58));
                     return null;
                 }
 
                 byte[] actualHash = Crypto.digest(fileBytes);
                 if (!Arrays.equals(hash, actualHash)) {
-                    arbitraryDataFile.delete();
                     LOGGER.debug(String.format("Hash mismatch for chunk: expected %s but got %s",
                         hash58, Base58.encode(actualHash)));
                     return null; 
