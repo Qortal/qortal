@@ -267,11 +267,11 @@ public class ArbitraryDataFileManager extends Thread {
         
             } else {
                 LOGGER.debug(String.format("File hash %s already exists, so skipping the request", hash58));
-                arbitraryDataFile = existingFile;
+                arbitraryDataFile = null;
             }
 
             if (arbitraryDataFile != null) {
-
+           
                 arbitraryDataFile.save();
 
                 // If this is a metadata file then we need to update the cache
