@@ -21,6 +21,9 @@ import org.qortal.utils.BitTwiddling;
 
 import java.nio.ByteBuffer;
 import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class PirateChain extends Bitcoiny {
@@ -133,11 +136,16 @@ public class PirateChain extends Bitcoiny {
 
 	private final PirateChainNet pirateChainNet;
 
+	// Scheduled executor service to check connection to Pirate Chain server
+	private final ScheduledExecutorService pirateChainCheckScheduler = Executors.newScheduledThreadPool(1);
+
 	// Constructors and instance
 
 	private PirateChain(PirateChainNet pirateChainNet, BitcoinyBlockchainProvider blockchain, Context bitcoinjContext, String currencyCode) {
 		super(blockchain, bitcoinjContext, currencyCode, DEFAULT_FEE_PER_KB);
 		this.pirateChainNet = pirateChainNet;
+
+		pirateChainCheckScheduler.scheduleWithFixedDelay(this::establishConnection, 30, 300, TimeUnit.SECONDS);
 
 		LOGGER.info(() -> String.format("Starting Pirate Chain support using %s", this.pirateChainNet.name()));
 	}
@@ -273,8 +281,6 @@ public class PirateChain extends Bitcoiny {
 
 	public Long getWalletBalance(String entropy58) throws ForeignBlockchainException {
 
-		establishConnection();
-
 		synchronized (this) {
 			PirateChainWalletController walletController = PirateChainWalletController.getInstance();
 			walletController.initWithEntropy58(entropy58);
@@ -298,18 +304,24 @@ public class PirateChain extends Bitcoiny {
 	 *
 	 * Some methods in this class need to establish a connection before proceeding and this is the best way
 	 * to do it as far as I know.
-	 *
-	 * @throws ForeignBlockchainException
 	 */
-	private void establishConnection() throws ForeignBlockchainException {
-		int height = this.blockchainProvider.getCurrentHeight();
+	private void establishConnection() {
+		try {
 
-		LOGGER.info("Establish Pirate Chain Connection: height = " + height);
+			LOGGER.info("Checking Pirate Chain Connection ... ");
+
+			int height;
+			synchronized( this ) {
+				height = this.blockchainProvider.getCurrentHeight();
+			}
+
+			LOGGER.info("Checked Pirate Chain Connection: height = " + height);
+		} catch (ForeignBlockchainException e) {
+			LOGGER.error(e.getMessage(), e);
+		}
 	}
 
 	public List<SimpleTransaction> getWalletTransactions(String entropy58) throws ForeignBlockchainException {
-
-		establishConnection();
 
 		synchronized (this) {
 			PirateChainWalletController walletController = PirateChainWalletController.getInstance();
