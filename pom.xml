@@ -312,6 +312,7 @@
 				<configuration>
 					<groupId>org.hsqldb</groupId>
 					<artifactId>hsqldb</artifactId>
+					<classifier>custom</classifier>
 					<version>${hsqldb.version}</version>
 					<packaging>jar</packaging>
 				</configuration>
@@ -479,6 +480,7 @@
 		<dependency>
 			<groupId>org.hsqldb</groupId>
 			<artifactId>hsqldb</artifactId>
+			<classifier>custom</classifier>
 			<version>${hsqldb.version}</version>
 		</dependency>
 		<!-- CIYAM AT (automated transactions) -->
