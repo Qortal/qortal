@@ -420,7 +420,7 @@ public class CrossChainBitcoinResource {
 			}
 
 	)
-	@ApiErrors({ApiError.INVALID_DATA})
+	@ApiErrors({ApiError.INVALID_DATA, ApiError.UNAUTHORIZED})
 	@SecurityRequirement(name = "apiKey")
 	public ServerConnectionInfo setCurrentServer(@HeaderParam(Security.API_KEY_HEADER) String apiKey, ServerInfo serverInfo) {
 		Security.checkApiCallAllowed(request);
@@ -428,7 +428,14 @@ public class CrossChainBitcoinResource {
 		if( serverInfo.getConnectionType() == null ||
 				serverInfo.getHostName() == null) throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_DATA);
 		try {
-			return CrossChainUtils.setCurrentServer( Bitcoin.getInstance(), serverInfo );
+			ServerConnectionInfo serverConnectionInfo = CrossChainUtils.setCurrentServer(Bitcoin.getInstance(), serverInfo);
+
+			if( serverConnectionInfo != null ) {
+				return serverConnectionInfo;
+			}
+			else {
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.UNAUTHORIZED);
+			}
 		}
 		catch (IllegalArgumentException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_DATA);

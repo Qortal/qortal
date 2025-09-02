@@ -10,19 +10,22 @@ import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
 import org.qortal.api.resource.CrossChainUtils;
 import org.qortal.crypto.Crypto;
-import org.qortal.crypto.TrustlessSSLSocketFactory;
 import org.qortal.utils.BitTwiddling;
 
-import javax.net.ssl.SSLSocketFactory;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.net.SocketAddress;
 import java.text.DecimalFormat;
 import java.util.*;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /** ElectrumX network support for querying Bitcoiny-related info like block headers, transaction outputs, etc. */
 public class ElectrumX extends BitcoinyBlockchainProvider {
@@ -48,8 +51,13 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	private static final long MAX_AVG_RESPONSE_TIME = 2000L; // ms
 	public static final String MISSING_FEATURES_ERROR = "MISSING FEATURES ERROR";
 	public static final String EXPECTED_GENESIS_ERROR = "EXPECTED GENESIS ERROR";
+	public static final int MINIMUM_CONNECTIONS = 30;
+	public static final int MAXIMUM_CONNECTIONS = 50;
 
 	private ChainableServerConnectionRecorder recorder = new ChainableServerConnectionRecorder(100);
+
+	// the minimum number of connections targeted for this foreign blockchain
+	private int minimumConnections;
 
 	public static class Server implements ChainableServer {
 		String hostname;
@@ -126,20 +134,17 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 			return String.format("%s:%s:%d", this.connectionType.name(), this.hostname, this.port);
 		}
 	}
-	private Set<ChainableServer> servers = new HashSet<>();
-	private List<ChainableServer> remainingServers = new ArrayList<>();
+	private Set<ChainableServer> servers = Collections.synchronizedSet(new HashSet<>());
+	private List<ChainableServer> remainingServers = new ArrayList<>(); // this is only accessed in the scheduling thread, so it is not thread safe
 	private Set<ChainableServer> uselessServers = Collections.synchronizedSet(new HashSet<>());
+
+	private Set<ElectrumServer> connections = Collections.synchronizedSet(new HashSet<>());
+	private BlockingQueue<ElectrumServer> availableConnections = new LinkedBlockingQueue<>();
 
 	private final String netId;
 	private final String expectedGenesisHash;
 	private final Map<Server.ConnectionType, Integer> defaultPorts = new EnumMap<>(Server.ConnectionType.class);
 	private Bitcoiny blockchain;
-
-	private final Object serverLock = new Object();
-	private ChainableServer currentServer;
-	private Socket socket;
-	private Scanner scanner;
-	private int nextId = 1;
 
 	private static final int TX_CACHE_SIZE = 1000;
 
@@ -151,6 +156,15 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		}
 	});
 
+	// Scheduled executor service to make connections
+	private final ScheduledExecutorService scheduleMakeConnections = Executors.newScheduledThreadPool(1);
+
+	// Scheduled executor service to recover connections
+	private final ScheduledExecutorService scheduleRecoverConnections = Executors.newScheduledThreadPool(1);
+
+	// Scheduled executor service to monitor connections
+	private final ScheduledExecutorService scheduleMonitorConnections = Executors.newScheduledThreadPool(1);
+
 	// Constructors
 
 	public ElectrumX(String netId, String genesisHash, Collection<Server> initialServerList, Map<Server.ConnectionType, Integer> defaultPorts) {
@@ -158,6 +172,13 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		this.expectedGenesisHash = genesisHash;
 		this.servers.addAll(initialServerList);
 		this.defaultPorts.putAll(defaultPorts);
+
+		// the minimum is set to roughly 10% of the initial count
+		this.minimumConnections = (initialServerList.size() / 10) + 1;
+
+		scheduleMakeConnections.scheduleWithFixedDelay(this::makeConnections, 1, 3600, TimeUnit.SECONDS);
+		scheduleRecoverConnections.scheduleWithFixedDelay(this::recoverConnections, 120, 10, TimeUnit.SECONDS);
+		scheduleMonitorConnections.scheduleWithFixedDelay(this::monitorConnections, 1, 10, TimeUnit.MINUTES);
 	}
 
 	// Methods for use by other classes
@@ -179,7 +200,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	 */
 	@Override
 	public int getCurrentHeight() throws ForeignBlockchainException {
-		Object blockObj = this.rpc("blockchain.headers.subscribe");
+		Object blockObj = this.rpc("blockchain.headers.subscribe").getResponse();
 		if (!(blockObj instanceof JSONObject))
 			throw new ForeignBlockchainException.NetworkException("Unexpected output from ElectrumX blockchain.headers.subscribe RPC");
 
@@ -210,7 +231,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	 */
 	@Override
 	public List<byte[]> getRawBlockHeaders(int startHeight, int count) throws ForeignBlockchainException {
-		Object blockObj = this.rpc("blockchain.block.headers", startHeight, count);
+		Object blockObj = this.rpc("blockchain.block.headers", startHeight, count).getResponse();
 		if (!(blockObj instanceof JSONObject))
 			throw new ForeignBlockchainException.NetworkException("Unexpected output from ElectrumX blockchain.block.headers RPC");
 
@@ -286,7 +307,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		byte[] scriptHash = Crypto.digest(script);
 		Bytes.reverse(scriptHash);
 
-		Object balanceObj = this.rpc("blockchain.scripthash.get_balance", HashCode.fromBytes(scriptHash).toString());
+		Object balanceObj = this.rpc("blockchain.scripthash.get_balance", HashCode.fromBytes(scriptHash).toString()).getResponse();
 		if (!(balanceObj instanceof JSONObject))
 			throw new ForeignBlockchainException.NetworkException("Unexpected output from ElectrumX blockchain.scripthash.get_balance RPC");
 
@@ -334,7 +355,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		byte[] scriptHash = Crypto.digest(script);
 		Bytes.reverse(scriptHash);
 
-		Object unspentJson = this.rpc("blockchain.scripthash.listunspent", HashCode.fromBytes(scriptHash).toString());
+		Object unspentJson = this.rpc("blockchain.scripthash.listunspent", HashCode.fromBytes(scriptHash).toString()).getResponse();
 		if (!(unspentJson instanceof JSONArray))
 			throw new ForeignBlockchainException("Expected array output from ElectrumX blockchain.scripthash.listunspent RPC");
 
@@ -369,7 +390,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	public byte[] getRawTransaction(String txHash) throws ForeignBlockchainException {
 		Object rawTransactionHex;
 		try {
-			rawTransactionHex = this.rpc("blockchain.transaction.get", txHash, false);
+			rawTransactionHex = this.rpc("blockchain.transaction.get", txHash, false).getResponse();
 		} catch (ForeignBlockchainException.NetworkException e) {
 			// DaemonError({'code': -5, 'message': 'No such mempool or blockchain transaction. Use gettransaction for wallet transactions.'})
 			if (Integer.valueOf(-5).equals(e.getDaemonErrorCode()))
@@ -411,25 +432,16 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 			return transaction;
 
 		Object transactionObj = null;
+		ElectrumServerResponse serverResponse = null;
 
 		do {
 			try {
-				transactionObj = this.rpc("blockchain.transaction.get", txHash, true);
+				serverResponse = this.rpc("blockchain.transaction.get", txHash, true);
+				transactionObj = serverResponse.getResponse();
 			} catch (ForeignBlockchainException.NetworkException e) {
 				// DaemonError({'code': -5, 'message': 'No such mempool or blockchain transaction. Use gettransaction for wallet transactions.'})
 				if (Integer.valueOf(-5).equals(e.getDaemonErrorCode()))
 					throw new ForeignBlockchainException.NotFoundException(e.getMessage());
-
-				// Some servers also return non-standard responses like this:
-				// {"error":"verbose transactions are currently unsupported","id":3,"jsonrpc":"2.0"}
-				// We should probably not use this server any more
-				if (e.getServer() != null && e.getMessage() != null && e.getMessage().contains(VERBOSE_TRANSACTIONS_UNSUPPORTED_MESSAGE)) {
-					Server uselessServer = (Server) e.getServer();
-					LOGGER.trace(() -> String.format("Server %s doesn't support verbose transactions - barring use of that server", uselessServer));
-					this.uselessServers.add(uselessServer);
-					this.closeServer(uselessServer, this.getClass().getSimpleName(), CrossChainUtils.getNotes(e));
-					continue;
-				}
 
 				throw e;
 			}
@@ -502,11 +514,9 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 				// The code below can remain in place, just in case a peer returns a missing address in the future
 				if (addresses == null || addresses.isEmpty()) {
 					final String message = String.format("No output addresses returned for transaction %s", txHash);
-					if (this.currentServer != null) {
-						this.uselessServers.add(this.currentServer);
-						this.closeServer(this.currentServer, this.getClass().getSimpleName(), message);
-					}
-					LOGGER.info("No output addresses returned for transaction {}", txHash);
+					LOGGER.warn("{}: No output addresses returned for transaction {}", this.blockchain.getCurrencyCode(), txHash);
+
+					uselessServers.add(serverResponse.getElectrumServer().getServer());
 					throw new ForeignBlockchainException(message);
 				}
 
@@ -515,15 +525,19 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 			transaction = new BitcoinyTransaction(txHash, size, locktime, timestamp, inputs, outputs);
 
-			// Save into cache
-			transactionCache.put(txHash, transaction);
+			// Save into cache, if and only if it has been confirmed
+			if( transaction.timestamp != null ) {
+				transactionCache.put(txHash, transaction);
+			}
 
 			return transaction;
 		} catch (NullPointerException | ClassCastException e) {
 			// Unexpected / invalid response from ElectrumX server
 		}
 
-		throw new ForeignBlockchainException.NetworkException("Unexpected JSON format from ElectrumX blockchain.transaction.get RPC");
+		this.connections.remove(serverResponse.getElectrumServer());
+		serverResponse.getElectrumServer().closeServer(this.getClass().getSimpleName(), "Unexpected JSON format from ElectrumX blockchain.transaction.get RPC");
+		return getTransaction(txHash);
 	}
 
 	/**
@@ -537,7 +551,8 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		byte[] scriptHash = Crypto.digest(script);
 		Bytes.reverse(scriptHash);
 
-		Object transactionsJson = this.rpc("blockchain.scripthash.get_history", HashCode.fromBytes(scriptHash).toString());
+		ElectrumServerResponse serverResponse = this.rpc("blockchain.scripthash.get_history", HashCode.fromBytes(scriptHash).toString());
+		Object transactionsJson = serverResponse.getResponse();
 		if (!(transactionsJson instanceof JSONArray))
 			throw new ForeignBlockchainException.NetworkException("Expected array output from ElectrumX blockchain.scripthash.get_history RPC");
 
@@ -572,7 +587,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	 */
 	@Override
 	public void broadcastTransaction(byte[] transactionBytes) throws ForeignBlockchainException {
-		Object rawBroadcastResult = this.rpc("blockchain.transaction.broadcast", HashCode.fromBytes(transactionBytes).toString());
+		Object rawBroadcastResult = this.rpc("blockchain.transaction.broadcast", HashCode.fromBytes(transactionBytes).toString()).getResponse();
 
 		// We're expecting a simple string that is the transaction hash
 		if (!(rawBroadcastResult instanceof String))
@@ -587,60 +602,142 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	 * @throws ForeignBlockchainException
 	 * @throws ClassCastException to be handled by caller
 	 */
-	private Set<Server> serverPeersSubscribe() throws ForeignBlockchainException {
+	private Set<Server> serverPeersSubscribe() {
 		Set<Server> newServers = new HashSet<>();
 
-		Object peers = this.connectedRpc("server.peers.subscribe");
+		List<ElectrumServer> electrumServers = acquireServers();
 
-		for (Object rawPeer : (JSONArray) Objects.requireNonNull(peers)) {
-			JSONArray peer = (JSONArray) rawPeer;
-			if (peer.size() < 3)
-				// We're expecting at least 3 fields for each peer entry: IP, hostname, features
-				continue;
+		try {
+			for( ElectrumServer electrumServer : electrumServers ) {
+				Object peers = this.connectedRpc(electrumServer, "server.peers.subscribe");
 
-			String hostname = (String) peer.get(1);
-			JSONArray features = (JSONArray) peer.get(2);
+				if( peers == null ) continue;
 
-			for (Object rawFeature : features) {
-				String feature = (String) rawFeature;
-				Server.ConnectionType connectionType = null;
-				Integer port = null;
+				Object peersObject = Objects.requireNonNull(peers);
 
-				switch (feature.charAt(0)) {
-					case 's':
-						connectionType = Server.ConnectionType.SSL;
-						port = this.defaultPorts.get(connectionType);
-						break;
+				if( !(peersObject instanceof JSONArray) ) continue;
 
-					case 't':
-						connectionType = Server.ConnectionType.TCP;
-						port = this.defaultPorts.get(connectionType);
-						break;
+				for (Object rawPeer : (JSONArray) peersObject) {
 
-					default:
-						// e.g. could be 'v' for protocol version, or 'p' for pruning limit
-						break;
-				}
+					JSONArray peer = (JSONArray) rawPeer;
+					if (peer.size() < 3)
+						// We're expecting at least 3 fields for each peer entry: IP, hostname, features
+						continue;
 
-				if (connectionType == null || port == null)
-					// We couldn't extract any peer connection info?
-					continue;
+					String hostname = (String) peer.get(1);
+					JSONArray features = (JSONArray) peer.get(2);
 
-				// Possible non-default port?
-				if (feature.length() > 1)
-					try {
-						port = Integer.parseInt(feature.substring(1));
-					} catch (NumberFormatException e) {
-						// no good
-						continue; // for-loop above
+					for (Object rawFeature : features) {
+						String feature = (String) rawFeature;
+						Server.ConnectionType connectionType = null;
+						Integer port = null;
+
+						switch (feature.charAt(0)) {
+							case 's':
+								connectionType = Server.ConnectionType.SSL;
+								port = this.defaultPorts.get(connectionType);
+								break;
+
+							case 't':
+								connectionType = Server.ConnectionType.TCP;
+								port = this.defaultPorts.get(connectionType);
+								break;
+
+							default:
+								// e.g. could be 'v' for protocol version, or 'p' for pruning limit
+								break;
+						}
+
+						if (connectionType == null || port == null)
+							// We couldn't extract any peer aainfo?
+							continue;
+
+						// Possible non-default port?
+						if (feature.length() > 1)
+							try {
+								port = Integer.parseInt(feature.substring(1));
+							} catch (NumberFormatException e) {
+								// no good
+								continue; // for-loop above
+							}
+
+						Server newServer = new Server(hostname, connectionType, port);
+						newServers.add(newServer);
 					}
-
-				Server newServer = new Server(hostname, connectionType, port);
-				newServers.add(newServer);
+				}
+			}
+		} catch (Exception e) {
+			LOGGER.error(e.getMessage(), e);
+		} finally {
+			for( ElectrumServer server : electrumServers ) {
+				releaseServer(server);
 			}
 		}
 
 		return newServers;
+	}
+
+	private ElectrumServer acquireServer() throws ForeignBlockchainException {
+
+		try {
+			return this.availableConnections.take();
+		}
+		catch( InterruptedException e ) {
+			throw new ForeignBlockchainException(e.getMessage());
+		}
+	}
+
+	private List<ElectrumServer> acquireServers() {
+
+		List<ElectrumServer> servers = drainRandomly(this.availableConnections, this.availableConnections.size() / 2);
+
+		LOGGER.info("{} draining count {}", this.blockchain.currencyCode, servers.size());
+		return servers;
+	}
+
+	public static <T> List<T> drainRandomly(BlockingQueue<T> queue, int numToDrain) {
+		List<T> drainedList = new ArrayList<>();
+		Random random = new Random();
+		int queueSize = queue.size();
+
+		// Ensure we don't try to drain more objects than are in the queue
+		numToDrain = Math.min(numToDrain, queueSize);
+
+		// Create a list to hold the indices of objects to drain
+		List<Integer> indicesToDrain = new ArrayList<>();
+		while (indicesToDrain.size() < numToDrain) {
+			int index = random.nextInt(queueSize);
+			if (!indicesToDrain.contains(index)) {
+				indicesToDrain.add(index);
+			}
+		}
+
+		// Drain the selected objects from the queue
+		for (int index : indicesToDrain) {
+			for (int i = 0; i <= index; i++) {
+				T obj;
+				try {
+					obj = queue.take();
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new RuntimeException("Interrupted while taking from queue", e);
+				}
+				if (i == index) {
+					drainedList.add(obj);
+				} else {
+					queue.add(obj);
+				}
+			}
+		}
+
+		return drainedList;
+	}
+
+	private void releaseServer( ElectrumServer server ) {
+
+		// if the connection is still open
+		if( this.connections.contains(server))
+			this.availableConnections.add(server);
 	}
 
 	/**
@@ -651,77 +748,160 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	 * @return "result" object from within JSON output
 	 * @throws ForeignBlockchainException if server returns error or something goes wrong
 	 */
-	private Object rpc(String method, Object...params) throws ForeignBlockchainException {
-		synchronized (this.serverLock) {
-			if (this.remainingServers.isEmpty())
-				this.remainingServers.addAll(this.servers);
+	private ElectrumServerResponse rpc(String method, Object...params) throws ForeignBlockchainException {
 
-			while (haveConnection()) {
-				Object response = connectedRpc(method, params);
+			ElectrumServer electrumServer = acquireServer();
+
+			Object response = null;
+
+			while(response == null) {
+
+				response = connectedRpc(electrumServer, method, params);
 
 				// If we have more servers and this one replied slowly, try another
-				if (!this.remainingServers.isEmpty()) {
-					long averageResponseTime = this.currentServer.averageResponseTime();
+				if (!this.availableConnections.isEmpty()) {
+					long averageResponseTime = electrumServer.averageResponseTime();
 					if (averageResponseTime > MAX_AVG_RESPONSE_TIME) {
-						String message = String.format("Slow average response time %dms from %s - trying another server...", averageResponseTime, this.currentServer.getHostName());
+						String message = String.format("Slow average response time %dms from %s - trying another server...", averageResponseTime, electrumServer.getServer());
 						LOGGER.info(message);
-						this.closeServer(this.getClass().getSimpleName(), message);
+						electrumServer.closeServer(this.getClass().getSimpleName(), message);
 						break;
 					}
 				}
 
-				if (response != null)
-					return response;
+				if (response != null) {
+					releaseServer(electrumServer);
+					return new ElectrumServerResponse(electrumServer, response);
+				}
 
 				LOGGER.info(NULL_RESPONSE_FROM_ELECTRUM_X_SERVER);
+
 				// Didn't work, try another server...
-				this.closeServer(this.getClass().getSimpleName(), NULL_RESPONSE_FROM_ELECTRUM_X_SERVER);
+				this.connections.remove(electrumServer);
+				electrumServer.closeServer(this.getClass().getSimpleName(), NULL_RESPONSE_FROM_ELECTRUM_X_SERVER);
+				electrumServer = acquireServer();
 			}
 
 			// Failed to perform RPC - maybe lack of servers?
 			LOGGER.info("Error: No connected Electrum servers when trying to make RPC call");
 			throw new ForeignBlockchainException.NetworkException(String.format("Failed to perform ElectrumX RPC %s", method));
+	}
+
+	/**
+	 * Monitor Connections
+	 *
+	 * Log the server connection status for this foreign blockchain.
+	 */
+	private void monitorConnections() {
+
+		LOGGER.info(
+			"{} {} available connections, {} total servers, {} total connections, {} useless servers",
+			this.blockchain.getCurrencyCode(),
+			this.availableConnections.size(),
+			this.servers.size(),
+			this.connections.size(),
+			this.uselessServers.size()
+		);
+	}
+
+	/**
+	 * Make connections
+	 *
+	 * Connect to many servers on this foreign blockchain.
+	 */
+	private void makeConnections() {
+
+		try {
+			if( this.connections.isEmpty() ) {
+				startMakingConnections();
+			}
+
+			makeMoreConnections();
+		} catch (Exception e) {
+			LOGGER.error(e.getMessage(), e);
 		}
 	}
 
-	/** Returns true if we have, or create, a connection to an ElectrumX server. */
-	private boolean haveConnection() throws ForeignBlockchainException {
-		if (this.currentServer != null)
-			return true;
+	/**
+	 * Recover Connections
+	 *
+	 * If connection count is below the minimum, then recover connections from the initial list.
+	 */
+	private void recoverConnections() {
 
-		while (!this.remainingServers.isEmpty()) {
-			ChainableServer server = this.remainingServers.remove(RANDOM.nextInt(this.remainingServers.size()));
-			Optional<ChainableServerConnection> chainableServerConnection = makeConnection(server, this.getClass().getSimpleName());
-			if(chainableServerConnection.isPresent() && chainableServerConnection.get().isSuccess() ) return true;
+		try {
+			if( this.connections.size() < this.minimumConnections ) {
+				LOGGER.info("{} recovering connections", this.blockchain.currencyCode);
+				startMakingConnections();
+				LOGGER.info("{} recovered {} connections", this.blockchain.currencyCode, this.connections.size());
+			}
+		} catch (Exception e) {
+			LOGGER.error(e.getMessage(), e);
 		}
+	}
 
-		return false;
+	/**
+	 * Start Making Connections
+	 */
+	private void startMakingConnections() {
+
+		// assume there are no server to get peers from, so we must start from the base list
+		this.remainingServers.clear();
+		this.remainingServers.addAll(this.servers);
+
+		connectRemainingServers();
+	}
+
+	/**
+	 * Make More Connections
+	 *
+	 * Assuming initial connections have been made, continue to make more.
+	 */
+	private void makeMoreConnections() {
+
+		// if we need more connections
+		if(this.connections.size() < MINIMUM_CONNECTIONS) {
+
+			// Ask for more servers
+			Set<Server> moreServers = serverPeersSubscribe();
+
+			// Add all servers to base list
+			this.servers.addAll(moreServers);
+
+			// add base list to remaining list
+			this.remainingServers.addAll(this.servers);
+
+			// remove servers that this node is already connected to
+			this.remainingServers.removeAll(this.connections.stream().map(ElectrumServer::getServer).collect(Collectors.toList()));
+
+			// try connecting the remaining servers
+			connectRemainingServers();
+		}
+	}
+
+	private void connectRemainingServers() {
+		// while there are remaining servers and less than the maximum connections
+		while( !this.remainingServers.isEmpty() && this.connections.size() < MAXIMUM_CONNECTIONS ) {
+			ChainableServer server = this.remainingServers.remove(RANDOM.nextInt(this.remainingServers.size()));
+
+			makeConnection(server, this.getClass().getSimpleName());
+		}
 	}
 
 	private Optional<ChainableServerConnection> makeConnection(ChainableServer server, String requestedBy) {
-		LOGGER.info(() -> String.format("Connecting to %s", server));
+		LOGGER.info(() -> String.format("Connecting to %s %s", server, this.blockchain.currencyCode));
 
 		try {
 			SocketAddress endpoint = new InetSocketAddress(server.getHostName(), server.getPort());
 			int timeout = 5000; // ms
 
-			this.socket = new Socket();
-			this.socket.connect(endpoint, timeout);
-			this.socket.setTcpNoDelay(true);
-
-			if (server.getConnectionType() == Server.ConnectionType.SSL) {
-				SSLSocketFactory factory = TrustlessSSLSocketFactory.getSocketFactory();
-				this.socket = factory.createSocket(this.socket, server.getHostName(), server.getPort(), true);
-			}
-
-			this.scanner = new Scanner(this.socket.getInputStream());
-			this.scanner.useDelimiter("\n");
+			ElectrumServer electrumServer = ElectrumServer.createInstance(server, endpoint, timeout, this.recorder);
 
 			// All connections need to start with a version negotiation
-			this.connectedRpc("server.version");
+			this.connectedRpc(electrumServer, "server.version");
 
 			// Check connection is suitable by asking for server features, including genesis block hash
-			JSONObject featuresJson = (JSONObject) this.connectedRpc("server.features");
+			JSONObject featuresJson = (JSONObject) this.connectedRpc(electrumServer, "server.features");
 
 			if (featuresJson == null )
 				return Optional.of( recorder.recordConnection(server, requestedBy, true,  false, MISSING_FEATURES_ERROR) );
@@ -740,22 +920,16 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 			if (this.expectedGenesisHash != null && !((String) featuresJson.get("genesis_hash")).equals(this.expectedGenesisHash))
 				return Optional.of( recorder.recordConnection(server, requestedBy, true, false, EXPECTED_GENESIS_ERROR) );
 
-			// Ask for more servers
-			Set<Server> moreServers = serverPeersSubscribe();
-
-			// Discard duplicate servers we already know
-			moreServers.removeAll(this.servers);
-
-			// Add all servers to both lists
-			this.remainingServers.addAll(moreServers);
-			this.servers.addAll(moreServers);
-
-			LOGGER.info(() -> String.format("Connected to %s", server));
-			this.currentServer = server;
+			LOGGER.info(() -> String.format("Connected to %s %s", server, this.blockchain.currencyCode));
+			this.connections.add(electrumServer);
+			this.availableConnections.add(electrumServer);
 			return Optional.of( this.recorder.recordConnection( server, requestedBy, true, true, EMPTY) );
 		} catch (IOException | ForeignBlockchainException | ClassCastException | NullPointerException e) {
 			// Didn't work, try another server...
 			return Optional.of( this.recorder.recordConnection( server, requestedBy, true, false, CrossChainUtils.getNotes(e)));
+		} catch( Exception e ) {
+			LOGGER.error(e.getMessage(), e);
+			return Optional.empty();
 		}
 	}
 
@@ -768,9 +942,10 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	 * @throws ForeignBlockchainException if server returns error
 	 */
 	@SuppressWarnings("unchecked")
-	private Object connectedRpc(String method, Object...params) throws ForeignBlockchainException {
+	private Object connectedRpc(ElectrumServer server, String method, Object...params) throws ForeignBlockchainException {
 		JSONObject requestJson = new JSONObject();
-		requestJson.put("id", this.nextId++);
+		String id = UUID.randomUUID().toString();
+		requestJson.put("id", id);
 		requestJson.put("method", method);
 		requestJson.put("jsonrpc", "2.0");
 
@@ -796,8 +971,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		final String response;
 
 		try {
-			this.socket.getOutputStream().write(request.getBytes());
-			response = scanner.next();
+			response = server.write(request.getBytes(), id);
 		} catch (IOException | NoSuchElementException e) {
 			// Unable to send, or receive -- try another server?
 			return null;
@@ -810,7 +984,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		long endTime = System.currentTimeMillis();
 		long responseTime = endTime-startTime;
 
-		LOGGER.trace(() -> String.format("Response: %s", response));
+		LOGGER.trace(() -> String.format("Request: %s Response: %s", request, response));
 		LOGGER.trace(() -> String.format("Time taken: %dms", endTime-startTime));
 
 		if (response.isEmpty())
@@ -822,23 +996,20 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 			// Unexpected response - try another server?
 			return null;
 
-		// Keep track of response times
-		if (this.currentServer != null) {
-			this.currentServer.addResponseTime(responseTime);
-		}
+		server.addResponseTime(responseTime);
 
 		JSONObject responseJson = (JSONObject) responseObj;
 
 		Object errorObj = responseJson.get("error");
 		if (errorObj != null) {
 			if (errorObj instanceof String) {
-				LOGGER.debug(String.format("Unexpected error message from ElectrumX server %s for RPC method %s: %s", this.currentServer, method, (String) errorObj));
+				LOGGER.debug(String.format("Unexpected error message from ElectrumX server %s for RPC method %s: %s", server.getServer(), method, (String) errorObj));
 				// Try another server
 				return null;
 			}
 
 			if (!(errorObj instanceof JSONObject)) {
-				LOGGER.debug(String.format("Unexpected error response from ElectrumX server %s for RPC method %s", this.currentServer, method));
+				LOGGER.debug(String.format("Unexpected error response from ElectrumX server %s for RPC method %s", server.getServer(), method));
 				// Try another server
 				return null;
 			}
@@ -848,7 +1019,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 			Object messageObj = errorJson.get("message");
 
 			if (!(messageObj instanceof String)) {
-				LOGGER.debug(String.format("Missing/invalid message in error response from ElectrumX server %s for RPC method %s", this.currentServer, method));
+				LOGGER.debug(String.format("Missing/invalid message in error response from ElectrumX server %s for RPC method %s", server.getServer(), method));
 				// Try another server
 				return null;
 			}
@@ -862,74 +1033,30 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 			if (messageMatcher.find())
 				try {
 					int daemonErrorCode = Integer.parseInt(messageMatcher.group(1));
-					throw new ForeignBlockchainException.NetworkException(daemonErrorCode, message, this.currentServer);
+					throw new ForeignBlockchainException.NetworkException(daemonErrorCode, message, server.getServer());
 				} catch (NumberFormatException e) {
 					// We couldn't parse the error code integer? Fall-through to generic exception...
 				}
 
-			throw new ForeignBlockchainException.NetworkException(message, this.currentServer);
+			throw new ForeignBlockchainException.NetworkException(message, server.getServer());
 		}
 
 		return responseJson.get("result");
 	}
 
-	/**
-	 * Closes connection to <tt>server</tt> if it is currently connected server.
-	 *
-	 * @param server
-	 * @param notes
-	 */
-	private Optional<ChainableServerConnection> closeServer(ChainableServer server, String requestedBy, String notes) {
-
-		ChainableServerConnection chainableServerConnection;
-
-		synchronized (this.serverLock) {
-			if (this.currentServer == null || !this.currentServer.equals(server))
-				return Optional.empty();
-
-			chainableServerConnection = this.recorder.recordConnection(server, requestedBy, false, true, notes);
-
-			if (this.socket != null && !this.socket.isClosed())
-				try {
-					this.socket.close();
-				} catch (IOException e) {
-					// We did try...
-				}
-
-			this.socket = null;
-			this.scanner = null;
-			this.currentServer = null;
-		}
-
-		return Optional.of( chainableServerConnection );
-	}
-
-	/** Closes connection to currently connected server (if any). */
-	private Optional<ChainableServerConnection> closeServer(String requestedBy, String notes) {
-		synchronized (this.serverLock) {
-			return this.closeServer(this.currentServer, requestedBy, notes);
-		}
-	}
-
 	@Override
 	public Set<ChainableServer> getServers() {
-		LOGGER.info("getting servers");
-		return servers;
-	}
-
-	@Override
-	public List<ChainableServer> getRemainingServers() {
-		return remainingServers;
+		return new HashSet<>(this.servers );
 	}
 
 	@Override
 	public Set<ChainableServer> getUselessServers() {
-		return uselessServers;
+		return new HashSet<>(this.uselessServers);
 	}
 
 	@Override
 	public ChainableServer getCurrentServer() {
-		return currentServer;
+		return null;
 	}
 
 	@Override
@@ -939,15 +1066,15 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 	@Override
 	public boolean removeServer(ChainableServer server) {
-		boolean removedServer = this.servers.remove(server);
-		boolean removedRemaining = this.remainingServers.remove(server);
+		boolean removedRemaining = this.servers.remove(server);
 
-		return removedServer || removedRemaining;
+		return removedRemaining;
 	}
 
 	@Override
 	public Optional<ChainableServerConnection> setCurrentServer(ChainableServer server, String requestedBy) {
-		return this.makeConnection(server, requestedBy);
+		// this class makes its own connections
+		return Optional.empty();
 	}
 
 	@Override

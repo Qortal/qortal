@@ -21,7 +21,14 @@ import org.qortal.utils.Amounts;
 import org.qortal.utils.BitTwiddling;
 import org.qortal.utils.NTP;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /** Bitcoin-like (Bitcoin, Litecoin, etc.) support */
@@ -217,16 +224,149 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 	 */
 	// TODO: don't return bitcoinj-based objects like TransactionOutput, use BitcoinyTransaction.Output instead
 	public List<TransactionOutput> getUnspentOutputs(String base58Address, boolean includeUnconfirmed) throws ForeignBlockchainException {
+
+		ExecutorService executor = Executors.newFixedThreadPool(5);
+
+		List<TransactionOutput> outputs = getUnspentOutputsWithExecutor(base58Address, includeUnconfirmed, executor);
+
+		// Shutdown the executor and wait for all tasks to complete
+		executor.shutdown();
+		try {
+			if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+				executor.shutdownNow();
+			}
+		} catch (InterruptedException ex) {
+			executor.shutdownNow();
+			Thread.currentThread().interrupt();
+		}
+
+		return outputs;
+	}
+
+	/**
+	 * Get Unspent Outputs With Executor
+	 *
+	 * Get unspent outputs using an executor to get the outputs in parallel.
+	 *
+	 * @param base58Address the master foreign key for address generation
+	 * @param includeUnconfirmed true to include unconfirmed outputs, otherwise false
+	 * @param executor the executor to run the multi-threaded fetching
+	 *
+	 * @return the outputs
+	 *
+	 * @throws ForeignBlockchainException
+	 */
+	private List<TransactionOutput> getUnspentOutputsWithExecutor(String base58Address, boolean includeUnconfirmed, ExecutorService executor) throws ForeignBlockchainException {
+		List<Future<Optional<TransactionOutput>>> futures = getUnspentOutputsAsync(base58Address, includeUnconfirmed, executor);
+
+		List<TransactionOutput> outputs = new ArrayList<>(futures.size());
+
+		try {
+			for( Future<Optional<TransactionOutput>> future : futures) {
+
+				Optional<TransactionOutput> outputOptional = future.get();
+
+				if( outputOptional.isPresent() ) {
+					outputs.add(outputOptional.get());
+				}
+			}
+		} catch (InterruptedException | ExecutionException e) {
+			throw new ForeignBlockchainException(e.getMessage());
+		}
+		return outputs;
+	}
+
+	/**
+	 * Get Unspent Outputs Asynchronously
+	 *
+	 * Get unspent outputs using an executor to get the outputs in parallel.
+	 *
+	 * @param base58Address the master foreign key for address generation
+	 * @param includeUnconfirmed true to include unconfirmed outputs, otherwise false
+	 * @param executor the executor to run the multi-threaded fetching
+	 *
+	 * @return the outputs
+	 *
+	 * @throws ForeignBlockchainException
+	 */
+	private List<Future<Optional<TransactionOutput>>> getUnspentOutputsAsync(String base58Address, boolean includeUnconfirmed, ExecutorService executor) throws ForeignBlockchainException {
 		List<UnspentOutput> unspentOutputs = this.blockchainProvider.getUnspentOutputs(addressToScriptPubKey(base58Address), includeUnconfirmed);
 
-		List<TransactionOutput> unspentTransactionOutputs = new ArrayList<>();
+		List<Future<Optional<TransactionOutput>>> unspentTransactionOutputs = new ArrayList<>();
 		for (UnspentOutput unspentOutput : unspentOutputs) {
-			List<TransactionOutput> transactionOutputs = this.getOutputs(unspentOutput.hash);
-
-			unspentTransactionOutputs.add(transactionOutputs.get(unspentOutput.index));
+			unspentTransactionOutputs.add( executor.submit( () -> getTransactionOutput(unspentOutput)));
 		}
 
 		return unspentTransactionOutputs;
+	}
+
+	/**
+	 * GEt UTXOs Asynchronously
+	 *
+	 * @param address the foreign coin address
+	 * @param includeUnconfirmed true to include unconfirmed outputs, otherwise false
+	 * @param executor the executor to run the multi-threaded fetching
+	 *
+	 * @return the UTXOs
+	 * @throws ForeignBlockchainException
+	 */
+	private List<Future<UTXO>> getUTXOsAsync(String address, boolean includeUnconfirmed, ExecutorService executor) throws ForeignBlockchainException {
+		List<UnspentOutput> unspentOutputs = this.blockchainProvider.getUnspentOutputs(address, true);
+
+		List<Future<UTXO>> utxos = new ArrayList<>();
+
+		final boolean coinbase = false;
+
+		for (UnspentOutput unspentOutput : unspentOutputs) {
+			utxos.add(executor.submit( () -> buildUTXO(coinbase, unspentOutput) ));
+		}
+
+		return utxos;
+	}
+
+	/**
+	 * Build UTXO
+	 *
+	 * Build UTXo from a an unspent output
+	 *
+	 * @param coinbase true if coinbase transaction, otherwise false
+	 * @param unspentOutput the unpent output to build from
+	 *
+	 * @return the UTXO
+	 *
+	 * @throws ForeignBlockchainException
+	 */
+	private UTXO buildUTXO(boolean coinbase, UnspentOutput unspentOutput) throws ForeignBlockchainException {
+		List<TransactionOutput> transactionOutputs = getOutputs(unspentOutput.hash);
+
+		TransactionOutput transactionOutput = transactionOutputs.get(unspentOutput.index);
+
+		UTXO utxo = new UTXO(Sha256Hash.wrap(unspentOutput.hash), unspentOutput.index,
+				Coin.valueOf(unspentOutput.value), unspentOutput.height, coinbase,
+				transactionOutput.getScriptPubKey());
+
+		return utxo;
+	}
+
+	/**
+	 * Get Transaction Output
+	 *
+	 * Get transaction output from unspent output.
+	 *
+	 * @param unspentOutput the unspent output
+	 *
+	 * @return the transaction output
+	 */
+	private Optional<TransactionOutput> getTransactionOutput(UnspentOutput unspentOutput)  {
+		try {
+			List<TransactionOutput> transactionOutputs = this.getOutputs(unspentOutput.hash);
+
+			TransactionOutput transactionOutput = transactionOutputs.get(unspentOutput.index);
+			return Optional.of(transactionOutput);
+		} catch (ForeignBlockchainException e) {
+			LOGGER.error(e.getMessage(), e);
+			return Optional.empty();
+		}
 	}
 
 	/**
@@ -435,17 +575,48 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 	public Long getWalletBalance(String key58) throws ForeignBlockchainException {
 		Long balance = 0L;
 
-		List<TransactionOutput> allUnspentOutputs = new ArrayList<>();
-		Set<String> walletAddresses = this.getWalletAddresses(key58);
-		for (String address : walletAddresses) {
-			allUnspentOutputs.addAll(this.getUnspentOutputs(address, true));
-		}
-		for (TransactionOutput output : allUnspentOutputs) {
-			if (!output.isAvailableForSpending()) {
-				continue;
+		ExecutorService executor = Executors.newFixedThreadPool(50);
+
+		List<Future<Optional<TransactionOutput>>> allUnspentOutputs = new ArrayList<>();
+		Set<String> walletAddresses = this.getWalletAddressesWithExecutor(key58, executor);
+
+		try {
+			List<Future<List<Future<Optional<TransactionOutput>>>>> addressOutputLists = new ArrayList<>();
+
+			// for ech wallet address, spawn a thread to fetch unspent outputs
+			for (String address : walletAddresses) {
+				addressOutputLists.add(executor.submit(() -> this.getUnspentOutputsAsync(address, true, executor)));
 			}
-			balance += output.getValue().value;
+
+			// collect address outputs as they are ready
+			for( Future<List<Future<Optional<TransactionOutput>>>> addressOutputs : addressOutputLists) {
+				allUnspentOutputs.addAll( addressOutputs.get() );
+			}
+
+			// use the address outputs to sum up a balance
+			for (Future<Optional<TransactionOutput>> optionalFuture : allUnspentOutputs) {
+				Optional<TransactionOutput> transactionOutput = optionalFuture.get();
+				if (transactionOutput.isPresent() && !transactionOutput.get().isAvailableForSpending()) {
+					continue;
+				}
+				balance += transactionOutput.get().getValue().value;
+			}
+
+			// Shutdown the executor and wait for all tasks to complete
+			executor.shutdown();
+			try {
+				if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+					executor.shutdownNow();
+				}
+			} catch (InterruptedException ex) {
+				LOGGER.error(ex.getMessage(), ex);
+				executor.shutdownNow();
+				Thread.currentThread().interrupt();
+			}
+		} catch (Exception e) {
+			LOGGER.error(e.getMessage(), e);
 		}
+
 		return balance;
 	}
 
@@ -473,7 +644,7 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 	}
 
 	public List<SimpleTransaction> getWalletTransactions(String key58) throws ForeignBlockchainException {
-		synchronized (this) {
+		try {
 			// Serve from the cache if it's recent, and matches this xpub
 			if (Objects.equals(transactionsCacheXpub, key58)) {
 				if (transactionsCache != null && transactionsCacheTimestamp != null) {
@@ -495,86 +666,194 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 
 			List<DeterministicKey> keys = new ArrayList<>(keyChain.getLeafKeys());
 
-			Set<BitcoinyTransaction> walletTransactions = new HashSet<>();
-			Set<String> keySet = new HashSet<>();
+			// prepare an executor and start a list to collect transactions asynchronouly
+			ExecutorService executor = Executors.newFixedThreadPool(50);
+			List<Future<Optional<BitcoinyTransaction>>> futures = new ArrayList<>();
 
-			int unusedCounter = 0;
-			int ki = 0;
-			do {
-				boolean areAllKeysUnused = true;
+			// determine the keys and collect the addresses
+			Set<String> keySet = processKeysWithTransactionFutures(executor, keys, keyChain, futures, 0);
 
-				for (; ki < keys.size(); ++ki) {
-					DeterministicKey dKey = keys.get(ki);
+			// start a list to collect the transactions when they are ready from the asynchronous threads
+			Set<BitcoinyTransaction> walletTransactions = Collections.synchronizedSet(new HashSet<>());
 
-					// Check for transactions
-					Address address = Address.fromKey(this.params, dKey, ScriptType.P2PKH);
-					keySet.add(address.toString());
-					byte[] script = ScriptBuilder.createOutputScript(address).getProgram();
+			// for each transaction fetched from an asynchronous thread,
+			// process the transaction for the wallet
+			for( Future<Optional<BitcoinyTransaction>> future : futures ) {
 
-					// Ask for transaction history - if it's empty then key has never been used
-					List<TransactionHash> historicTransactionHashes = this.getAddressTransactions(script, true);
+				Optional<BitcoinyTransaction> transactionOptional = future.get();
 
-					if (!historicTransactionHashes.isEmpty()) {
-						areAllKeysUnused = false;
+				if( transactionOptional.isPresent() ) {
+					BitcoinyTransaction transaction = transactionOptional.get();
+					walletTransactions.add(transaction);
 
-						for (TransactionHash transactionHash : historicTransactionHashes) {
-
-							Optional<BitcoinyTransaction> walletTransaction
-									= this.blockchainCache.getTransactionByHash( transactionHash.txHash );
-
-							// if the wallet transaction is already cached
-							if(walletTransaction.isPresent() ) {
-								walletTransactions.add( walletTransaction.get() );
-							}
-							// otherwise get the transaction from the blockchain server
-							else {
-								BitcoinyTransaction transaction = getTransaction(transactionHash.txHash);
-								walletTransactions.add( transaction );
-								this.blockchainCache.addTransactionByHash(transactionHash.txHash, transaction);
-							}
-						}
+					// if the transaction is confirmed, then cache it for later use
+					if( transaction.timestamp != null ) {
+						this.blockchainCache.addTransactionByHash(transaction.txHash, transaction);
 					}
 				}
+			}
 
-				if (areAllKeysUnused) {
-					// No transactions
-					if (unusedCounter >= Settings.getInstance().getGapLimit()) {
-						// ... and we've hit our search limit
-						break;
-					}
-					// We haven't hit our search limit yet so increment the counter and keep looking
-					unusedCounter += WALLET_KEY_LOOKAHEAD_INCREMENT;
-				} else {
-					// Some keys in this batch were used, so reset the counter
-					unusedCounter = 0;
+			// Shutdown the executor and wait for all tasks to complete
+			executor.shutdown();
+			try {
+				if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+					executor.shutdownNow();
 				}
-
-				// Generate some more keys
-				keys.addAll(generateMoreKeys(keyChain));
-
-				// Process new keys
-			} while (true);
+			} catch (InterruptedException ex) {
+				executor.shutdownNow();
+				Thread.currentThread().interrupt();
+			}
 
 			Comparator<SimpleTransaction> newestTimestampFirstComparator = Comparator.comparingLong(SimpleTransaction::getTimestamp).reversed();
 
+			// convert to simple transactions
+			List<SimpleTransaction> simpleTransactions
+				= walletTransactions.parallelStream()
+					.map(t -> convertToSimpleTransaction(t, keySet))
+					.collect(Collectors.toList());
+
+			// add null timestamps first, probably unconfirmed
+			transactionsCache
+				= simpleTransactions.stream()
+					.filter(t -> t.getTimestamp() == null)
+					.collect(Collectors.toList());
+
 			// Update cache and return
+			transactionsCache.addAll(
+				simpleTransactions.stream()
+					.filter( t -> t.getTimestamp() != null)
+					.sorted(newestTimestampFirstComparator)
+					.collect(Collectors.toList())
+			);
+
 			transactionsCacheTimestamp = NTP.getTime();
 			transactionsCacheXpub = key58;
-			transactionsCache = walletTransactions.stream()
-					.map(t -> convertToSimpleTransaction(t, keySet))
-					.sorted(newestTimestampFirstComparator).collect(Collectors.toList());
 
 			return transactionsCache;
+		} catch ( ForeignBlockchainException e) {
+			LOGGER.error(e.getMessage(), e);
+			throw e;
+		} catch (ExecutionException | InterruptedException e) {
+			LOGGER.error(e.getMessage(), e);
+			throw new ForeignBlockchainException( "execution or interruption exception when calling foreign chain");
+		} catch( Exception e ) {
+			LOGGER.error(e.getMessage(), e);
+			return new ArrayList<>(0);
 		}
 	}
 
+	/**
+	 * Process Keys With Transaction Futures
+	 *
+	 * @param executor the executor to process asynchronously
+	 * @param keys the keys to process
+	 * @param keyChain the key chain to generate more keys from if necessary
+	 * @param futures the transactions already fetched for
+	 * @param unusedCounter starts at zero and increments for recursion
+	 *
+	 * @return the addresses generated from the keys
+	 *
+	 * @throws ForeignBlockchainException
+	 */
+	private Set<String> processKeysWithTransactionFutures(
+			ExecutorService executor,
+			List<DeterministicKey> keys,
+			DeterministicKeyChain keyChain,
+			List<Future<Optional<BitcoinyTransaction>>> futures,
+			int unusedCounter) throws ForeignBlockchainException {
+
+		Set<String> keySet = new HashSet<>();
+
+		List<Future<Boolean>> transactionChecks = new ArrayList<>(keys.size());
+
+		for( DeterministicKey dKey : keys) {
+
+			// Check for transactions
+			Address address = Address.fromKey(this.params, dKey, ScriptType.P2PKH);
+			keySet.add(address.toString());
+
+			transactionChecks.add( executor.submit(() -> getTransactions(address, futures, executor) ));
+		}
+
+		if(anyTrue(transactionChecks)) {
+			keySet.addAll(processKeysWithTransactionFutures(executor, generateMoreKeys(keyChain), keyChain, futures, 0));
+		}
+		// if no additional keys were already processed and the if the gap limit held, then process additional keys
+		else if ( unusedCounter < Settings.getInstance().getGapLimit()) {
+			keySet.addAll(processKeysWithTransactionFutures(executor, generateMoreKeys(keyChain), keyChain, futures, unusedCounter + WALLET_KEY_LOOKAHEAD_INCREMENT));
+		}
+
+		return keySet;
+	}
+
+	/**
+	 * Get Bitcoiny Transaction
+	 *
+	 * Get the transaction object stored in memory if available
+	 *
+	 * @param transactionHash the hash identifying the transaction
+	 *
+	 * @return the transaction is available, otherwise empty
+	 */
+	private Optional<BitcoinyTransaction> getBitcoinyTransaction(TransactionHash transactionHash) {
+		try {
+			BitcoinyTransaction transaction = getTransaction(transactionHash.txHash);
+			return Optional.of(transaction);
+		} catch (ForeignBlockchainException e) {
+			LOGGER.error(e.getMessage());
+			return Optional.empty();
+		}
+	}
+
+	/**
+	 * Get Wallet Infos
+	 *
+	 * Get information for each address in the wallet.
+	 *
+	 * @param key58 the master key to determine key generation for the addresses
+	 *
+	 * @return the info for each address
+	 *
+	 * @throws ForeignBlockchainException
+	 */
 	public List<AddressInfo> getWalletAddressInfos(String key58) throws ForeignBlockchainException {
+
+		// return list
 		List<AddressInfo> infos = new ArrayList<>();
 
-		List<String> candidates = this.getSpendingCandidateAddresses(key58);
+		// for the asynchronous thread tasks below
+		ExecutorService executor = Executors.newFixedThreadPool(50);
 
-		for(DeterministicKey key : getOldWalletKeys(key58)) {
-			infos.add(buildAddressInfo(key, candidates));
+		// generate keys asynchronously
+		Set<DeterministicKey> walletKeys = getWalletKeysWithExecutor(key58, executor);
+
+		// collect all address info build tasks
+		List<Future<AddressInfo>> futures = new ArrayList<>(walletKeys.size());
+
+		// build info for each key, one address per key
+		for(DeterministicKey key : walletKeys) {
+			futures.add(executor.submit(() -> buildAddressInfo(key)));
+		}
+
+		try {
+			// once the tasks are done, get the info objects
+			for( Future<AddressInfo> future : futures ) {
+				infos.add( future.get() );
+			}
+		} catch (InterruptedException | ExecutionException e) {
+			LOGGER.error(e.getMessage(), e);
+		}
+
+		// Shutdown the executor and wait for all tasks to complete
+		executor.shutdown();
+		try {
+			if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+				executor.shutdownNow();
+			}
+		} catch (InterruptedException e) {
+			LOGGER.error(e.getMessage(), e);
+			executor.shutdownNow();
+			Thread.currentThread().interrupt();
 		}
 
 		return infos.stream()
@@ -582,7 +861,7 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 				.collect(Collectors.toList());
 	}
 
-	public AddressInfo buildAddressInfo(DeterministicKey key, List<String> candidates) throws ForeignBlockchainException  {
+	public AddressInfo buildAddressInfo(DeterministicKey key) throws ForeignBlockchainException  {
 
 		Address address = Address.fromKey(this.params, key, ScriptType.P2PKH);
 
@@ -594,7 +873,7 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 				summingUnspentOutputs(address.toString()),
 				key.getPathAsString(),
 				transactionCount,
-				candidates.contains(address.toString()));
+				true);
 	}
 
 	private static  List<Integer> toIntegerList(ImmutableList<ChildNumber> path) {
@@ -603,69 +882,307 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 	}
 
 	public Set<String> getWalletAddresses(String key58) throws ForeignBlockchainException {
-		synchronized (this) {
-			Context.propagate(bitcoinjContext);
+		Context.propagate(bitcoinjContext);
 
-			Wallet wallet = walletFromDeterministicKey58(key58);
-			DeterministicKeyChain keyChain = wallet.getActiveKeyChain();
+		// for asynchronous processing
+		ExecutorService executor = Executors.newFixedThreadPool(50);
 
-			keyChain.setLookaheadSize(Bitcoiny.WALLET_KEY_LOOKAHEAD_INCREMENT);
-			keyChain.maybeLookAhead();
+		// generate keys asynchronously and get the addresses, return value
+		Set<String> addresses = getWalletAddressesWithExecutor(key58, executor);
 
-			List<DeterministicKey> keys = new ArrayList<>(keyChain.getLeafKeys());
+		// Shutdown the executor and wait for all tasks to complete
+		executor.shutdown();
+		try {
+			if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+				executor.shutdownNow();
+			}
+		} catch (InterruptedException ex) {
+			executor.shutdownNow();
+			Thread.currentThread().interrupt();
+		}
 
-			Set<String> keySet = new HashSet<>();
+		return addresses;
+	}
 
-			int unusedCounter = 0;
-			int ki = 0;
-			do {
-				boolean areAllKeysUnused = true;
+	/**
+	 * Get Wallet Addresses With Executor
+	 *
+	 * Get wallet addresses asynchronously.
+	 *
+	 * @param key58 the master key
+	 * @param executor the executor for asynchronous processing
+	 *
+	 * @return the addresses
+	 *
+	 * @throws ForeignBlockchainException
+	 */
+	public Set<String> getWalletAddressesWithExecutor(String key58, ExecutorService executor) throws ForeignBlockchainException {
+		Wallet wallet = walletFromDeterministicKey58(key58);
 
-				for (; ki < keys.size(); ++ki) {
-					DeterministicKey dKey = keys.get(ki);
+		return getAddressesWithExecutor( wallet, executor);
+	}
 
-					Address address = Address.fromKey(this.params, dKey, ScriptType.P2PKH);
-					keySet.add(address.toString());
+	/**
+	 * Get Addresses With Executor
+	 *
+	 * Get wallet addresses asynchronously
+	 *
+	 * @param wallet the wallet
+	 * @param executor the executor for asynchronous processing
+	 *
+	 * @return the addresses
+	 */
+	private Set<String> getAddressesWithExecutor( Wallet wallet, ExecutorService executor) {
+		DeterministicKeyChain keyChain = wallet.getActiveKeyChain();
 
-					// if the key already has a verified transaction history
-					if( this.blockchainCache.keyHasHistory( dKey ) ){
-						areAllKeysUnused = false;
-					}
-					else {
-						// Check for transactions
-						byte[] script = ScriptBuilder.createOutputScript(address).getProgram();
+		keyChain.setLookaheadSize(Bitcoiny.WALLET_KEY_LOOKAHEAD_INCREMENT);
+		keyChain.maybeLookAhead();
 
-						// Ask for transaction history - if it's empty then key has never been used
-						List<TransactionHash> historicTransactionHashes = this.getAddressTransactions(script, true);
+		Set<String> keySet = processKeys(executor, new ArrayList<>(keyChain.getLeafKeys()), keyChain, 0);
 
-						if (!historicTransactionHashes.isEmpty()) {
-							areAllKeysUnused = false;
-							this.blockchainCache.addKeyWithHistory(dKey);
+		return keySet;
+	}
+
+	/**
+	 * Get Wallet Keys With Executor
+	 *
+	 * Get wallet keys asynchronously
+	 *
+	 * @param key58 the master key to determine kday generation
+	 * @param executor the executor for asychronous processing
+	 *
+	 * @return the keys
+	 *
+	 * @throws ForeignBlockchainException
+	 */
+	public Set<DeterministicKey> getWalletKeysWithExecutor(String key58, ExecutorService executor) throws ForeignBlockchainException {
+		Wallet wallet = walletFromDeterministicKey58(key58);
+		DeterministicKeyChain keyChain = wallet.getActiveKeyChain();
+
+		keyChain.setLookaheadSize(Bitcoiny.WALLET_KEY_LOOKAHEAD_INCREMENT);
+		keyChain.maybeLookAhead();
+
+		// the return value
+		Set<DeterministicKey> keySet = processKeysOnly(executor, new ArrayList<>(keyChain.getLeafKeys()), keyChain, 0);
+
+		return keySet;
+	}
+
+	/**
+	 * Process Keys
+	 *
+	 * Generate keys asynchronously
+	 *
+	 * @param executor for asynchronous processing
+	 * @param keys the keys generated
+	 * @param keyChain the key chain to generate the keys from
+	 * @param unusedCounter starts at zero, increases during recursion
+	 *
+	 * @return the addresses derived from the keys
+	 */
+	private Set<String> processKeys(ExecutorService executor, List<DeterministicKey> keys, DeterministicKeyChain keyChain, int unusedCounter) {
+
+		// the return value
+		Set<String> keySet = new HashSet<>();
+
+		boolean needToProcessAdditionalKeys = false;
+
+		List<Future<Boolean>> transactionChecks = new ArrayList<>(keys.size());
+
+		// for each key, collect address, determine additional key generation
+		for (DeterministicKey dKey : keys) {
+
+			Address address = Address.fromKey(this.params, dKey, ScriptType.P2PKH);
+			keySet.add(address.toString());
+
+			// if the key already has a verified transaction history
+			if( this.blockchainCache.keyHasHistory( dKey ) ){
+				needToProcessAdditionalKeys = true;
+			}
+			// if the key does not have a verified transaction history
+			else {
+				transactionChecks.add( executor.submit(() -> checkForTransactions(dKey, address)));
+			}
+		}
+
+		// process more keys
+		if( needToProcessAdditionalKeys || anyTrue( transactionChecks )) {
+			keySet.addAll(processKeys(executor, generateMoreKeys(keyChain), keyChain, 0));
+		}
+		// if no additional keys were already processed and the if the gap limit held, then process additional keys
+		else if ( unusedCounter < Settings.getInstance().getGapLimit()) {
+
+			keySet.addAll(processKeys(executor, generateMoreKeys(keyChain), keyChain, unusedCounter + WALLET_KEY_LOOKAHEAD_INCREMENT));
+		}
+
+		return keySet;
+	}
+
+	/**
+	 * Process Keys Only
+	 *
+	 * Generate keys asynchronously, no addresses are generated
+	 *
+	 * @param executor for asynchronou processing
+	 * @param keys the generated keys
+	 * @param keyChain for determining keys to generate
+	 * @param unusedCounter start at zero, increases from recursion
+	 *
+	 * @return the generated keys
+	 *
+	 * @throws ForeignBlockchainException
+	 */
+	private Set<DeterministicKey> processKeysOnly(ExecutorService executor, List<DeterministicKey> keys, DeterministicKeyChain keyChain, int unusedCounter) throws ForeignBlockchainException {
+
+		Set<DeterministicKey> keySet = new HashSet<>();
+
+		boolean needToProcessAdditionalKeys = false;
+
+		List<Future<Boolean>> transactionChecks = new ArrayList<>(keys.size());
+
+		for (DeterministicKey dKey : keys) {
+
+			Address address = Address.fromKey(this.params, dKey, ScriptType.P2PKH);
+			keySet.add(dKey);
+
+			// if the key already has a verified transaction history
+			if( this.blockchainCache.keyHasHistory( dKey ) ){
+				needToProcessAdditionalKeys = true;
+			}
+			// if the key does not have a verified transaction history
+			else {
+				transactionChecks.add( executor.submit(() -> checkForTransactions(dKey, address)));
+			}
+		}
+
+		if( needToProcessAdditionalKeys || anyTrue( transactionChecks )) {
+			keySet.addAll(processKeysOnly(executor, generateMoreKeys(keyChain), keyChain, 0));
+		}
+		// if no additional keys were already processed and the if the gap limit held, then process additional keys
+		else if ( unusedCounter < Settings.getInstance().getGapLimit()) {
+
+			keySet.addAll(processKeysOnly(executor, generateMoreKeys(keyChain), keyChain, unusedCounter + WALLET_KEY_LOOKAHEAD_INCREMENT));
+		}
+
+		return keySet;
+	}
+
+	/**
+	 * Any True?
+	 *
+	 * Are any of the future tasks returning true?
+	 *
+	 * @param futures the future tasks
+	 *
+	 * @return true if any task returns true, false if all tasks return false
+	 */
+	public static boolean anyTrue(List<Future<Boolean>> futures) {
+
+		try {
+			while( true ) {
+
+				int falseCount = 0;
+
+				for (Future<Boolean> future : futures) {
+
+					if (future.isDone()) {
+
+						// if one is true, then return true
+						if( future.get() ) {
+							return true;
+						}
+						else {
+							falseCount++;
 						}
 					}
 				}
 
-				if (areAllKeysUnused) {
-					// No transactions
-					if (unusedCounter >= Settings.getInstance().getGapLimit()) {
-						// ... and we've hit our search limit
-						break;
-					}
-					// We haven't hit our search limit yet so increment the counter and keep looking
-					unusedCounter += WALLET_KEY_LOOKAHEAD_INCREMENT;
-				} else {
-					// Some keys in this batch were used, so reset the counter
-					unusedCounter = 0;
+				// if all are done and all are false, then none are true
+				if( falseCount == futures.size() ) {
+					return false;
 				}
-
-				// Generate some more keys
-				keys.addAll(generateMoreKeys(keyChain));
-
-				// Process new keys
-			} while (true);
-
-			return keySet;
+			}
+		} catch (InterruptedException | ExecutionException e) {
+			LOGGER.error(e.getMessage(), e);
+			return false;
 		}
+	}
+
+	/**
+	 * Any Transactions?
+	 *
+	 * Any transactions for this address?
+	 *
+	 * @param dKey the key that generated this address
+	 * @param address the address
+	 *
+	 * @return true if there are any transactions for this address, false if there are no transactions
+	 *
+	 * @throws ForeignBlockchainException
+	 */
+	private boolean checkForTransactions(DeterministicKey dKey, Address address) throws ForeignBlockchainException {
+		// Check for transactions
+		byte[] script = ScriptBuilder.createOutputScript(address).getProgram();
+
+		// Ask for transaction history - if it's empty then key has never been used
+		List<TransactionHash> historicTransactionHashes = this.getAddressTransactions(script, true);
+
+		// if the key has history, then it should be processing additional keys
+		if (!historicTransactionHashes.isEmpty()) {
+			this.blockchainCache.addKeyWithHistory(dKey);
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Get Transactions
+	 *
+	 * Get all the transactions for an address, asynchronously.
+	 *
+	 * @param address the address
+	 * @param futures where the transaction fetch tasks get collected
+	 * @param executor for asychronous processing
+	 *
+	 * @return true if the adddress has any transactions, false for no transactions
+	 *
+	 * @throws ForeignBlockchainException
+	 */
+	private boolean getTransactions(Address address, List<Future<Optional<BitcoinyTransaction>>> futures, ExecutorService executor) throws ForeignBlockchainException {
+
+		// return value
+		boolean processAdditionalKeys = false;
+
+		// Check for transactions
+		byte[] script = ScriptBuilder.createOutputScript(address).getProgram();
+
+		// Ask for transaction history - if it's empty then key has never been used
+		List<TransactionHash> historicTransactionHashes = this.getAddressTransactions(script, true);
+
+		// if the key has history, then it should be processing additional keys
+		if (!historicTransactionHashes.isEmpty()) {
+
+			processAdditionalKeys = true;
+
+			// get the transactions from the hashes
+			for (TransactionHash transactionHash : historicTransactionHashes) {
+
+				Optional<BitcoinyTransaction> walletTransaction
+						= this.blockchainCache.getTransactionByHash( transactionHash.txHash );
+
+				// if the wallet transaction is already cached
+				if(walletTransaction.isPresent() ) {
+					futures.add( executor.submit(() -> walletTransaction ) );
+				}
+				// otherwise get the transaction from the blockchain server
+				else {
+					futures.add( executor.submit(() -> getBitcoinyTransaction(transactionHash)) );
+				}
+			}
+		}
+
+		return processAdditionalKeys;
 	}
 
 	/**
@@ -681,65 +1198,63 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 	 * @throws ForeignBlockchainException
 	 */
 	private List<DeterministicKey> getOldWalletKeys(String masterPrivateKey) throws ForeignBlockchainException {
-		synchronized (this) {
-			Context.propagate(bitcoinjContext);
+		Context.propagate(bitcoinjContext);
 
-			Wallet wallet = walletFromDeterministicKey58(masterPrivateKey);
-			DeterministicKeyChain keyChain = wallet.getActiveKeyChain();
+		Wallet wallet = walletFromDeterministicKey58(masterPrivateKey);
+		DeterministicKeyChain keyChain = wallet.getActiveKeyChain();
 
-			keyChain.setLookaheadSize(Bitcoiny.WALLET_KEY_LOOKAHEAD_INCREMENT);
-			keyChain.maybeLookAhead();
+		keyChain.setLookaheadSize(Bitcoiny.WALLET_KEY_LOOKAHEAD_INCREMENT);
+		keyChain.maybeLookAhead();
 
-			List<DeterministicKey> keys = new ArrayList<>(keyChain.getLeafKeys());
+		List<DeterministicKey> keys = new ArrayList<>(keyChain.getLeafKeys());
 
-			int unusedCounter = 0;
-			int ki = 0;
-			do {
-				boolean areAllKeysUnused = true;
+		int unusedCounter = 0;
+		int ki = 0;
+		do {
+			boolean areAllKeysUnused = true;
 
-				for (; areAllKeysUnused && ki < keys.size(); ++ki) {
-					DeterministicKey dKey = keys.get(ki);
+			for (; areAllKeysUnused && ki < keys.size(); ++ki) {
+				DeterministicKey dKey = keys.get(ki);
 
-					// if the key already has a verified transaction history
-					if( this.blockchainCache.keyHasHistory(dKey)) {
+				// if the key already has a verified transaction history
+				if( this.blockchainCache.keyHasHistory(dKey)) {
+					areAllKeysUnused = false;
+				}
+				else {
+					// Check for transactions
+					Address address = Address.fromKey(this.params, dKey, ScriptType.P2PKH);
+					byte[] script = ScriptBuilder.createOutputScript(address).getProgram();
+
+					// Ask for transaction history - if it's empty then key has never been used
+					List<TransactionHash> historicTransactionHashes = this.getAddressTransactions(script, true);
+
+					if (!historicTransactionHashes.isEmpty()) {
 						areAllKeysUnused = false;
-					}
-					else {
-						// Check for transactions
-						Address address = Address.fromKey(this.params, dKey, ScriptType.P2PKH);
-						byte[] script = ScriptBuilder.createOutputScript(address).getProgram();
-
-						// Ask for transaction history - if it's empty then key has never been used
-						List<TransactionHash> historicTransactionHashes = this.getAddressTransactions(script, true);
-
-						if (!historicTransactionHashes.isEmpty()) {
-							areAllKeysUnused = false;
-							this.blockchainCache.addKeyWithHistory(dKey);
-						}
+						this.blockchainCache.addKeyWithHistory(dKey);
 					}
 				}
+			}
 
-				if (areAllKeysUnused) {
-					// No transactions
-					if (unusedCounter >= Settings.getInstance().getGapLimit()) {
-						// ... and we've hit our search limit
-						break;
-					}
-					// We haven't hit our search limit yet so increment the counter and keep looking
-					unusedCounter += WALLET_KEY_LOOKAHEAD_INCREMENT;
-				} else {
-					// Some keys in this batch were used, so reset the counter
-					unusedCounter = 0;
+			if (areAllKeysUnused) {
+				// No transactions
+				if (unusedCounter >= Settings.getInstance().getGapLimit()) {
+					// ... and we've hit our search limit
+					break;
 				}
+				// We haven't hit our search limit yet so increment the counter and keep looking
+				unusedCounter += WALLET_KEY_LOOKAHEAD_INCREMENT;
+			} else {
+				// Some keys in this batch were used, so reset the counter
+				unusedCounter = 0;
+			}
 
-				// Generate some more keys
-				keys.addAll(generateMoreKeys(keyChain));
+			// Generate some more keys
+			keys.addAll(generateMoreKeys(keyChain));
 
-				// Process new keys
-			} while (true);
+			// Process new keys
+		} while (true);
 
-			return keys;
-		}
+		return keys;
 	}
 
 	protected SimpleTransaction convertToSimpleTransaction(BitcoinyTransaction t, Set<String> keySet) {
@@ -773,9 +1288,31 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 					}
 				}
 			} catch (ForeignBlockchainException e) {
-				LOGGER.trace("Failed to retrieve transaction information {}", input.outputTxHash);
+				LOGGER.warn("Failed to retrieve transaction information {}", input.outputTxHash);
 			}
 		}
+
+		// Group by sender and sum values
+		Map<String, Long> totalSumBySender
+			= inputs.stream()
+				.collect(Collectors.groupingBy(
+						SimpleTransaction.Input::getAddress,
+						Collectors.reducing(
+								0L,
+								SimpleTransaction.Input::getAmount,
+								Long::sum
+						)
+				));
+
+		// Create new objects with summed values
+		List<SimpleTransaction.Input> groupedInputs
+			= totalSumBySender.entrySet().stream()
+				.map(entry -> new SimpleTransaction.Input(entry.getKey(), entry.getValue(), keySet.contains(entry.getKey())))
+				.collect(Collectors.toList());
+
+		inputs.clear();
+		inputs.addAll(groupedInputs);
+
 		if (t.outputs != null && !t.outputs.isEmpty()) {
 			for (BitcoinyTransaction.Output output : t.outputs) {
 				if (output.addresses != null) {
@@ -799,6 +1336,28 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 				totalOutputAmount += output.value;
 			}
 		}
+
+		// Group by address and sum values
+		Map<String, Long> totalSumByAddress
+				= outputs.stream()
+				.collect(Collectors.groupingBy(
+						SimpleTransaction.Output::getAddress,
+						Collectors.reducing(
+								0L,
+								SimpleTransaction.Output::getAmount,
+								Long::sum
+						)
+				));
+
+		// Create new objects with summed values
+		List<SimpleTransaction.Output> groupedOutputs
+				= totalSumByAddress.entrySet().stream()
+				.map(entry -> new SimpleTransaction.Output(entry.getKey(), entry.getValue(), keySet.contains(entry.getKey())))
+				.collect(Collectors.toList());
+
+		outputs.clear();
+		outputs.addAll(groupedOutputs);
+
 		long fee = totalInputAmount - totalOutputAmount;
 
 		if (!anyOutputAddressInWallet) {
@@ -811,7 +1370,13 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 			// All inputs and outputs relate to this wallet, so the balance should be unaffected
 			amount = 0;
 		}
-		long timestampMillis = t.timestamp * 1000L;
+		Long timestampMillis;
+
+		if( t.timestamp != null )
+			timestampMillis = t.timestamp * 1000L;
+		else
+			timestampMillis = null;
+
 		return new SimpleTransaction(t.txHash, timestampMillis, amount, fee, inputs, outputs, null);
 	}
 
@@ -858,99 +1423,34 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 			this.keyChain = this.wallet.getActiveKeyChain();
 
 			// Set up wallet's key chain
-			this.keyChain.setLookaheadSize(Settings.getInstance().getBitcoinjLookaheadSize());
+			this.keyChain.setLookaheadSize(Bitcoiny.WALLET_KEY_LOOKAHEAD_INCREMENT);
 			this.keyChain.maybeLookAhead();
 		}
 
 		@Override
 		public List<UTXO> getOpenTransactionOutputs(List<ECKey> keys) throws UTXOProviderException {
-			List<UTXO> allUnspentOutputs = new ArrayList<>();
-			final boolean coinbase = false;
+			ExecutorService executor = Executors.newFixedThreadPool(50);
 
-			int ki = 0;
-			do {
-				boolean areAllKeysUnspent = true;
+			Set<String> addresses = bitcoiny.processKeys(executor, this.keyChain.getLeafKeys(), this.keyChain, 0);
 
-				for (; ki < keys.size(); ++ki) {
-					ECKey key = keys.get(ki);
+			List<Future<UTXO>> futures = new ArrayList<>();
 
-					Address address = Address.fromKey(this.bitcoiny.params, key, ScriptType.P2PKH);
-					byte[] script = ScriptBuilder.createOutputScript(address).getProgram();
-
-					List<UnspentOutput> unspentOutputs;
-					try {
-						unspentOutputs = this.bitcoiny.blockchainProvider.getUnspentOutputs(script, true);
-					} catch (ForeignBlockchainException e) {
-						throw new UTXOProviderException(String.format("Unable to fetch unspent outputs for %s", address));
-					}
-
-					/*
-					 * If there are no unspent outputs then either:
-					 * a) all the outputs have been spent
-					 * b) address has never been used
-					 *
-					 * For case (a) we want to remember not to check this address (key) again.
-					 */
-
-					if (unspentOutputs.isEmpty()) {
-						// If this is a known key that has been spent before, then we can skip asking for transaction history
-						if (this.bitcoiny.spentKeys.contains(key)) {
-							this.wallet.getActiveKeyChain().markKeyAsUsed((DeterministicKey) key);
-							areAllKeysUnspent = false;
-							continue;
-						}
-
-						// Ask for transaction history - if it's empty then key has never been used
-						List<TransactionHash> historicTransactionHashes;
-						try {
-							historicTransactionHashes = this.bitcoiny.blockchainProvider.getAddressTransactions(script, false);
-						} catch (ForeignBlockchainException e) {
-							throw new UTXOProviderException(String.format("Unable to fetch transaction history for %s", address));
-						}
-
-						if (!historicTransactionHashes.isEmpty()) {
-							// Fully spent key - case (a)
-							this.bitcoiny.spentKeys.add(key);
-							this.wallet.getActiveKeyChain().markKeyAsUsed((DeterministicKey) key);
-							areAllKeysUnspent = false;
-						} else {
-							// Key never been used - case (b)
-						}
-
-						continue;
-					}
-
-					// If we reach here, then there's definitely at least one unspent key
-					this.bitcoiny.spentKeys.remove(key);
-
-					for (UnspentOutput unspentOutput : unspentOutputs) {
-						List<TransactionOutput> transactionOutputs;
-						try {
-							transactionOutputs = this.bitcoiny.getOutputs(unspentOutput.hash);
-						} catch (ForeignBlockchainException e) {
-							throw new UTXOProviderException(String.format("Unable to fetch outputs for TX %s",
-									HashCode.fromBytes(unspentOutput.hash)));
-						}
-
-						TransactionOutput transactionOutput = transactionOutputs.get(unspentOutput.index);
-
-						UTXO utxo = new UTXO(Sha256Hash.wrap(unspentOutput.hash), unspentOutput.index,
-								Coin.valueOf(unspentOutput.value), unspentOutput.height, coinbase,
-								transactionOutput.getScriptPubKey());
-
-						allUnspentOutputs.add(utxo);
-					}
+			try {
+				for( String address : addresses ) {
+					futures.addAll( bitcoiny.getUTXOsAsync( address, true, executor) );
 				}
 
-				if (areAllKeysUnspent)
-					// No transactions for this batch of keys so assume we're done searching.
-					return allUnspentOutputs;
+				List<UTXO> utxos = new ArrayList<>(futures.size());
 
-				// Generate some more keys
-				keys.addAll(Bitcoiny.generateMoreKeys(this.keyChain));
+				for( Future<UTXO> future : futures ) {
 
-				// Process new keys
-			} while (true);
+					utxos.add(future.get());
+				}
+
+				return utxos;
+			} catch (Exception e) {
+				throw new UTXOProviderException(e.getMessage());
+			}
 		}
 
 		@Override

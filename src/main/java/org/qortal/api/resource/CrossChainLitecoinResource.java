@@ -226,6 +226,12 @@ public class CrossChainLitecoinResource {
 
 		Litecoin litecoin = Litecoin.getInstance();
 
+		// if the request is using the current p2sh prefix 'M' format, then convert it to the deprecated p2sh prefix '3' format
+		// internally we are using the deprecated format only and changing that standard may put the trade portal at risk due to its dependency on that
+		if( litecoin.isCurrentP2ShAddress(litecoinSendRequest.receivingAddress)) {
+			litecoinSendRequest.receivingAddress = litecoin.convertCurrentP2ShAddress(litecoinSendRequest.receivingAddress);
+		}
+
 		if (!litecoin.isValidAddress(litecoinSendRequest.receivingAddress))
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
 
@@ -420,7 +426,7 @@ public class CrossChainLitecoinResource {
 			}
 
 	)
-	@ApiErrors({ApiError.INVALID_DATA})
+	@ApiErrors({ApiError.INVALID_DATA, ApiError.UNAUTHORIZED})
 	@SecurityRequirement(name = "apiKey")
 	public ServerConnectionInfo setCurrentServer(@HeaderParam(Security.API_KEY_HEADER) String apiKey, ServerInfo serverInfo) {
 		Security.checkApiCallAllowed(request);
@@ -428,7 +434,14 @@ public class CrossChainLitecoinResource {
 		if( serverInfo.getConnectionType() == null ||
 				serverInfo.getHostName() == null) throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_DATA);
 		try {
-			return CrossChainUtils.setCurrentServer( Litecoin.getInstance(), serverInfo );
+			ServerConnectionInfo serverConnectionInfo = CrossChainUtils.setCurrentServer(Litecoin.getInstance(), serverInfo);
+
+			if( serverConnectionInfo != null ) {
+				return serverConnectionInfo;
+			}
+			else {
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.UNAUTHORIZED);
+			}
 		}
 		catch (IllegalArgumentException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_DATA);

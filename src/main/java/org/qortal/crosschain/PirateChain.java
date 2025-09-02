@@ -330,6 +330,8 @@ public class PirateChain extends Bitcoiny {
 			walletController.ensureSynchronized();
 			walletController.ensureNotNullSeed();
 
+			String myAddress = getWalletAddress(entropy58);
+
 			List<SimpleTransaction> transactions = new ArrayList<>();
 
 			// Get transactions list
@@ -346,15 +348,25 @@ public class PirateChain extends Bitcoiny {
 						Long fee = 0L;
 						String memo = null;
 
+						List<SimpleTransaction.Input> inputs = new ArrayList<>();
+						List<SimpleTransaction.Output> outputs = new ArrayList<>();
+
 						if (transactionJson.has("incoming_metadata")) {
 							JSONArray incomingMetadatas = transactionJson.getJSONArray("incoming_metadata");
 							if (incomingMetadatas != null) {
 								for (int j = 0; j < incomingMetadatas.length(); j++) {
 									JSONObject incomingMetadata = incomingMetadatas.getJSONObject(j);
 									if (incomingMetadata.has("value")) {
-										//String address = incomingMetadata.getString("address");
 										Long value = incomingMetadata.getLong("value");
 										amount += value;
+
+										if(incomingMetadata.has("address")) {
+
+											inputs.add(new SimpleTransaction.Input("[PRIVATE]", value, false));
+
+											String address = incomingMetadata.getString("address");
+											outputs.add(new SimpleTransaction.Output(address, value, address.equals(myAddress)));
+										}
 									}
 
 									if (incomingMetadata.has("memo") && !incomingMetadata.isNull("memo")) {
@@ -373,7 +385,16 @@ public class PirateChain extends Bitcoiny {
 									Long value = outgoingMetadata.getLong("value");
 									amount -= value;
 									fee += MAINNET_FEE; // add the standard fee for each send
+
+									if(outgoingMetadata.has("address")) {
+
+										inputs.add(new SimpleTransaction.Input(myAddress, value, true));
+
+										String address = outgoingMetadata.getString("address");
+										outputs.add(new SimpleTransaction.Output(address, value, address.equals(myAddress)));
+									}
 								}
+
 								if (outgoingMetadata.has("memo") && !outgoingMetadata.isNull("memo")) {
 									memo = outgoingMetadata.getString("memo");
 								}
@@ -381,7 +402,7 @@ public class PirateChain extends Bitcoiny {
 						}
 
 						long timestampMillis = Math.toIntExact(timestamp) * 1000L;
-						SimpleTransaction transaction = new SimpleTransaction(txId, timestampMillis, amount, fee, null, null, memo);
+						SimpleTransaction transaction = new SimpleTransaction(txId, timestampMillis, amount, fee, inputs, outputs, memo);
 						transactions.add(transaction);
 					}
 				}

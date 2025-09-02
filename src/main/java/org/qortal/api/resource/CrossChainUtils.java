@@ -60,7 +60,7 @@ public class CrossChainUtils {
                 buildInfos(blockchainProvider.getServers(), currentServer).stream()
                         .sorted(Comparator.comparing(ServerInfo::isCurrent).reversed())
                         .collect(Collectors.toList()),
-                buildInfos(blockchainProvider.getRemainingServers(), currentServer),
+                buildInfos(blockchainProvider.getServers(), currentServer),
                 buildInfos(blockchainProvider.getUselessServers(), currentServer)
             );
     }
@@ -81,7 +81,7 @@ public class CrossChainUtils {
 
         for( ChainableServer server : servers )
         {
-            infos.add(buildInfo(server, server.equals(currentServer)));
+            infos.add(buildInfo(server, currentServer == null || server.equals(currentServer)));
         }
 
         return infos;
@@ -260,22 +260,29 @@ public class CrossChainUtils {
                 serverInfo.getPort()
         );
 
-        ChainableServerConnection connection = blockchainProvider.setCurrentServer(server, CORE_API_CALL).get();
+        Optional<ChainableServerConnection> serverConnectionOptional = blockchainProvider.setCurrentServer(server, CORE_API_CALL);
 
-        return new ServerConnectionInfo(
-                new ServerInfo(
-                        0,
-                        serverInfo.getHostName(),
-                        serverInfo.getPort(),
-                        serverInfo.getConnectionType(),
-                        connection.isSuccess()
-                ),
-                CORE_API_CALL,
-                true,
-                connection.isSuccess() ,
-                System.currentTimeMillis(),
-                connection.getNotes()
-        );
+        if( serverConnectionOptional.isPresent() ) {
+            ChainableServerConnection connection = serverConnectionOptional.get();
+
+            return new ServerConnectionInfo(
+                    new ServerInfo(
+                            0,
+                            serverInfo.getHostName(),
+                            serverInfo.getPort(),
+                            serverInfo.getConnectionType(),
+                            connection.isSuccess()
+                    ),
+                    CORE_API_CALL,
+                    true,
+                    connection.isSuccess(),
+                    System.currentTimeMillis(),
+                    connection.getNotes()
+            );
+        }
+        else {
+            return null;
+        }
     }
 
     /**

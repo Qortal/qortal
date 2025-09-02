@@ -1,8 +1,12 @@
 package org.qortal.crosschain;
 
+import org.bitcoinj.core.Address;
+import org.bitcoinj.core.AddressFormatException;
 import org.bitcoinj.core.Coin;
 import org.bitcoinj.core.Context;
+import org.bitcoinj.core.LegacyAddress;
 import org.bitcoinj.core.NetworkParameters;
+import org.bitcoinj.script.Script;
 import org.libdohj.params.LitecoinMainNetParams;
 import org.libdohj.params.LitecoinRegTestParams;
 import org.libdohj.params.LitecoinTestNet3Params;
@@ -29,6 +33,8 @@ public class Litecoin extends Bitcoiny {
 	private static final long NON_MAINNET_FEE = 1000L; // enough for TESTNET3 and should be OK for REGTEST
 
 	private static final Map<ElectrumX.Server.ConnectionType, Integer> DEFAULT_ELECTRUMX_PORTS = new EnumMap<>(ElectrumX.Server.ConnectionType.class);
+	public static final LitecoinMainNetParamsP2ShOverride MAIN_NET_PARAMS_P2SH_OVERRIDE = new LitecoinMainNetParamsP2ShOverride(50);
+
 	static {
 		DEFAULT_ELECTRUMX_PORTS.put(ConnectionType.TCP, 50001);
 		DEFAULT_ELECTRUMX_PORTS.put(ConnectionType.SSL, 50002);
@@ -194,5 +200,73 @@ public class Litecoin extends Bitcoiny {
 	public void setFeeRequired(long fee) {
 
 		this.litecoinNet.setFeeRequired( fee );
+	}
+
+	/**
+	 * Is P2SH Address Current?
+	 *
+	 * Is the address conforming to the current p2sh standard, prefix 'M'?
+	 *
+	 * @param address the address
+	 *
+	 * @return true if conforms to the standard, otherwise false
+	 */
+	public boolean isCurrentP2ShAddress(String address) {
+		try {
+			Script.ScriptType addressType = Address.fromString(MAIN_NET_PARAMS_P2SH_OVERRIDE, address).getOutputScriptType();
+
+			return addressType == Script.ScriptType.P2SH;
+		} catch (Exception e) {
+			LOGGER.error(e.getMessage(), e);
+			return false;
+		}
+	}
+
+	/**
+	 * Convert Current P2SH Address
+	 *
+	 * Convert a p2sh address conforming the current standard prefix 'M', to the internal standard here
+	 * using prefix '3'
+	 *
+	 * @param address the p2sh address, starts with 'M'
+	 *
+	 * @return the conversted p2sh address, starts with '3'
+	 */
+	public String convertCurrentP2ShAddress(String address) {
+
+		if( isCurrentP2ShAddress(address) ) {
+			return convertP2SHAddress(address, MAIN_NET_PARAMS_P2SH_OVERRIDE, this.params);
+		}
+		else {
+			throw new AddressFormatException("this is not a current p2sh address for Litecoin");
+		}
+	}
+
+	/**
+	 * Convert P2SH Address
+	 *
+	 * Convert p2sh address from one network standard to another.
+	 *
+	 * @param p2shAddress the p2sh address
+	 * @param fromParams the existing standard
+	 * @param toParams the desired standard
+	 *
+	 * @return the p2sh conforming to the desired standard
+	 */
+	private static String convertP2SHAddress(String p2shAddress, NetworkParameters fromParams, NetworkParameters toParams) {
+		try {
+			// decode the P2SH address
+			Address address = LegacyAddress.fromBase58(fromParams, p2shAddress);
+			byte[] hash = address.getHash();
+
+			// create a new address with the target network parameters
+			Address fromScriptHash = LegacyAddress.fromScriptHash(toParams, hash);
+
+			// return the new address as a string
+			return fromScriptHash.toString();
+		} catch (Exception e) {
+			LOGGER.error(e.getMessage(), e);
+			return null;
+		}
 	}
 }

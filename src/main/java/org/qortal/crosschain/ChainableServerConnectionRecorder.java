@@ -1,6 +1,7 @@
 package org.qortal.crosschain;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
@@ -10,7 +11,7 @@ public class ChainableServerConnectionRecorder {
     private int limit;
 
     public ChainableServerConnectionRecorder(int limit) {
-        this.connections = new ArrayList<>(limit);
+        this.connections = Collections.synchronizedList(new ArrayList<>(limit));
         this.limit = limit;
     }
 
