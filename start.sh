@@ -2,9 +2,17 @@
 
 # There's no need to run as root, so don't allow it, for security reasons
 if [ "$USER" = "root" ]; then
-	echo "Please su to non-root user before running"
-	exit
+        echo "Please su to non-root user before running"
+        exit
 fi
+
+# If docker is passed, then we want to change the behavior of the script
+# to change the log suppression
+if [ "$1" = "docker" ]; then
+        DOCKER=true
+fi
+
+
 
 # Validate Java is installed and the minimum version is available
 MIN_JAVA_VER='11'
@@ -26,8 +34,8 @@ fi
 # No qortal.jar but we have a Maven built one?
 # Be helpful and copy across to correct location
 if [ ! -e qortal.jar -a -f target/qortal*.jar ]; then
-	echo "Copying Maven-built Qortal JAR to correct pathname"
-	cp target/qortal*.jar qortal.jar
+        echo "Copying Maven-built Qortal JAR to correct pathname"
+        cp target/qortal*.jar qortal.jar
 fi
 
 # Limits Java JVM stack size and maximum heap usage.
@@ -45,12 +53,17 @@ JVM_MEMORY_ARGS="-XX:MaxRAMPercentage=50 -XX:+UseG1GC -Xss1024k"
 # by default in Java 11, on some platforms (e.g. FreeBSD 12),
 # it is overridden to be true by default. Hence we explicitly
 # set it to false to obtain desired behaviour.
-nohup nice -n 20 java \
-	-Djava.net.preferIPv4Stack=false \
-	${JVM_MEMORY_ARGS} \
-	-jar qortal.jar \
-	1>run.log 2>&1 &
 
-# Save backgrounded process's PID
-echo $! > run.pid
-echo qortal running as pid $!
+if [ "$DOCKER" = true ]; then
+        java -Djava.net.preferIPv4Stack=false $JVM_MEMORY_ARGS -jar qortal.jar
+else
+  nohup nice -n 20 java \
+          -Djava.net.preferIPv4Stack=false \
+          ${JVM_MEMORY_ARGS} \
+          -jar qortal.jar
+  # Save backgrounded process's PID
+  echo $! > run.pid
+  echo qortal running as pid $!
+fi
+
+
