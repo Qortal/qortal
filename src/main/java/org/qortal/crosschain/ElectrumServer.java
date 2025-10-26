@@ -67,7 +67,11 @@ public class ElectrumServer {
                 throw new IOException("socket is closed");
             }
 
-            this.socket.getOutputStream().write(bytes);
+            try {
+                this.socket.getOutputStream().write(bytes);
+            } catch ( java.net.SocketException ignored) {
+                return null;
+            }
 
             String response = this.scanner.next();
 
