@@ -2553,9 +2553,9 @@ public class Block {
 						.map(GroupAdminData::getAdmin)
 						.collect(Collectors.toList());
 
-				LOGGER.info("Removing NULL Account Address, Dev Admin Count = {}", devAdminAddresses.size());
+				LOGGER.debug("Removing NULL Account Address, Dev Admin Count = {}", devAdminAddresses.size());
 				devAdminAddresses.removeIf( address -> Group.NULL_OWNER_ADDRESS.equals(address) );
-				LOGGER.info("Removed NULL Account Address, Dev Admin Count = {}", devAdminAddresses.size());
+				LOGGER.debug("Removed NULL Account Address, Dev Admin Count = {}", devAdminAddresses.size());
 
 				BlockRewardDistributor devAdminDistributor
 					= (distributionAmount, balanceChanges) -> distributeToAccounts(distributionAmount, devAdminAddresses, balanceChanges);
