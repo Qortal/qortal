@@ -445,7 +445,7 @@ public class Controller extends Thread {
 				}
 			}
 			else {
-				LOGGER.info("Balance Recorder Disabled");
+				LOGGER.debug("Balance Recorder Disabled");
 			}
 		} catch (DataException e) {
 			// If exception has no cause or message then repository is in use by some other process.
