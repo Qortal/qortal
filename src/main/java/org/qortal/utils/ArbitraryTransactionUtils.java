@@ -396,8 +396,7 @@ public class ArbitraryTransactionUtils {
         return filesRelocatedCount;
     }
 
-    public static List<ArbitraryTransactionData> limitOffsetTransactions(List<ArbitraryTransactionData> transactions,
-                                                                         Integer limit, Integer offset) {
+    public static <T> List<T> limitOffsetTransactions(List<T> transactions, Integer limit, Integer offset) {
         if (limit != null && limit == 0) {
             limit = null;
         }

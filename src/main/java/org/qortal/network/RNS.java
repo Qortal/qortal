@@ -225,7 +225,7 @@ public class RNS {
    
         baseDestination.setProofStrategy(ProofStrategy.PROVE_ALL);
         baseDestination.setAcceptLinkRequests(true);
-        dataDestination.setProofStrategy(ProofStrategy.PROVE_APP);
+        dataDestination.setProofStrategy(ProofStrategy.PROVE_ALL);
         dataDestination.setAcceptLinkRequests(true);
         
         baseDestination.setLinkEstablishedCallback(this::baseClientConnected);
@@ -238,6 +238,7 @@ public class RNS {
         log.debug("Sent initial announce from {} ({})", encodeHexString(baseDestination.getHash()), baseDestination.getName());
         // announce QDN destination
         dataDestination.announce();
+        log.debug("Sent initial announce from {} ({})", encodeHexString(dataDestination.getHash()), dataDestination.getName());
     }
 
     private void initConfig(String configDir) throws IOException {
@@ -513,7 +514,7 @@ public class RNS {
                         break;
                     } else {
                         if (nonNull(p.getPeerLink())) {
-                            log.info("QAnnounceHandler - other peer - link: {}, status: {}",
+                            log.debug("QAnnounceHandler - other peer - link: {}, status: {}",
                                     encodeHexString(p.getPeerLink().getLinkId()), p.getPeerLink().getStatus());
                             if (p.getPeerLink().getStatus() == CLOSED) {
                                 // mark peer for deletion on nexe pruning
@@ -575,11 +576,22 @@ public class RNS {
     //    return this.immutableLinkedPeers;
     //}
 
+    //@Synchronized
+    //public void makePeerAvailable(ReticulumPeer peer) {
+    //    var network = Network.getInstance();
+    //    network.addConnectedPeer(peer);
+    //    network.addOutboundHandshakedPeer(peer);
+    //    network.addHandshakedPeer(peer);
+    //}
+
     public void addLinkedPeer(ReticulumPeer peer) {
         this.linkedPeers.add(peer);
         this.immutableLinkedPeers = List.copyOf(this.linkedPeers); // thread safe
-        //var network = Network.getInstance();
-        //network.addHandshakedPeer(peer);
+        // Note: moved to ReticulumPeer linkEstablished
+        var network = Network.getInstance();
+        network.addConnectedPeer(peer);
+        network.addOutboundHandshakedPeer(peer);
+        network.addHandshakedPeer(peer);
     }
 
     public void removePeer(ReticulumPeer peer) {
@@ -590,18 +602,27 @@ public class RNS {
         }
     }
 
+    //@Synchronized
+    //public void makePeerUnavailable(ReticulumPeer peer) {
+    //    var network = Network.getInstance();
+    //    network.removeHandshakedPeer(peer);
+    //    network.removeOutboundHandshakedPeer(peer);
+    //    network.removeConnectedPeer(peer);
+    //}
+
     public void removeLinkedPeer(ReticulumPeer peer) {
-        //if (nonNull(peer.getPeerBuffer())) {
-        //    peer.getPeerBuffer().close();
-        //}
+        if (nonNull(peer.getPeerBuffer())) {
+            peer.getPeerBuffer().close();
+        }
         if (nonNull(peer.getPeerLink())) {
             peer.getPeerLink().teardown();
         }
         var p = this.linkedPeers.remove(this.linkedPeers.indexOf(peer)); // thread safe
         this.immutableLinkedPeers = List.copyOf(this.linkedPeers);
-        // TODO: which list in network do we add ACTIVE ReticulumPeer ?
-        //var network = Network.getInstance();
-        //network.removeHandshakedPeer(peer);
+        var network = Network.getInstance();
+        network.removeHandshakedPeer(peer);
+        network.removeOutboundHandshakedPeer(peer);
+        network.removeConnectedPeer(peer);
     }
 
     // note: we already have a lobok getter for this
@@ -618,6 +639,9 @@ public class RNS {
     }
 
     public void removeIncomingPeer(ReticulumPeer peer) {
+        if (nonNull(peer.getPeerBuffer())) {
+            peer.getPeerBuffer().close();
+        }
         if (nonNull(peer.getPeerLink())) {
             peer.getPeerLink().teardown();
         }
@@ -632,8 +656,6 @@ public class RNS {
     //public List<ReticulumPeer> getImmutableIncomingPeers() {
     //    return this.immutableIncomingPeers;
     //}
-
-    // TODO, methods for: getAvailablePeer
 
     private Boolean isUnreachable(ReticulumPeer peer) {
         var result = peer.getDeleteMe();
@@ -695,7 +717,6 @@ public class RNS {
         List<ReticulumPeer> incomingPeerList = getImmutableIncomingPeers();
         int numActiveIncomingPeers = incomingPeerList.size() - getNonActiveIncomingPeers().size();
         List<PeerData> allKnownReticulumPeers = new ArrayList<>();
-        //var network = Network.getInstance();
         log.info("number of links (linkedPeers (active) / incomingPeers (active) before prunig: {} ({}), {} ({})",
                 initiatorPeerList.size(), getActiveImmutableLinkedPeers().size(),
                 incomingPeerList.size(), numActiveIncomingPeers);
@@ -708,22 +729,25 @@ public class RNS {
             if (nonNull(pLink)) {
                 if (p.getPeerTimedOut()) {
                     // options: keep in case peer reconnects or remove => we'll remove it
+                    //makePeerUnavailable(p);
+                    //p.setPeerTimedOut(false);
                     removeLinkedPeer(p);
-                    //network.removeHandshakedPeer(p);
                     continue;
                 }
                 if (pLink.getStatus() == ACTIVE) {
                     continue;
                 }
                 if ((pLink.getStatus() == CLOSED) || (p.getDeleteMe()))  {
+                    //makePeerUnavailable(p);
+                    //p.setDeleteMe(false);
                     removeLinkedPeer(p);
-                    //network.removeHandshakedPeer(p);
                     continue;
                 }
                 if (pLink.getStatus() == PENDING) {
                     pLink.teardown();
+                    //makePeerUnavailable(p);
+                    //p.setIsPeerAvailable(false);
                     removeLinkedPeer(p);
-                    //network.removeOutboundHandshakedPeer(p);
                     continue;
                 }
             }

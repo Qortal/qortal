@@ -168,8 +168,9 @@ public class Network {
     private Network() {
         maxMessageSize = 4 + 1 + 4 + BlockChain.getInstance().getMaxBlockSize();
 
-        minOutboundPeers = Settings.getInstance().getMinOutboundPeers();
-        maxPeers = Settings.getInstance().getMaxPeers();
+        var settings = Settings.getInstance();
+        minOutboundPeers = settings.getMinOutboundPeers() + settings.getReticulumMinOutboundPeers();
+        maxPeers = settings.getIpMaxPeers() + settings.getReticulumMaxPeers();
 
         // Instantiate Reticulum
         rns = RNS.getInstance();
@@ -630,9 +631,16 @@ public class Network {
                 return null;
             }
 
-            if (getImmutableOutboundHandshakedPeers().size() >= minOutboundPeers) {
+            // only IPPeer
+            var iOHP = getImmutableHandshakedPeers().stream()
+                    .filter(peer -> peer.getHandshakeStatus() == Handshake.COMPLETED)
+                    .collect(Collectors.toList());
+            if (iOHP.size() >= minOutboundPeers) {
                 return null;
             }
+            //if (getImmutableOutboundHandshakedPeers().size() >= minOutboundPeers) {
+            //    return null;
+            //}
 
             nextConnectTaskTimestamp.set(now + 1000L);
 
@@ -808,8 +816,14 @@ public class Network {
 
     public boolean connectPeer(Peer newPeer) throws InterruptedException {
         // Also checked before creating PeerConnectTask
-        if (getImmutableOutboundHandshakedPeers().size() >= minOutboundPeers)
+        var iOHP = getImmutableHandshakedPeers().stream()
+                                                .filter(peer -> peer.getHandshakeStatus() == Handshake.COMPLETED)
+                                                .collect(Collectors.toList());
+        if (iOHP.size() >= minOutboundPeers) {
             return false;
+        }
+        //if (getImmutableOutboundHandshakedPeers().size() >= minOutboundPeers)
+        //    return false;
 
         SocketChannel socketChannel = newPeer.connect();
         if (socketChannel == null) {
