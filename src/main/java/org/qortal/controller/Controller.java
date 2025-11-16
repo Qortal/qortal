@@ -583,7 +583,7 @@ public class Controller extends Thread {
 		LOGGER.info("Starting wallets");
 		PirateChainWalletController.getInstance().start();
 
-		LOGGER.info(String.format("Starting API on port %d", Settings.getInstance().getApiPort()));
+		LOGGER.info("Starting API on port {}", Settings.getInstance().getApiPort());
 		try {
 			ApiService apiService = ApiService.getInstance();
 			apiService.start();
@@ -595,7 +595,7 @@ public class Controller extends Thread {
 		}
 
 		if (Settings.getInstance().isGatewayEnabled()) {
-			LOGGER.info(String.format("Starting gateway service on port %d", Settings.getInstance().getGatewayPort()));
+			LOGGER.info("Starting gateway service on port {}", Settings.getInstance().getGatewayPort());
 			try {
 				GatewayService gatewayService = GatewayService.getInstance();
 				gatewayService.start();
@@ -608,7 +608,7 @@ public class Controller extends Thread {
 		}
 
 		if (Settings.getInstance().isDomainMapEnabled()) {
-			LOGGER.info(String.format("Starting domain map service on port %d", Settings.getInstance().getDomainMapPort()));
+			LOGGER.info("Starting domain map service on port {}", Settings.getInstance().getDomainMapPort());
 			try {
 				DomainMapService domainMapService = DomainMapService.getInstance();
 				domainMapService.start();
@@ -778,12 +778,12 @@ public class Controller extends Thread {
 					if (ntpTime != null) {
 						if (ntpTime != now)
 							// Only log if non-zero offset
-							LOGGER.info(String.format("Adjusting system time by NTP offset: %dms", ntpTime - now));
+							LOGGER.info("Adjusting system time by NTP offset: {}ms", ntpTime - now);
 
 						ntpCheckTimestamp = now + NTP_POST_SYNC_CHECK_PERIOD;
 						requestSysTrayUpdate = true;
 					} else {
-						LOGGER.info(String.format("No NTP offset yet"));
+						LOGGER.info("No NTP offset yet");
 						ntpCheckTimestamp = now + NTP_PRE_SYNC_CHECK_PERIOD;
 						// We can't do much without a valid NTP time
 						continue;
@@ -859,7 +859,7 @@ public class Controller extends Thread {
 						LOGGER.debug("Pruning peers...");
 						Network.getInstance().prunePeers();
 					} catch (DataException e) {
-						LOGGER.warn(String.format("Repository issue when trying to prune peers: %s", e.getMessage()));
+						LOGGER.warn("Repository issue when trying to prune peers: {}", e.getMessage());
 					}
 				}
 
@@ -918,10 +918,10 @@ public class Controller extends Thread {
 		}
 	}
 
-	public static final Predicate<Peer> hasMisbehaved = peer -> {
-		final Long lastMisbehaved = peer.getPeerData().getLastMisbehaved();
-		return lastMisbehaved != null && lastMisbehaved > NTP.getTime() - MISBEHAVIOUR_COOLOFF;
-	};
+    public static final Predicate<Peer> hasMisbehaved = peer -> {
+        final Long lastMisbehaved = peer.getPeerData().getLastMisbehaved();
+        return lastMisbehaved != null && lastMisbehaved > NTP.getTime() - MISBEHAVIOUR_COOLOFF;
+    };
 
 	public static final Predicate<Peer> hasNoRecentBlock = peer -> {
 		final Long minLatestBlockTimestamp = getMinimumLatestBlockTimestamp();
@@ -1094,7 +1094,7 @@ public class Controller extends Thread {
 				}
 			}
 			if (deletedCount > 0) {
-				LOGGER.info(String.format("Deleted %d expired, unconfirmed transaction%s", deletedCount, (deletedCount == 1 ? "" : "s")));
+				LOGGER.info("Deleted {} expired, unconfirmed transaction{}", deletedCount, (deletedCount == 1 ? "" : "s"));
 			}
 
 			repository.saveChanges();
@@ -1806,7 +1806,7 @@ public class Controller extends Thread {
 					}
 				}
 			} catch (DataException e) {
-				LOGGER.error(String.format("Repository issue while sending V2 signatures after %s to peer %s", Base58.encode(parentSignature), peer), e);
+				LOGGER.error("Repository issue while sending V2 signatures after {} to peer {}", Base58.encode(parentSignature), peer, e);
 			}
 		} else {
 			this.stats.getBlockSignaturesV2Stats.cacheHits.incrementAndGet();
@@ -1912,7 +1912,7 @@ public class Controller extends Thread {
 			}
 
 		} catch (DataException e) {
-			LOGGER.error(String.format("Repository issue while send account %s to peer %s", address, peer), e);
+			LOGGER.error("Repository issue while send account {} to peer {}", address, peer, e);
 		}
 	}
 
@@ -1948,7 +1948,7 @@ public class Controller extends Thread {
 			}
 
 		} catch (DataException e) {
-			LOGGER.error(String.format("Repository issue while send balance for account %s and asset ID %d to peer %s", address, assetId, peer), e);
+			LOGGER.error("Repository issue while send balance for account {} and asset ID {} to peer {}", address, assetId, peer, e);
 		}
 	}
 
@@ -1992,9 +1992,9 @@ public class Controller extends Thread {
 			}
 
 		} catch (DataException e) {
-			LOGGER.error(String.format("Repository issue while sending transactions for account %s %d to peer %s", address, peer), e);
+			LOGGER.error("Repository issue while sending transactions for account {} to peer {}", address, peer, e);
 		} catch (MessageException e) {
-			LOGGER.error(String.format("Message serialization issue while sending transactions for account %s %d to peer %s", address, peer), e);
+			LOGGER.error("Message serialization issue while sending transactions for account {} to peer {}", address, peer, e);
 		}
 	}
 
@@ -2029,7 +2029,7 @@ public class Controller extends Thread {
 			}
 
 		} catch (DataException e) {
-			LOGGER.error(String.format("Repository issue while send names for account %s to peer %s", address, peer), e);
+			LOGGER.error("Repository issue while send names for account {} to peer {}", address, peer, e);
 		}
 	}
 
@@ -2064,7 +2064,7 @@ public class Controller extends Thread {
 			}
 
 		} catch (DataException e) {
-			LOGGER.error(String.format("Repository issue while send name %s to peer %s", name, peer), e);
+			LOGGER.error("Repository issue while send name {} to peer {}", name, peer, e);
 		}
 	}
 
@@ -2197,7 +2197,6 @@ public class Controller extends Thread {
 			LOGGER.warn("Failed to clean up uploads-temp directory", e);
 		}
 	}
-	
 
 	public StatsSnapshot getStatsSnapshot() {
 		return this.stats;
