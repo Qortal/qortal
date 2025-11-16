@@ -2137,8 +2137,6 @@ public class Controller extends Thread {
 
 		// Needs a mutable copy of the unmodifiableList
 		List<Peer> peers = new ArrayList<>(Network.getInstance().getImmutableHandshakedPeers());
-		if (peers == null)
-			return false;
 
 		// Disregard peers that have "misbehaved" recently
 		peers.removeIf(hasMisbehaved);
