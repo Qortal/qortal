@@ -563,6 +563,7 @@ public class Controller extends Thread {
 		ArbitraryDataCleanupManager.getInstance().start();
 		ArbitraryDataStorageManager.getInstance().start();
 		ArbitraryDataRenderManager.getInstance().start();
+		ArbitraryDataHostMonitor.getInstance().start();
 
 		// start rebuild arbitrary resource cache timer task
 		if( Settings.getInstance().isRebuildArbitraryResourceCacheTaskEnabled() ) {
@@ -839,7 +840,7 @@ public class Controller extends Thread {
 		final long repositoryBackupInterval = Settings.getInstance().getRepositoryBackupInterval();
 		final long repositoryCheckpointInterval = Settings.getInstance().getRepositoryCheckpointInterval();
 		long repositoryMaintenanceInterval = getRandomRepositoryMaintenanceInterval();
-		final long prunePeersInterval = 3 * 60 * 1000L; // Every 5 minutes
+		final long prunePeersInterval = 2 * 60 * 1000L; // Every 2 minutes
 		//final long pruneRNSPeersInterval = 5 * 60 * 1000L; // Every 5 minutes
 		//final long pruneRNSPeersInterval = 1 * 60 * 1000L; // Every 1 minute (during development)
 
@@ -1273,6 +1274,7 @@ public class Controller extends Thread {
 				ArbitraryDataCleanupManager.getInstance().shutdown();
 				ArbitraryDataStorageManager.getInstance().shutdown();
 				ArbitraryDataRenderManager.getInstance().shutdown();
+				ArbitraryDataHostMonitor.getInstance().shutdown();
 
 				LOGGER.info("Shutting down online accounts manager");
 				OnlineAccountsManager.getInstance().shutdown();

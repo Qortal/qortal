@@ -99,7 +99,7 @@ public abstract class Message {
 			readOnlyBuffer.get(messageMagic);
 
 			if (!Arrays.equals(messageMagic, Network.getInstance().getMessageMagic())) {
-				LOGGER.info("xyz - mM: {}, Network getMessageMagic: {}", messageMagic, Network.getInstance().getMessageMagic());
+				LOGGER.debug("Message - received mM: {}, Network mM: {}", messageMagic, Network.getInstance().getMessageMagic());
 				// Didn't receive correct Message "magic"
 				throw new MessageException("Received incorrect message 'magic'");
 			}

@@ -196,10 +196,14 @@ public class Settings {
 	private boolean uPnPEnabled = true;
 	/** Minimum number of peers to allow block minting / synchronization. */
 	private int minBlockchainPeers = 3;
-	/** Target number of outbound connections to peers we should make. */
-	private int minOutboundPeers = 32;
+	/** Target number of outbound connections to peers we should make (IP + Reticulum). */
+	private int minOutboundPeers = 45;
+    /** Target number of outbound connections to IP peers we should make. */
+    private int ipMinOutboundPeers = 32;
 	/** Maximum number of peer connections we allow. */
 	private int maxPeers = 64;
+    /** Maximum number of IP peer connections we allow. */
+    private int ipMaxPeers = 55;
 	/** Number of slots to reserve for short-lived QDN data transfers */
 	private int maxDataPeers = 5;
 	/** Maximum number of threads for network engine. */
@@ -545,7 +549,22 @@ public class Settings {
 	 */
 	private int rebuildArbitraryResourceCacheTaskPeriod = 24;
 
-	// Domain mapping
+	/**
+	 * Electrum Thread Count
+	 *
+	 * The number of threads ready to access Electrum servers for the supported foreign coins.
+	 */
+    private int electrumThreadCount = 12;
+
+	/**
+	 * Host Monitor Enabled
+	 *
+	 * The Host Monitor is a thread that runs in the background. It crawls through the QDN data directory to monitor
+	 * what is in there. If set to false, then it will not run.
+	 */
+    private  boolean hostMonitorEnabled = false;
+
+    // Domain mapping
 	public static class ThreadLimit {
 		private String messageType;
 		private Integer limit;
@@ -624,6 +643,8 @@ public class Settings {
 	private String preferredNetwork = NetworkType.RETICULUM.name();
 	/** Maximum number of Reticulum peers allowed. */
 	private int reticulumMaxPeers = 55;
+    /** Minimum number of outgoing peers desired */
+    private int reticulumMinOutboundPeers = 13;
 	/** Minimum number of Reticulum Core peers desired. */
 	private int reticulumMinDesiredCorePeers = 5;
     /** Minimum number of Reticulum Data peers desired. */
@@ -998,6 +1019,8 @@ public class Settings {
 	public int getMaxPeers() {
 		return this.maxPeers;
 	}
+
+    public int getIpMaxPeers() { return this.ipMaxPeers; }
 
 	public int getMaxDataPeers() {
 		return this.maxDataPeers;
@@ -1413,6 +1436,10 @@ public class Settings {
 		return this.reticulumMaxPeers;
 	}
 
+    public int getReticulumMinOutboundPeers() {
+        return this.reticulumMinOutboundPeers;
+    }
+
 	public int getReticulumMinDesiredCorePeers() {
 		return this.reticulumMinDesiredCorePeers;
 	}
@@ -1459,5 +1486,13 @@ public class Settings {
 
 	public int getRebuildArbitraryResourceCacheTaskPeriod() {
 		return rebuildArbitraryResourceCacheTaskPeriod;
+	}
+
+	public int getElectrumThreadCount() {
+		return electrumThreadCount;
+	}
+
+	public boolean isHostMonitorEnabled() {
+		return hostMonitorEnabled;
 	}
 }

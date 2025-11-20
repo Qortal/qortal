@@ -38,6 +38,7 @@ import lombok.Synchronized;
 
 //import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.qortal.network.message.*;
 import org.qortal.repository.DataException;
 import org.qortal.settings.Settings;
 
@@ -59,7 +60,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 //import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 //import static org.apache.commons.lang3.BooleanUtils.isTrue;
-//import static org.apache.commons.lang3.BooleanUtils.isFalse;
+import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 import java.io.File;
 import java.util.*;
@@ -81,10 +82,6 @@ import static org.apache.commons.codec.binary.Hex.encodeHexString;
 //import org.qortal.utils.ExecuteProduceConsume.StatsSnapshot;
 import org.qortal.utils.NTP;
 //import org.qortal.utils.NamedThreadFactory;
-import org.qortal.network.message.Message;
-import org.qortal.network.message.BlockSummariesV2Message;
-import org.qortal.network.message.TransactionSignaturesMessage;
-import org.qortal.network.message.GetUnconfirmedTransactionsMessage;
 import org.qortal.data.network.PeerData;
 import org.qortal.controller.Controller;
 import org.qortal.repository.Repository;
@@ -225,7 +222,7 @@ public class RNS {
    
         baseDestination.setProofStrategy(ProofStrategy.PROVE_ALL);
         baseDestination.setAcceptLinkRequests(true);
-        dataDestination.setProofStrategy(ProofStrategy.PROVE_APP);
+        dataDestination.setProofStrategy(ProofStrategy.PROVE_ALL);
         dataDestination.setAcceptLinkRequests(true);
         
         baseDestination.setLinkEstablishedCallback(this::baseClientConnected);
@@ -238,6 +235,7 @@ public class RNS {
         log.debug("Sent initial announce from {} ({})", encodeHexString(baseDestination.getHash()), baseDestination.getName());
         // announce QDN destination
         dataDestination.announce();
+        log.debug("Sent initial announce from {} ({})", encodeHexString(dataDestination.getHash()), dataDestination.getName());
     }
 
     private void initConfig(String configDir) throws IOException {
@@ -359,6 +357,7 @@ public class RNS {
                 p.sendCloseToRemote(pl);
             }
         }
+        log.debug("Shutdown of incomingPeers completed");
         // Disconnect peers gracefully and terminate Reticulum
         for (ReticulumPeer p: linkedPeers) {
             log.info("shutting down peer: {}", encodeHexString(p.getDestinationHash()));
@@ -374,6 +373,7 @@ public class RNS {
             //    pl.teardown();
             //}
         }
+        log.debug("Shutdown of linkedPeers completed");
         //// Stop processing threads (the "server loop")
         //try {
         //    if (!this.rnsNetworkEPC.shutdown(5000)) {
@@ -477,7 +477,6 @@ public class RNS {
         }
 
         @Override
-        @Synchronized
         public void receivedAnnounce(byte[] destinationHash, Identity announcedIdentity, byte[] appData) {
             var peerExists = false;
             var activePeerCount = 0; 
@@ -513,7 +512,7 @@ public class RNS {
                         break;
                     } else {
                         if (nonNull(p.getPeerLink())) {
-                            log.info("QAnnounceHandler - other peer - link: {}, status: {}",
+                            log.debug("QAnnounceHandler - other peer - link: {}, status: {}",
                                     encodeHexString(p.getPeerLink().getLinkId()), p.getPeerLink().getStatus());
                             if (p.getPeerLink().getStatus() == CLOSED) {
                                 // mark peer for deletion on nexe pruning
@@ -575,10 +574,21 @@ public class RNS {
     //    return this.immutableLinkedPeers;
     //}
 
+    //@Synchronized
+    //public void makePeerAvailable(ReticulumPeer peer) {
+    //    var network = Network.getInstance();
+    //    network.addConnectedPeer(peer);
+    //    network.addOutboundHandshakedPeer(peer);
+    //    network.addHandshakedPeer(peer);
+    //}
+
     public void addLinkedPeer(ReticulumPeer peer) {
         this.linkedPeers.add(peer);
         this.immutableLinkedPeers = List.copyOf(this.linkedPeers); // thread safe
+        //// Note: moved to ReticulumPeer linkEstablished
         //var network = Network.getInstance();
+        //network.addConnectedPeer(peer);
+        //network.addOutboundHandshakedPeer(peer);
         //network.addHandshakedPeer(peer);
     }
 
@@ -590,18 +600,27 @@ public class RNS {
         }
     }
 
+    //@Synchronized
+    //public void makePeerUnavailable(ReticulumPeer peer) {
+    //    var network = Network.getInstance();
+    //    network.removeHandshakedPeer(peer);
+    //    network.removeOutboundHandshakedPeer(peer);
+    //    network.removeConnectedPeer(peer);
+    //}
+
     public void removeLinkedPeer(ReticulumPeer peer) {
-        //if (nonNull(peer.getPeerBuffer())) {
-        //    peer.getPeerBuffer().close();
-        //}
+        if (nonNull(peer.getPeerBuffer())) {
+            peer.getPeerBuffer().close();
+        }
         if (nonNull(peer.getPeerLink())) {
             peer.getPeerLink().teardown();
         }
         var p = this.linkedPeers.remove(this.linkedPeers.indexOf(peer)); // thread safe
         this.immutableLinkedPeers = List.copyOf(this.linkedPeers);
-        // TODO: which list in network do we add ACTIVE ReticulumPeer ?
-        //var network = Network.getInstance();
-        //network.removeHandshakedPeer(peer);
+        var network = Network.getInstance();
+        network.removeHandshakedPeer(peer);
+        network.removeOutboundHandshakedPeer(peer);
+        network.removeConnectedPeer(peer);
     }
 
     // note: we already have a lobok getter for this
@@ -618,6 +637,9 @@ public class RNS {
     }
 
     public void removeIncomingPeer(ReticulumPeer peer) {
+        if (nonNull(peer.getPeerBuffer())) {
+            peer.getPeerBuffer().close();
+        }
         if (nonNull(peer.getPeerLink())) {
             peer.getPeerLink().teardown();
         }
@@ -632,8 +654,6 @@ public class RNS {
     //public List<ReticulumPeer> getImmutableIncomingPeers() {
     //    return this.immutableIncomingPeers;
     //}
-
-    // TODO, methods for: getAvailablePeer
 
     private Boolean isUnreachable(ReticulumPeer peer) {
         var result = peer.getDeleteMe();
@@ -695,7 +715,6 @@ public class RNS {
         List<ReticulumPeer> incomingPeerList = getImmutableIncomingPeers();
         int numActiveIncomingPeers = incomingPeerList.size() - getNonActiveIncomingPeers().size();
         List<PeerData> allKnownReticulumPeers = new ArrayList<>();
-        //var network = Network.getInstance();
         log.info("number of links (linkedPeers (active) / incomingPeers (active) before prunig: {} ({}), {} ({})",
                 initiatorPeerList.size(), getActiveImmutableLinkedPeers().size(),
                 incomingPeerList.size(), numActiveIncomingPeers);
@@ -708,22 +727,25 @@ public class RNS {
             if (nonNull(pLink)) {
                 if (p.getPeerTimedOut()) {
                     // options: keep in case peer reconnects or remove => we'll remove it
+                    //makePeerUnavailable(p);
+                    //p.setPeerTimedOut(false);
                     removeLinkedPeer(p);
-                    //network.removeHandshakedPeer(p);
                     continue;
                 }
                 if (pLink.getStatus() == ACTIVE) {
                     continue;
                 }
                 if ((pLink.getStatus() == CLOSED) || (p.getDeleteMe()))  {
+                    //makePeerUnavailable(p);
+                    //p.setDeleteMe(false);
                     removeLinkedPeer(p);
-                    //network.removeHandshakedPeer(p);
                     continue;
                 }
                 if (pLink.getStatus() == PENDING) {
                     pLink.teardown();
+                    //makePeerUnavailable(p);
+                    //p.setIsPeerAvailable(false);
                     removeLinkedPeer(p);
-                    //network.removeOutboundHandshakedPeer(p);
                     continue;
                 }
             }
@@ -782,6 +804,34 @@ public class RNS {
     /**
      * Helper methods
      */
+
+    // Send Ping Message to peer through buffer.
+    // Note: This keeps Buffer,Channel and Link alive and from timing out.
+    public void onPingMessage(ReticulumPeer peer, Message message) {
+        PingMessage pingMessage = (PingMessage) message;
+
+        if (isFalse(peer.getIsInitiator())) {
+            return;
+        }
+
+        try {
+            var pb = peer.getPeerBuffer();
+            PongMessage pongMessage = new PongMessage();
+            pongMessage.setId(message.getId());  // use the ping message id (for ping getResponse)
+            pb.write(pongMessage.toBytes());
+            pb.flush();
+            peer.setLastAccessTimestamp(Instant.now());
+            peer.setLastPingSent(Instant.now().toEpochMilli());
+        } catch (MessageException e) {
+            //log.error("{} from peer {}", e.getMessage(), this);
+            log.error("{} from peer {}", e, this);
+        }
+    }
+
+    public void onPeersV2Message (Peer peer, Message message) {
+        // TODO: Do we do anything for ReticulumPeer (?)
+        log.debug("PeersV2Message - received {} message from {}", message.getType(), message);
+    }
 
     public List<PeerData> getAllKnownPeers() {
         return getImmutableIncomingPeers().stream()

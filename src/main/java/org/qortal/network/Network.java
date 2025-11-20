@@ -42,6 +42,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.qortal.network.RNSCommon.PeerType;
 import static io.reticulum.link.LinkStatus.ACTIVE;
 import static java.util.Objects.nonNull;
 import static org.apache.commons.codec.binary.Hex.encodeHexString;
@@ -168,8 +169,9 @@ public class Network {
     private Network() {
         maxMessageSize = 4 + 1 + 4 + BlockChain.getInstance().getMaxBlockSize();
 
-        minOutboundPeers = Settings.getInstance().getMinOutboundPeers();
-        maxPeers = Settings.getInstance().getMaxPeers();
+        var settings = Settings.getInstance();
+        minOutboundPeers = settings.getMinOutboundPeers() + settings.getReticulumMinOutboundPeers();
+        maxPeers = settings.getIpMaxPeers() + settings.getReticulumMaxPeers();
 
         // Instantiate Reticulum
         rns = RNS.getInstance();
@@ -630,9 +632,16 @@ public class Network {
                 return null;
             }
 
-            if (getImmutableOutboundHandshakedPeers().size() >= minOutboundPeers) {
+            // only IPPeer
+            var iOHP = getImmutableHandshakedPeers().stream()
+                    .filter(peer -> peer.getHandshakeStatus() == Handshake.COMPLETED)
+                    .collect(Collectors.toList());
+            if (iOHP.size() >= minOutboundPeers) {
                 return null;
             }
+            //if (getImmutableOutboundHandshakedPeers().size() >= minOutboundPeers) {
+            //    return null;
+            //}
 
             nextConnectTaskTimestamp.set(now + 1000L);
 
@@ -808,8 +817,14 @@ public class Network {
 
     public boolean connectPeer(Peer newPeer) throws InterruptedException {
         // Also checked before creating PeerConnectTask
-        if (getImmutableOutboundHandshakedPeers().size() >= minOutboundPeers)
+        var iOHP = getImmutableHandshakedPeers().stream()
+                                                .filter(peer -> peer.getHandshakeStatus() == Handshake.COMPLETED)
+                                                .collect(Collectors.toList());
+        if (iOHP.size() >= minOutboundPeers) {
             return false;
+        }
+        //if (getImmutableOutboundHandshakedPeers().size() >= minOutboundPeers)
+        //    return false;
 
         SocketChannel socketChannel = newPeer.connect();
         if (socketChannel == null) {
@@ -1000,10 +1015,17 @@ public class Network {
                     message.getType().name(), message.getId(), peer);
         }
 
-        Handshake handshakeStatus = peer.getHandshakeStatus();
-        if (handshakeStatus != Handshake.COMPLETED) {
-            onHandshakingMessage(peer, message, handshakeStatus);
-            return;
+        RNSCommon.PeerType pType = PeerType.IP;
+        if (peer.hasActivePeerLink()) {
+            LOGGER.trace("[{}] Message for ReticulumPeer");
+            pType = PeerType.RETICULUM;
+        } else {
+            Handshake handshakeStatus = peer.getHandshakeStatus();
+            if (handshakeStatus != Handshake.COMPLETED) {
+                onHandshakingMessage(peer, message, handshakeStatus);
+                return;
+            }
+            //pType = PeerType.IP;
         }
 
         // Should be non-handshaking messages from now on
@@ -1046,7 +1068,11 @@ public class Network {
                 break;
 
             case PING:
-                onPingMessage(peer, message);
+                if (pType == PeerType.RETICULUM) {
+                    rns.onPingMessage((ReticulumPeer) peer, message);
+                } else {
+                    onPingMessage(peer, message);
+                }
                 break;
 
             case HELLO:
@@ -1058,7 +1084,11 @@ public class Network {
                 return;
 
             case PEERS_V2:
-                onPeersV2Message(peer, message);
+                if (pType == PeerType.RETICULUM) {
+                    rns.onPeersV2Message(peer, message);
+                } else {
+                    onPeersV2Message(peer, message);
+                }
                 break;
 
             default:
@@ -1670,9 +1700,6 @@ public class Network {
         //LOGGER.info("Shutting down Reticulum...");
         //RNS.getInstance().getReticulum().exitHandler();
 
-        // shutdown Reticulum, try to gracefully shut down peers
-        rns.shutdown();
-
         // Stop processing threads
         try {
             if (!this.networkEPC.shutdown(5000)) {
@@ -1713,6 +1740,11 @@ public class Network {
         for (Peer peer : this.getImmutableConnectedPeers()) {
             peer.shutdown();
         }
+
+        // shutdown Reticulum, try to gracefully shut down peers
+        LOGGER.debug("Shutting down RNS");
+        rns.shutdown();
+        LOGGER.debug("RNS shutdown complete.");
     }
 
 }

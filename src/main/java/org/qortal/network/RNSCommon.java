@@ -41,12 +41,12 @@ public class RNSCommon {
         DATA;
     }
 
-    ///**
-    // * Qortal Peer Type
-    // */
-    //public enum PeerType {
-    //    IP,
-    //    RETICULUM;
-    //}
+    /**
+     * Qortal Peer Type
+     */
+    public enum PeerType {
+        IP,
+        RETICULUM;
+    }
 
 }

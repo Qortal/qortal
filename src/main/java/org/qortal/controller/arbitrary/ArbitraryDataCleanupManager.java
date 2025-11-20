@@ -93,7 +93,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 			allArbitraryTransactionsInDescendingOrder = new ArrayList<>(0);
 		}
 
-		Set<ArbitraryTransactionData> processedTransactions = new HashSet<>();
+		Set<ArbitraryTransactionDataHashWrapper> processedTransactions = new HashSet<>();
 
 		try {
 			while (!isStopping) {
@@ -167,7 +167,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 							continue;
 						}
 
-						boolean mostRecentTransaction = processedTransactions.add(arbitraryTransactionData);
+						boolean mostRecentTransaction = processedTransactions.add(new ArbitraryTransactionDataHashWrapper(arbitraryTransactionData));
 
 						// Check if we have the complete file
 						boolean completeFileExists = ArbitraryTransactionUtils.completeFileExists(arbitraryTransactionData);
@@ -215,7 +215,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 
 							ArbitraryTransactionUtils.deleteCompleteFileAndChunks(arbitraryTransactionData);
 
-							Optional<ArbitraryTransactionData> moreRecentPutTransaction
+							Optional<ArbitraryTransactionDataHashWrapper> moreRecentPutTransaction
 								= processedTransactions.stream()
 									.filter(data -> data.equals(arbitraryTransactionData))
 									.findAny();
@@ -229,7 +229,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 										arbitraryTransactionData.getService().name(),
 										"deleting data due to replacement",
 										arbitraryTransactionData.getTimestamp(),
-										moreRecentPutTransaction.get().getTimestamp()
+										moreRecentPutTransaction.get().getData().getTimestamp()
 									)
 								);
 							}
