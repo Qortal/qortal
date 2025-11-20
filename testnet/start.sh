@@ -19,9 +19,9 @@ fi
 
 # No qortal.jar but we have a Maven built one?
 # Be helpful and copy across to correct location
-if [ ! -e qortal.jar -a -f target/qortal*.jar ]; then
+if [ ! -e qortal.jar -a -f ../target/qortal*.jar ]; then
 	echo "Copying Maven-built Qortal JAR to correct pathname"
-	cp target/qortal*.jar qortal.jar
+	cp ../target/qortal*.jar qortal.jar
 fi
 
 # Limits Java JVM stack size and maximum heap usage.

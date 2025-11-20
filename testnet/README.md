@@ -2,7 +2,7 @@
 
 ## Create testnet blockchain config
 
-- The simplest option is to use the testchain.json included in this folder.
+- The simplest option is to use the `testchain.json` included in this folder.
 - Alternatively, you can create one by copying the mainnet blockchain config `src/main/resources/blockchain.json`
 - Insert `"isTestChain": true,` after the opening `{`
 - Modify testnet genesis block, feature triggers etc
