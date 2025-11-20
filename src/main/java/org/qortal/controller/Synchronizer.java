@@ -316,7 +316,7 @@ public class Synchronizer extends Thread {
 				case TOO_DIVERGENT:
 				case INVALID_DATA: {
 					// These are more serious results that warrant a cool-off
-					LOGGER.info(String.format("Failed to synchronize with peer %s (%s) - cooling off", peer, syncResult.name()));
+					LOGGER.info("Failed to synchronize with peer {} ({}) - cooling off", peer, syncResult.name());
 
 					// Don't use this peer again for a while
 					Network.getInstance().peerMisbehaved(peer);
