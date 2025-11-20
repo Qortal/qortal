@@ -23,7 +23,7 @@ public class Follower {
 
     private static final Logger LOGGER = LogManager.getLogger(Follower.class);
 
-    private ScheduledExecutorService service
+    private final ScheduledExecutorService service
             = Executors.newScheduledThreadPool(2, new NamedThreadFactory("Follower", Thread.NORM_PRIORITY));
 
     private Follower() {
@@ -53,7 +53,7 @@ public class Follower {
     private void fetch(OptionalInt limit) {
 
         try {
-            // for each followed name, get arbitraty transactions, then examine those transactions before fetching
+            // for each followed name, get arbitrary transactions, then examine those transactions before fetching
             for (String name : ListUtils.followedNames()) {
 
                 List<ArbitraryTransactionData> transactionsInReverseOrder;
