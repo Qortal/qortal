@@ -91,9 +91,19 @@ public class Controller extends Thread {
 	private static final int MAX_BLOCKCHAIN_TIP_AGE = 5; // blocks
 	private static final Object shutdownLock = new Object();
 	private static final String repositoryUrlTemplate = "jdbc:hsqldb:file:%s" + File.separator + "blockchain;create=true;hsqldb.full_log_replay=true";
-	private static final long NTP_PRE_SYNC_CHECK_PERIOD = 5 * 1000L; // ms
-	private static final long NTP_POST_SYNC_CHECK_PERIOD = 5 * 60 * 1000L; // ms
+
+	private static final long AUTO_RESTART_CHECK_INTERVAL = 10 * 60 * 1000L; // ms - Check connected peers for auto-restart every 10 minutes
+	private static final long BLOCK_MINTER_CHECK_INTERVAL = 10 * 60 * 1000L; // ms - Check if block minter is running every 10 minutes
+	private static final long BLOCK_MINTER_RESTART_DELAY = 10 * 1000L; // ms - Wait 10 seconds before restarting block minter
 	private static final long DELETE_EXPIRED_INTERVAL = 5 * 60 * 1000L; // ms
+	private static final int MAX_ACCOUNT_TRANSACTIONS_LIMIT = 100; // Maximum number of account transactions to return
+	private static final long NTP_POST_SYNC_CHECK_PERIOD = 5 * 60 * 1000L; // ms
+    private static final long NTP_PRE_SYNC_CHECK_PERIOD = 5 * 1000L; // ms
+	private static final long PEER_TOO_DIVERGENT_COOLOFF = 5 * 60 * 1000L; // ms - Exclude peers that were too divergent in the last 5 minutes
+	private static final long PRUNE_PEERS_INTERVAL = 5 * 60 * 1000L; // ms - Prune peers every 5 minutes
+	private static final long REPOSITORY_OPERATION_TIMEOUT = 60 * 1000L; // ms - Timeout for repository backup/maintenance operations
+	private static final long SYNC_FROM_GENESIS_CHECK_INTERVAL = 3 * 60 * 1000L; // ms - Check if sync from genesis is needed every 3 minutes
+	private static final long UP_TO_DATE_TIMESTAMP_TOLERANCE = 2 * 60 * 60 * 1000L; // ms - Consider blocks within 2 hours as "up to date"
 
 	private static volatile boolean isStopping = false;
 	private static BlockMinter blockMinter = null;
@@ -643,7 +653,7 @@ public class Controller extends Thread {
 						}
 					}
 				}
-			}, 10*60*1000, 10*60*1000);
+			}, AUTO_RESTART_CHECK_INTERVAL, AUTO_RESTART_CHECK_INTERVAL);
 		}
 
 		// Check every 10 minutes to see if the block minter is running
@@ -738,7 +748,7 @@ public class Controller extends Thread {
 					}
 				}
 			}
-		}, 3*60*1000, 3*60*1000);
+		}, SYNC_FROM_GENESIS_CHECK_INTERVAL, SYNC_FROM_GENESIS_CHECK_INTERVAL);
 	}
 
 	/** Called by AdvancedInstaller's launch EXE in single-instance mode, when an instance is already running. */
@@ -755,7 +765,7 @@ public class Controller extends Thread {
 		final long repositoryBackupInterval = Settings.getInstance().getRepositoryBackupInterval();
 		final long repositoryCheckpointInterval = Settings.getInstance().getRepositoryCheckpointInterval();
 		long repositoryMaintenanceInterval = getRandomRepositoryMaintenanceInterval();
-		final long prunePeersInterval = 5 * 60 * 1000L; // Every 5 minutes
+		final long prunePeersInterval = PRUNE_PEERS_INTERVAL;
 
 		// Start executor service for trimming or pruning
 		PruneManager.getInstance().start();
@@ -970,8 +980,8 @@ public class Controller extends Thread {
 		if (now == null || peerLastTooDivergentTime == null)
 			return false;
 
-		// Exclude any peers that were TOO_DIVERGENT in the last 5 mins
-		return (now - peerLastTooDivergentTime < 5 * 60 * 1000L);
+		// Exclude any peers that were TOO_DIVERGENT recently
+		return (now - peerLastTooDivergentTime < PEER_TOO_DIVERGENT_COOLOFF);
 	};
 
 	private long getRandomRepositoryMaintenanceInterval() {
@@ -1020,7 +1030,7 @@ public class Controller extends Thread {
 		// Use a more tolerant latest block timestamp in the isUpToDate() calls below to reduce misleading statuses.
 		// Any block in the last 2 hours is considered "up to date" for the purposes of displaying statuses.
 		// This also aligns with the time interval required for continued online account submission.
-		final Long minLatestBlockTimestamp = NTP.getTime() - (2 * 60 * 60 * 1000L);
+		final Long minLatestBlockTimestamp = NTP.getTime() - UP_TO_DATE_TIMESTAMP_TOLERANCE;
 
 		// Only show sync percent if it's less than 100, to avoid confusion
 		final Integer syncPercent = Synchronizer.getInstance().getSyncPercent();
@@ -1956,7 +1966,7 @@ public class Controller extends Thread {
 	private void onNetworkGetAccountTransactionsMessage(Peer peer, Message message) {
 		GetAccountTransactionsMessage getAccountTransactionsMessage = (GetAccountTransactionsMessage) message;
 		String address = getAccountTransactionsMessage.getAddress();
-		int limit = Math.min(getAccountTransactionsMessage.getLimit(), 100);
+		int limit = Math.min(getAccountTransactionsMessage.getLimit(), MAX_ACCOUNT_TRANSACTIONS_LIMIT);
 		int offset = getAccountTransactionsMessage.getOffset();
 		this.stats.getAccountTransactionsMessageStats.requests.incrementAndGet();
 
