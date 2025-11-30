@@ -911,7 +911,7 @@ public class Controller extends Thread {
 			repository.saveChanges();
 		}
 		catch (DataException | IOException e) {
-			LOGGER.info("Unable to import data into repository: {}", e.getMessage());
+			LOGGER.warn("Unable to import data into repository: {}", e.getMessage());
 		}
 	}
 
