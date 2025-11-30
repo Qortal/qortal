@@ -74,13 +74,9 @@ public abstract class RepositoryManager {
 		// Check if we have any transactions without a block_sequence
 		List<byte[]> testSignatures = repository.getTransactionRepository().getSignaturesMatchingCustomCriteria(
 				null, Arrays.asList("block_height IS NOT NULL AND block_sequence IS NULL"), new ArrayList<>(), 100);
-		if (testSignatures.isEmpty()) {
-			// block_sequence intact, so assume complete
-			return false;
-		}
-
-		return true;
-	}
+        // block_sequence intact, so assume complete
+        return !testSignatures.isEmpty();
+    }
 
 	public static boolean rebuildTransactionSequences(Repository repository) throws DataException {
 		if (Settings.getInstance().isLite()) {

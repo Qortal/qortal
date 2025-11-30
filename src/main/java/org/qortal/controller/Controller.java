@@ -91,14 +91,21 @@ public class Controller extends Thread {
 	private static final int MAX_BLOCKCHAIN_TIP_AGE = 5; // blocks
 	private static final Object shutdownLock = new Object();
 	private static final String repositoryUrlTemplate = "jdbc:hsqldb:file:%s" + File.separator + "blockchain;create=true;hsqldb.full_log_replay=true";
-	private static final long NTP_PRE_SYNC_CHECK_PERIOD = 5 * 1000L; // ms
-	private static final long NTP_POST_SYNC_CHECK_PERIOD = 5 * 60 * 1000L; // ms
+
+	private static final long AUTO_RESTART_CHECK_PERIOD = 10 * 60 * 1000L; // ms - Check connected peers for auto-restart every 10 minutes
 	private static final long DELETE_EXPIRED_INTERVAL = 5 * 60 * 1000L; // ms
+	private static final int MAX_ACCOUNT_TRANSACTIONS_LIMIT = 100; // Maximum number of account transactions to return
+	private static final long NTP_POST_SYNC_CHECK_PERIOD = 5 * 60 * 1000L; // ms
+    private static final long NTP_PRE_SYNC_CHECK_PERIOD = 5 * 1000L; // ms
+	private static final long PEER_TOO_DIVERGENT_COOLOFF = 5 * 60 * 1000L; // ms - Exclude peers that were too divergent in the last 5 minutes
+	private static final long PRUNE_PEERS_INTERVAL = 5 * 60 * 1000L; // ms - Prune peers every 5 minutes
+	private static final long SYNC_FROM_GENESIS_CHECK_INTERVAL = 3 * 60 * 1000L; // ms - Check if sync from genesis is needed every 3 minutes
+	private static final long UP_TO_DATE_TIMESTAMP_TOLERANCE = 2 * 60 * 60 * 1000L; // ms - Consider blocks within 2 hours as "up to date"
 
 	private static volatile boolean isStopping = false;
 	private static BlockMinter blockMinter = null;
 	private static volatile boolean requestSysTrayUpdate = true;
-	private static Controller instance;
+	private static volatile Controller instance;
 
 	private final String buildVersion;
 	private final long buildTimestamp; // seconds
@@ -119,12 +126,12 @@ public class Controller extends Thread {
 		}
 	};
 
-	private long repositoryBackupTimestamp = startTime; // ms
-	private long repositoryMaintenanceTimestamp = startTime; // ms
-	private long repositoryCheckpointTimestamp = startTime; // ms
-	private long prunePeersTimestamp = startTime; // ms
-	private long ntpCheckTimestamp = startTime; // ms
 	private long deleteExpiredTimestamp = startTime + DELETE_EXPIRED_INTERVAL; // ms
+	private long ntpCheckTimestamp = startTime; // ms
+	private long prunePeersTimestamp = startTime; // ms
+	private long repositoryBackupTimestamp = startTime; // ms
+	private long repositoryCheckpointTimestamp = startTime; // ms
+	private long repositoryMaintenanceTimestamp = startTime; // ms
 
 	/** Whether we can mint new blocks, as reported by BlockMinter. */
 	private volatile boolean isMintingPossible = false;
@@ -583,7 +590,7 @@ public class Controller extends Thread {
 		LOGGER.info("Starting wallets");
 		PirateChainWalletController.getInstance().start();
 
-		LOGGER.info(String.format("Starting API on port %d", Settings.getInstance().getApiPort()));
+		LOGGER.info("Starting API on port {}", Settings.getInstance().getApiPort());
 		try {
 			ApiService apiService = ApiService.getInstance();
 			apiService.start();
@@ -595,7 +602,7 @@ public class Controller extends Thread {
 		}
 
 		if (Settings.getInstance().isGatewayEnabled()) {
-			LOGGER.info(String.format("Starting gateway service on port %d", Settings.getInstance().getGatewayPort()));
+			LOGGER.info("Starting gateway service on port {}", Settings.getInstance().getGatewayPort());
 			try {
 				GatewayService gatewayService = GatewayService.getInstance();
 				gatewayService.start();
@@ -608,7 +615,7 @@ public class Controller extends Thread {
 		}
 
 		if (Settings.getInstance().isDomainMapEnabled()) {
-			LOGGER.info(String.format("Starting domain map service on port %d", Settings.getInstance().getDomainMapPort()));
+			LOGGER.info("Starting domain map service on port {}", Settings.getInstance().getDomainMapPort());
 			try {
 				DomainMapService domainMapService = DomainMapService.getInstance();
 				domainMapService.start();
@@ -643,7 +650,7 @@ public class Controller extends Thread {
 						}
 					}
 				}
-			}, 10*60*1000, 10*60*1000);
+			}, AUTO_RESTART_CHECK_PERIOD, AUTO_RESTART_CHECK_PERIOD);
 		}
 
 		// Check every 10 minutes to see if the block minter is running
@@ -654,16 +661,17 @@ public class Controller extends Thread {
 			public void run() {
 				if (blockMinter.isAlive()) {
 					LOGGER.debug("Block minter is running? {}", blockMinter.isAlive());
-				} else if (!blockMinter.isAlive()) {
-					LOGGER.debug("Block minter is running? {}", blockMinter.isAlive());
+				} else {
+					LOGGER.debug("Block minter is not running");
 					blockMinter.shutdown();
 
 					try {
 						// Wait 10 seconds before restart
 						TimeUnit.SECONDS.sleep(10);
 
-						// Start new block minter thread
+						// Create and start new block minter thread
 						LOGGER.info("Restarting block minter");
+						blockMinter = new BlockMinter();
 						blockMinter.start();
 					} catch (InterruptedException e) {
 						// Couldn't start new block minter thread
@@ -737,7 +745,7 @@ public class Controller extends Thread {
 					}
 				}
 			}
-		}, 3*60*1000, 3*60*1000);
+		}, SYNC_FROM_GENESIS_CHECK_INTERVAL, SYNC_FROM_GENESIS_CHECK_INTERVAL);
 	}
 
 	/** Called by AdvancedInstaller's launch EXE in single-instance mode, when an instance is already running. */
@@ -754,7 +762,7 @@ public class Controller extends Thread {
 		final long repositoryBackupInterval = Settings.getInstance().getRepositoryBackupInterval();
 		final long repositoryCheckpointInterval = Settings.getInstance().getRepositoryCheckpointInterval();
 		long repositoryMaintenanceInterval = getRandomRepositoryMaintenanceInterval();
-		final long prunePeersInterval = 5 * 60 * 1000L; // Every 5 minutes
+		final long prunePeersInterval = PRUNE_PEERS_INTERVAL;
 
 		// Start executor service for trimming or pruning
 		PruneManager.getInstance().start();
@@ -778,12 +786,12 @@ public class Controller extends Thread {
 					if (ntpTime != null) {
 						if (ntpTime != now)
 							// Only log if non-zero offset
-							LOGGER.info(String.format("Adjusting system time by NTP offset: %dms", ntpTime - now));
+							LOGGER.info("Adjusting system time by NTP offset: {}ms", ntpTime - now);
 
 						ntpCheckTimestamp = now + NTP_POST_SYNC_CHECK_PERIOD;
 						requestSysTrayUpdate = true;
 					} else {
-						LOGGER.info(String.format("No NTP offset yet"));
+						LOGGER.info("No NTP offset yet");
 						ntpCheckTimestamp = now + NTP_PRE_SYNC_CHECK_PERIOD;
 						// We can't do much without a valid NTP time
 						continue;
@@ -817,7 +825,7 @@ public class Controller extends Thread {
 						RepositoryManager.backup(true, "backup", timeout);
 
 					} catch (TimeoutException e) {
-						LOGGER.info("Attempt to backup repository failed due to timeout: {}", e.getMessage());
+						LOGGER.warn("Attempt to backup repository failed due to timeout: {}", e.getMessage());
 					}
 				}
 
@@ -843,7 +851,7 @@ public class Controller extends Thread {
 							LOGGER.info("Scheduled repository maintenance completed");
 							break;
 						} catch (DataException | TimeoutException e) {
-							LOGGER.info("Scheduled repository maintenance failed. Retrying up to 5 times...", e);
+							LOGGER.warn("Scheduled repository maintenance failed. Retrying up to 5 times...", e);
 						}
 					}
 
@@ -859,7 +867,7 @@ public class Controller extends Thread {
 						LOGGER.debug("Pruning peers...");
 						Network.getInstance().prunePeers();
 					} catch (DataException e) {
-						LOGGER.warn(String.format("Repository issue when trying to prune peers: %s", e.getMessage()));
+						LOGGER.warn("Repository issue when trying to prune peers: {}", e.getMessage());
 					}
 				}
 
@@ -870,7 +878,7 @@ public class Controller extends Thread {
 				}
 			}
 		} catch (InterruptedException e) {
-			// Clear interrupted flag so we can shutdown trim threads
+			// Clear interrupted flag so we can shut down trim threads
 			Thread.interrupted();
 			// Fall-through to exit
 		} finally {
@@ -903,7 +911,7 @@ public class Controller extends Thread {
 			repository.saveChanges();
 		}
 		catch (DataException | IOException e) {
-			LOGGER.info("Unable to import data into repository: {}", e.getMessage());
+			LOGGER.warn("Unable to import data into repository: {}", e.getMessage());
 		}
 	}
 
@@ -918,10 +926,10 @@ public class Controller extends Thread {
 		}
 	}
 
-	public static final Predicate<Peer> hasMisbehaved = peer -> {
-		final Long lastMisbehaved = peer.getPeerData().getLastMisbehaved();
-		return lastMisbehaved != null && lastMisbehaved > NTP.getTime() - MISBEHAVIOUR_COOLOFF;
-	};
+    public static final Predicate<Peer> hasMisbehaved = peer -> {
+        final Long lastMisbehaved = peer.getPeerData().getLastMisbehaved();
+        return lastMisbehaved != null && lastMisbehaved > NTP.getTime() - MISBEHAVIOUR_COOLOFF;
+    };
 
 	public static final Predicate<Peer> hasNoRecentBlock = peer -> {
 		final Long minLatestBlockTimestamp = getMinimumLatestBlockTimestamp();
@@ -969,8 +977,8 @@ public class Controller extends Thread {
 		if (now == null || peerLastTooDivergentTime == null)
 			return false;
 
-		// Exclude any peers that were TOO_DIVERGENT in the last 5 mins
-		return (now - peerLastTooDivergentTime < 5 * 60 * 1000L);
+		// Exclude any peers that were TOO_DIVERGENT recently
+		return (now - peerLastTooDivergentTime < PEER_TOO_DIVERGENT_COOLOFF);
 	};
 
 	private long getRandomRepositoryMaintenanceInterval() {
@@ -1019,7 +1027,7 @@ public class Controller extends Thread {
 		// Use a more tolerant latest block timestamp in the isUpToDate() calls below to reduce misleading statuses.
 		// Any block in the last 2 hours is considered "up to date" for the purposes of displaying statuses.
 		// This also aligns with the time interval required for continued online account submission.
-		final Long minLatestBlockTimestamp = NTP.getTime() - (2 * 60 * 60 * 1000L);
+		final Long minLatestBlockTimestamp = NTP.getTime() - UP_TO_DATE_TIMESTAMP_TOLERANCE;
 
 		// Only show sync percent if it's less than 100, to avoid confusion
 		final Integer syncPercent = Synchronizer.getInstance().getSyncPercent();
@@ -1094,7 +1102,7 @@ public class Controller extends Thread {
 				}
 			}
 			if (deletedCount > 0) {
-				LOGGER.info(String.format("Deleted %d expired, unconfirmed transaction%s", deletedCount, (deletedCount == 1 ? "" : "s")));
+				LOGGER.info("Deleted {} expired, unconfirmed transaction{}", deletedCount, (deletedCount == 1 ? "" : "s"));
 			}
 
 			repository.saveChanges();
@@ -1806,7 +1814,7 @@ public class Controller extends Thread {
 					}
 				}
 			} catch (DataException e) {
-				LOGGER.error(String.format("Repository issue while sending V2 signatures after %s to peer %s", Base58.encode(parentSignature), peer), e);
+				LOGGER.error("Repository issue while sending V2 signatures after {} to peer {}", Base58.encode(parentSignature), peer, e);
 			}
 		} else {
 			this.stats.getBlockSignaturesV2Stats.cacheHits.incrementAndGet();
@@ -1912,7 +1920,7 @@ public class Controller extends Thread {
 			}
 
 		} catch (DataException e) {
-			LOGGER.error(String.format("Repository issue while send account %s to peer %s", address, peer), e);
+			LOGGER.error("Repository issue while send account {} to peer {}", address, peer, e);
 		}
 	}
 
@@ -1948,14 +1956,14 @@ public class Controller extends Thread {
 			}
 
 		} catch (DataException e) {
-			LOGGER.error(String.format("Repository issue while send balance for account %s and asset ID %d to peer %s", address, assetId, peer), e);
+			LOGGER.error("Repository issue while send balance for account {} and asset ID {} to peer {}", address, assetId, peer, e);
 		}
 	}
 
 	private void onNetworkGetAccountTransactionsMessage(Peer peer, Message message) {
 		GetAccountTransactionsMessage getAccountTransactionsMessage = (GetAccountTransactionsMessage) message;
 		String address = getAccountTransactionsMessage.getAddress();
-		int limit = Math.min(getAccountTransactionsMessage.getLimit(), 100);
+		int limit = Math.min(getAccountTransactionsMessage.getLimit(), MAX_ACCOUNT_TRANSACTIONS_LIMIT);
 		int offset = getAccountTransactionsMessage.getOffset();
 		this.stats.getAccountTransactionsMessageStats.requests.incrementAndGet();
 
@@ -1992,9 +2000,9 @@ public class Controller extends Thread {
 			}
 
 		} catch (DataException e) {
-			LOGGER.error(String.format("Repository issue while sending transactions for account %s %d to peer %s", address, peer), e);
+			LOGGER.error("Repository issue while sending transactions for account {} to peer {}", address, peer, e);
 		} catch (MessageException e) {
-			LOGGER.error(String.format("Message serialization issue while sending transactions for account %s %d to peer %s", address, peer), e);
+			LOGGER.error("Message serialization issue while sending transactions for account {} to peer {}", address, peer, e);
 		}
 	}
 
@@ -2029,7 +2037,7 @@ public class Controller extends Thread {
 			}
 
 		} catch (DataException e) {
-			LOGGER.error(String.format("Repository issue while send names for account %s to peer %s", address, peer), e);
+			LOGGER.error("Repository issue while send names for account {} to peer {}", address, peer, e);
 		}
 	}
 
@@ -2064,7 +2072,7 @@ public class Controller extends Thread {
 			}
 
 		} catch (DataException e) {
-			LOGGER.error(String.format("Repository issue while send name %s to peer %s", name, peer), e);
+			LOGGER.error("Repository issue while send name {} to peer {}", name, peer, e);
 		}
 	}
 
@@ -2137,8 +2145,6 @@ public class Controller extends Thread {
 
 		// Needs a mutable copy of the unmodifiableList
 		List<Peer> peers = new ArrayList<>(Network.getInstance().getImmutableHandshakedPeers());
-		if (peers == null)
-			return false;
 
 		// Disregard peers that have "misbehaved" recently
 		peers.removeIf(hasMisbehaved);
@@ -2199,7 +2205,6 @@ public class Controller extends Thread {
 			LOGGER.warn("Failed to clean up uploads-temp directory", e);
 		}
 	}
-	
 
 	public StatsSnapshot getStatsSnapshot() {
 		return this.stats;
