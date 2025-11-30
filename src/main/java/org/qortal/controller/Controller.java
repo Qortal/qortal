@@ -92,16 +92,13 @@ public class Controller extends Thread {
 	private static final Object shutdownLock = new Object();
 	private static final String repositoryUrlTemplate = "jdbc:hsqldb:file:%s" + File.separator + "blockchain;create=true;hsqldb.full_log_replay=true";
 
-	private static final long AUTO_RESTART_CHECK_INTERVAL = 10 * 60 * 1000L; // ms - Check connected peers for auto-restart every 10 minutes
-	private static final long BLOCK_MINTER_CHECK_INTERVAL = 10 * 60 * 1000L; // ms - Check if block minter is running every 10 minutes
-	private static final long BLOCK_MINTER_RESTART_DELAY = 10 * 1000L; // ms - Wait 10 seconds before restarting block minter
+	private static final long AUTO_RESTART_CHECK_PERIOD = 10 * 60 * 1000L; // ms - Check connected peers for auto-restart every 10 minutes
 	private static final long DELETE_EXPIRED_INTERVAL = 5 * 60 * 1000L; // ms
 	private static final int MAX_ACCOUNT_TRANSACTIONS_LIMIT = 100; // Maximum number of account transactions to return
 	private static final long NTP_POST_SYNC_CHECK_PERIOD = 5 * 60 * 1000L; // ms
     private static final long NTP_PRE_SYNC_CHECK_PERIOD = 5 * 1000L; // ms
 	private static final long PEER_TOO_DIVERGENT_COOLOFF = 5 * 60 * 1000L; // ms - Exclude peers that were too divergent in the last 5 minutes
 	private static final long PRUNE_PEERS_INTERVAL = 5 * 60 * 1000L; // ms - Prune peers every 5 minutes
-	private static final long REPOSITORY_OPERATION_TIMEOUT = 60 * 1000L; // ms - Timeout for repository backup/maintenance operations
 	private static final long SYNC_FROM_GENESIS_CHECK_INTERVAL = 3 * 60 * 1000L; // ms - Check if sync from genesis is needed every 3 minutes
 	private static final long UP_TO_DATE_TIMESTAMP_TOLERANCE = 2 * 60 * 60 * 1000L; // ms - Consider blocks within 2 hours as "up to date"
 
@@ -129,12 +126,12 @@ public class Controller extends Thread {
 		}
 	};
 
-	private long repositoryBackupTimestamp = startTime; // ms
-	private long repositoryMaintenanceTimestamp = startTime; // ms
-	private long repositoryCheckpointTimestamp = startTime; // ms
-	private long prunePeersTimestamp = startTime; // ms
-	private long ntpCheckTimestamp = startTime; // ms
 	private long deleteExpiredTimestamp = startTime + DELETE_EXPIRED_INTERVAL; // ms
+	private long ntpCheckTimestamp = startTime; // ms
+	private long prunePeersTimestamp = startTime; // ms
+	private long repositoryBackupTimestamp = startTime; // ms
+	private long repositoryCheckpointTimestamp = startTime; // ms
+	private long repositoryMaintenanceTimestamp = startTime; // ms
 
 	/** Whether we can mint new blocks, as reported by BlockMinter. */
 	private volatile boolean isMintingPossible = false;
@@ -653,7 +650,7 @@ public class Controller extends Thread {
 						}
 					}
 				}
-			}, AUTO_RESTART_CHECK_INTERVAL, AUTO_RESTART_CHECK_INTERVAL);
+			}, AUTO_RESTART_CHECK_PERIOD, AUTO_RESTART_CHECK_PERIOD);
 		}
 
 		// Check every 10 minutes to see if the block minter is running
@@ -663,7 +660,7 @@ public class Controller extends Thread {
 			@Override
 			public void run() {
 				if (blockMinter.isAlive()) {
-					LOGGER.debug("Block minter is running");
+					LOGGER.debug("Block minter is running? {}", blockMinter.isAlive());
 				} else {
 					LOGGER.debug("Block minter is not running");
 					blockMinter.shutdown();
@@ -881,7 +878,7 @@ public class Controller extends Thread {
 				}
 			}
 		} catch (InterruptedException e) {
-			// Clear interrupted flag so we can shutdown trim threads
+			// Clear interrupted flag so we can shut down trim threads
 			Thread.interrupted();
 			// Fall-through to exit
 		} finally {
@@ -914,7 +911,7 @@ public class Controller extends Thread {
 			repository.saveChanges();
 		}
 		catch (DataException | IOException e) {
-			LOGGER.warn("Unable to import data into repository: {}", e.getMessage());
+			LOGGER.info("Unable to import data into repository: {}", e.getMessage());
 		}
 	}
 
