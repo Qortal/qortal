@@ -98,7 +98,7 @@ public class Controller extends Thread {
 	private static volatile boolean isStopping = false;
 	private static BlockMinter blockMinter = null;
 	private static volatile boolean requestSysTrayUpdate = true;
-	private static Controller instance;
+	private static volatile Controller instance;
 
 	private final String buildVersion;
 	private final long buildTimestamp; // seconds
@@ -654,16 +654,17 @@ public class Controller extends Thread {
 			public void run() {
 				if (blockMinter.isAlive()) {
 					LOGGER.debug("Block minter is running? {}", blockMinter.isAlive());
-				} else if (!blockMinter.isAlive()) {
-					LOGGER.debug("Block minter is running? {}", blockMinter.isAlive());
+				} else {
+					LOGGER.debug("Block minter is not running");
 					blockMinter.shutdown();
 
 					try {
 						// Wait 10 seconds before restart
 						TimeUnit.SECONDS.sleep(10);
 
-						// Start new block minter thread
+						// Create and start new block minter thread
 						LOGGER.info("Restarting block minter");
+						blockMinter = new BlockMinter();
 						blockMinter.start();
 					} catch (InterruptedException e) {
 						// Couldn't start new block minter thread
