@@ -663,7 +663,7 @@ public class Controller extends Thread {
 			@Override
 			public void run() {
 				if (blockMinter.isAlive()) {
-					LOGGER.debug("Block minter is running? {}", blockMinter.isAlive());
+					LOGGER.debug("Block minter is running");
 				} else {
 					LOGGER.debug("Block minter is not running");
 					blockMinter.shutdown();
@@ -828,7 +828,7 @@ public class Controller extends Thread {
 						RepositoryManager.backup(true, "backup", timeout);
 
 					} catch (TimeoutException e) {
-						LOGGER.info("Attempt to backup repository failed due to timeout: {}", e.getMessage());
+						LOGGER.warn("Attempt to backup repository failed due to timeout: {}", e.getMessage());
 					}
 				}
 
@@ -854,7 +854,7 @@ public class Controller extends Thread {
 							LOGGER.info("Scheduled repository maintenance completed");
 							break;
 						} catch (DataException | TimeoutException e) {
-							LOGGER.info("Scheduled repository maintenance failed. Retrying up to 5 times...", e);
+							LOGGER.warn("Scheduled repository maintenance failed. Retrying up to 5 times...", e);
 						}
 					}
 
@@ -914,7 +914,7 @@ public class Controller extends Thread {
 			repository.saveChanges();
 		}
 		catch (DataException | IOException e) {
-			LOGGER.info("Unable to import data into repository: {}", e.getMessage());
+			LOGGER.warn("Unable to import data into repository: {}", e.getMessage());
 		}
 	}
 
