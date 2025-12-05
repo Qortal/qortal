@@ -88,6 +88,7 @@ public class BlockChain {
 		onlyMintWithNameHeight,
 		removeOnlyMintWithNameHeight,
 		groupMemberCheckHeight,
+		groupInviteExpiryHeight,
 		fixBatchRewardHeight,
 		adminsReplaceFoundersHeight,
 		nullGroupMembershipHeight,
@@ -670,6 +671,13 @@ public class BlockChain {
 
 	public int getGroupMemberCheckHeight() {
 		return this.featureTriggers.get(FeatureTrigger.groupMemberCheckHeight.name()).intValue();
+	}
+
+	/**
+	 * Activation height for enforcing group invite expiry in the invite-first flow.
+	 */
+	public int getGroupInviteExpiryHeight() {
+		return this.featureTriggers.get(FeatureTrigger.groupInviteExpiryHeight.name()).intValue();
 	}
 
 	public int getFixBatchRewardHeight() {

@@ -647,6 +647,9 @@ public class Group {
 		String invitee = groupInviteTransactionData.getInvitee();
 
 		// If there is a pending "join request" then add new group member
+		// NOTE: TTL/expiry is intentionally NOT enforced in this join-first path (pre- and post-trigger).
+		// Any matching invite auto-approves the stored request to preserve legacy behavior. This consumes the request.
+		// TTL=0 sentinel still applies (non-expiring invite remains valid).
 		GroupJoinRequestData groupJoinRequestData = this.getJoinRequest(invitee);
 		if (groupJoinRequestData != null) {
 			this.addMember(invitee, groupInviteTransactionData);
@@ -730,6 +733,13 @@ public class Group {
 
 		// Any pending invite?
 		GroupInviteData groupInviteData = this.getInvite(joiner.getAddress());
+		int nextBlockHeight = this.repository.getBlockRepository().getBlockchainHeight() + 1;
+		boolean enforceInviteExpiry = nextBlockHeight >= BlockChain.getInstance().getGroupInviteExpiryHeight();
+
+		// Pre-trigger: preserve legacy behavior (no expiry enforcement)
+		if (enforceInviteExpiry) {
+			groupInviteData = this.applyInviteExpiry(groupInviteData, joinGroupTransactionData);
+		}
 
 		// If there is no invites and this group is "closed" (i.e. invite-only) then
 		// this is now a pending "join request"
@@ -798,6 +808,26 @@ public class Group {
 		// Clear cached references
 		joinGroupTransactionData.setInviteReference(null);
 		joinGroupTransactionData.setPreviousGroupId(null);
+	}
+
+	private GroupInviteData applyInviteExpiry(GroupInviteData groupInviteData, JoinGroupTransactionData joinGroupTransactionData) {
+		if (groupInviteData == null) {
+			return null;
+		}
+
+		Long expiry = groupInviteData.getExpiry();
+		if (expiry == null) {
+			return groupInviteData; // TTL=0 sentinel means never expires
+		}
+
+		long joinTimestamp = joinGroupTransactionData.getTimestamp();
+		// Inclusive boundary: invite valid when join timestamp is <= expiry
+		if (joinTimestamp > expiry) {
+			// Expired invite: ignore it and leave it stored
+			return null;
+		}
+
+		return groupInviteData;
 	}
 
 	public void leave(LeaveGroupTransactionData leaveGroupTransactionData) throws DataException {
