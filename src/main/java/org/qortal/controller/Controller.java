@@ -441,7 +441,7 @@ public class Controller extends Thread {
 			);
 
 			if( Settings.getInstance().isBalanceRecorderEnabled() ) {
-				Optional<HSQLDBBalanceRecorder> recorder = HSQLDBBalanceRecorder.getInstance();
+				Optional<HSQLDBBalanceRecorder> recorder = Optional.ofNullable(HSQLDBBalanceRecorder.getInstance());
 
 				if( recorder.isPresent() ) {
 					LOGGER.info("Balance Recorder Starting ...");
@@ -1134,6 +1134,15 @@ public class Controller extends Thread {
 				if (Settings.getInstance().isAutoUpdateEnabled()) {
 					LOGGER.info("Shutting down auto-update");
 					AutoUpdate.getInstance().shutdown();
+				}
+
+				if (Settings.getInstance().isBalanceRecorderEnabled()) {
+					Optional<HSQLDBBalanceRecorder> recorder = Optional.ofNullable(HSQLDBBalanceRecorder.getInstance());
+
+					if( recorder.isPresent() ) {
+						LOGGER.info("Shutting down Balance Recorder");
+						recorder.get().shutdown();
+					}
 				}
 
 				// Arbitrary data controllers

@@ -6,6 +6,7 @@
   "singleNodeTestnet": false,
   "minPeerVersion": "4.5.2",
   "allowConnectionsWithOlderPeerVersions": false,
+  "balanceRecorderEnabled": true,
   "bitcoinNet": "TEST3",
   "litecoinNet": "TEST3",
   "dogecoinNet": "TEST3",
