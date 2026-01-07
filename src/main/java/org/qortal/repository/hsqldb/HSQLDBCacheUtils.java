@@ -468,11 +468,20 @@ public class HSQLDBCacheUtils {
 
                 Thread.currentThread().setName(DB_CACHE_TIMER_TASK);
 
+                if (RepositoryManager.getRepositoryFactory() == null) {
+                    LOGGER.debug("Repository unavailable; skipping cache fill");
+                    return;
+                }
+
                 try (final Repository respository = RepositoryManager.getRepository()) {
                     fillCache(ArbitraryResourceCache.getInstance(), respository);
                 }
                 catch( DataException e ) {
-                    LOGGER.error(e.getMessage(), e);
+                    if (isRepositoryUnavailable(e)) {
+                        LOGGER.debug("Repository unavailable; skipping cache fill");
+                    } else {
+                        LOGGER.error(e.getMessage(), e);
+                    }
                 }
             }
         };
@@ -504,6 +513,11 @@ public class HSQLDBCacheUtils {
             public void run() {
 
                 Thread.currentThread().setName(BALANCE_RECORDER_TIMER_TASK);
+
+                if (RepositoryManager.getRepositoryFactory() == null) {
+                    LOGGER.debug("Repository unavailable; skipping balance recorder");
+                    return;
+                }
 
                 int currentHeight = recordCurrentBalances(balancesByHeight);
 
@@ -603,7 +617,11 @@ public class HSQLDBCacheUtils {
             LOGGER.debug(String.format("Found %s transactions for " + blockHeightRange, transactions.size()));
         } catch (Exception e) {
             transactions = new ArrayList<>(0);
-            LOGGER.warn("Problems getting transactions for balance recording: " + e.getMessage());
+            if (isRepositoryUnavailable(e)) {
+                LOGGER.debug("Repository unavailable; skipping balance transaction lookup");
+            } else {
+                LOGGER.warn("Problems getting transactions for balance recording: " + e.getMessage());
+            }
         }
         return transactions;
     }
@@ -630,7 +648,11 @@ public class HSQLDBCacheUtils {
                 currentHeight = Integer.MAX_VALUE;
             }
         } catch (DataException e) {
-            LOGGER.error(e.getMessage(), e);
+            if (isRepositoryUnavailable(e)) {
+                LOGGER.debug("Repository unavailable; skipping balance record");
+            } else {
+                LOGGER.error(e.getMessage(), e);
+            }
             currentHeight = Integer.MAX_VALUE;
         }
 
@@ -667,6 +689,21 @@ public class HSQLDBCacheUtils {
             }
         };
         return timer;
+    }
+
+    private static boolean isRepositoryUnavailable(Throwable e) {
+        if (e == null)
+            return false;
+
+        if (e instanceof DataException && e.getMessage() != null && e.getMessage().contains("No repository available")) {
+            return true;
+        }
+
+        Throwable cause = e.getCause();
+        if (cause == null || cause == e)
+            return false;
+
+        return isRepositoryUnavailable(cause);
     }
 
     /**

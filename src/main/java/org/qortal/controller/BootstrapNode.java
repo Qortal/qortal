@@ -24,6 +24,7 @@ public class BootstrapNode {
 
 	public static final String JAR_FILENAME = "qortal.jar";
 	public static final String AGENTLIB_JVM_HOLDER_ARG = "-DQORTAL_agentlib=";
+	private static final String PARENT_PID_ARG = "--parent-pid";
 
 	private static final Logger LOGGER = LogManager.getLogger(BootstrapNode.class);
 
@@ -75,6 +76,9 @@ public class BootstrapNode {
 			String[] savedArgs = Controller.getInstance().getSavedArgs();
 			if (savedArgs != null)
 				javaCmd.addAll(Arrays.asList(savedArgs));
+
+			long parentPid = ProcessHandle.current().pid();
+			javaCmd.addAll(Arrays.asList(PARENT_PID_ARG, Long.toString(parentPid)));
 
 			LOGGER.info(String.format("Restarting node with: %s", String.join(" ", javaCmd)));
 

@@ -50,9 +50,20 @@ public class ArbitraryIndexUtils {
 
                 Thread.currentThread().setName(INDEX_CACHE_TIMER_TASK);
 
+                if (RepositoryManager.getRepositoryFactory() == null) {
+                    LOGGER.debug("Repository unavailable; skipping arbitrary index cache fill");
+                    return;
+                }
+
                 try {
                     fillCache(IndexCache.getInstance());
-                } catch (IOException | DataException e) {
+                } catch (DataException e) {
+                    if (isRepositoryUnavailable(e)) {
+                        LOGGER.debug("Repository unavailable; skipping arbitrary index cache fill");
+                    } else {
+                        LOGGER.warn(e.getMessage());
+                    }
+                } catch (IOException e) {
                     LOGGER.warn(e.getMessage());
                 }
             }
@@ -180,6 +191,21 @@ public class ArbitraryIndexUtils {
             }
         };
         return timer;
+    }
+
+    private static boolean isRepositoryUnavailable(Throwable e) {
+        if (e == null)
+            return false;
+
+        if (e instanceof DataException && e.getMessage() != null && e.getMessage().contains("No repository available")) {
+            return true;
+        }
+
+        Throwable cause = e.getCause();
+        if (cause == null || cause == e)
+            return false;
+
+        return isRepositoryUnavailable(cause);
     }
 
 

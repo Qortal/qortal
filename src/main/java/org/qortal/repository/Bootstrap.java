@@ -40,6 +40,7 @@ public class Bootstrap {
     private int retryMinutes = 1;
 
     private static final Logger LOGGER = LogManager.getLogger(Bootstrap.class);
+    private static final String BOOTSTRAP_REQUEST_FILENAME = "bootstrap.requested";
 
     /** The maximum number of untrimmed blocks allowed to be included in a bootstrap, beyond the trim threshold */
     private static final int MAXIMUM_UNTRIMMED_BLOCKS = 100;
@@ -53,6 +54,38 @@ public class Bootstrap {
 
     public Bootstrap(Repository repository) {
         this.repository = repository;
+    }
+
+    public static Path getBootstrapRequestPath() {
+        Path repositoryPath = Paths.get(Settings.getInstance().getRepositoryPath()).toAbsolutePath();
+        Path parentPath = repositoryPath.getParent();
+        if (parentPath == null) {
+            parentPath = repositoryPath;
+        }
+
+        return parentPath.resolve(BOOTSTRAP_REQUEST_FILENAME);
+    }
+
+    public static boolean isBootstrapRequested() {
+        return Files.exists(getBootstrapRequestPath());
+    }
+
+    public static void requestBootstrap() throws IOException {
+        Path markerPath = getBootstrapRequestPath();
+        Files.createDirectories(markerPath.getParent());
+        Files.writeString(markerPath, "requested", StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        LOGGER.info("Bootstrap request marker created at {}", markerPath);
+    }
+
+    public static void clearBootstrapRequest() {
+        Path markerPath = getBootstrapRequestPath();
+        try {
+            if (Files.deleteIfExists(markerPath)) {
+                LOGGER.info("Bootstrap request marker removed at {}", markerPath);
+            }
+        } catch (IOException e) {
+            LOGGER.warn("Unable to remove bootstrap request marker at {}", markerPath, e);
+        }
     }
 
     /**

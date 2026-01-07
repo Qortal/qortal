@@ -413,39 +413,23 @@ public class Controller extends Thread {
 			RepositoryManager.setRepositoryFactory(repositoryFactory);
 			RepositoryManager.setRequestedCheckpoint(Boolean.TRUE);
 
+			if (Bootstrap.isBootstrapRequested()) {
+				LOGGER.info("Bootstrap requested on startup. Applying bootstrap...");
+				try {
+					Bootstrap bootstrap = new Bootstrap();
+					bootstrap.startImport();
+					if (!Controller.isStopping()) {
+						Bootstrap.clearBootstrapRequest();
+					}
+				} catch (InterruptedException e) {
+					LOGGER.error("Interrupted while applying bootstrap", e);
+					return; // Not System.exit() so that GUI can display error
+				}
+			}
+
 			try (final Repository repository = RepositoryManager.getRepository()) {
 				// RepositoryManager.rebuildTransactionSequences(repository);
 				ArbitraryDataCacheManager.getInstance().buildArbitraryResourcesCache(repository, false);
-			}
-
-			if( Settings.getInstance().isDbCacheEnabled() ) {
-				LOGGER.info("Db Cache Starting ...");
-				HSQLDBDataCacheManager hsqldbDataCacheManager = new HSQLDBDataCacheManager();
-				hsqldbDataCacheManager.start();
-			}
-			else {
-				LOGGER.info("Db Cache Disabled");
-			}
-
-			LOGGER.info("Arbitrary Indexing Starting ...");
-			ArbitraryIndexUtils.startCaching(
-				Settings.getInstance().getArbitraryIndexingPriority(),
-				Settings.getInstance().getArbitraryIndexingFrequency()
-			);
-
-			if( Settings.getInstance().isBalanceRecorderEnabled() ) {
-				Optional<HSQLDBBalanceRecorder> recorder = HSQLDBBalanceRecorder.getInstance();
-
-				if( recorder.isPresent() ) {
-					LOGGER.info("Balance Recorder Starting ...");
-					recorder.get().start();
-				}
-				else {
-					LOGGER.info("Balance Recorder won't start.");
-				}
-			}
-			else {
-				LOGGER.info("Balance Recorder Disabled");
 			}
 		} catch (DataException e) {
 			// If exception has no cause or message then repository is in use by some other process.
@@ -501,6 +485,37 @@ public class Controller extends Thread {
 		} catch (DataException e) {
 			LOGGER.error("Error checking transaction sequences in repository", e);
 			return;
+		}
+
+		// Start cache/indexing timers after validation to avoid repository swaps during bootstrap.
+		if( Settings.getInstance().isDbCacheEnabled() ) {
+			LOGGER.info("Db Cache Starting ...");
+			HSQLDBDataCacheManager hsqldbDataCacheManager = new HSQLDBDataCacheManager();
+			hsqldbDataCacheManager.start();
+		}
+		else {
+			LOGGER.info("Db Cache Disabled");
+		}
+
+		LOGGER.info("Arbitrary Indexing Starting ...");
+		ArbitraryIndexUtils.startCaching(
+			Settings.getInstance().getArbitraryIndexingPriority(),
+			Settings.getInstance().getArbitraryIndexingFrequency()
+		);
+
+		if( Settings.getInstance().isBalanceRecorderEnabled() ) {
+			Optional<HSQLDBBalanceRecorder> recorder = HSQLDBBalanceRecorder.getInstance();
+
+			if( recorder.isPresent() ) {
+				LOGGER.info("Balance Recorder Starting ...");
+				recorder.get().start();
+			}
+			else {
+				LOGGER.info("Balance Recorder won't start.");
+			}
+		}
+		else {
+			LOGGER.info("Balance Recorder Disabled");
 		}
 
 		// Import current trade bot states and minting accounts if they exist
