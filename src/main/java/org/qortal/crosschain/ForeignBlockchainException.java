@@ -11,6 +11,10 @@ public class ForeignBlockchainException extends Exception {
 		super(message);
 	}
 
+	public ForeignBlockchainException(String message, Throwable cause) {
+		super(message, cause);
+	}
+
 	public static class NetworkException extends ForeignBlockchainException {
 		private final Integer daemonErrorCode;
 		private final transient Object server;

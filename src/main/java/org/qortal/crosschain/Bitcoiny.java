@@ -27,6 +27,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 /** Bitcoin-like (Bitcoin, Litecoin, etc.) support */
@@ -138,6 +139,16 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 			Context.propagate(this.bitcoinjContext);
 			DeterministicKey.deserializeB58(null, key58, this.params);
 			return true;
+		} catch (IllegalArgumentException e) {
+			return false;
+		}
+	}
+
+	public boolean isValidDeterministicPrivateKey(String key58) {
+		try {
+			Context.propagate(this.bitcoinjContext);
+			DeterministicKey key = DeterministicKey.deserializeB58(null, key58, this.params);
+			return key.hasPrivKey();
 		} catch (IllegalArgumentException e) {
 			return false;
 		}
@@ -1223,16 +1234,16 @@ private Set<String> processKeysIterative(ExecutorService executor, Deterministic
 	 * Get wallet keys using the old key generation algorithm. This is used for diagnosing and repairing wallets
 	 * created before 2024.
 	 *
-	 * @param masterPrivateKey
+	 * @param masterKey BIP32/HD master key (private or public)
 	 *
 	 * @return the keys
 	 *
 	 * @throws ForeignBlockchainException
 	 */
-	private List<DeterministicKey> getOldWalletKeys(String masterPrivateKey) throws ForeignBlockchainException {
+	private List<DeterministicKey> getOldWalletKeys(String masterKey) throws ForeignBlockchainException {
 		Context.propagate(bitcoinjContext);
 
-		Wallet wallet = walletFromDeterministicKey58(masterPrivateKey);
+		Wallet wallet = walletFromDeterministicKey58(masterKey);
 		DeterministicKeyChain keyChain = wallet.getActiveKeyChain();
 
 		keyChain.setLookaheadSize(Bitcoiny.WALLET_KEY_LOOKAHEAD_INCREMENT);
@@ -1627,6 +1638,129 @@ private Set<String> processKeysIterative(ExecutorService executor, Deterministic
 			return Wallet.fromWatchingKeyB58(this.params, key58, DeterministicHierarchy.BIP32_STANDARDISATION_TIME_SECS);
 	}
 
+	private static class UtxoSummary {
+		private final long balance;
+		private final int utxoCount;
+
+		private UtxoSummary(long balance, int utxoCount) {
+			this.balance = balance;
+			this.utxoCount = utxoCount;
+		}
+	}
+
+	private Map<String, UtxoSummary> getUtxoSummaries(Set<String> addresses) throws ForeignBlockchainException {
+		Map<String, Future<UtxoSummary>> futures = new HashMap<>(addresses.size());
+
+		for (String address : addresses) {
+			futures.put(address, EXECUTOR.submit(() -> {
+				List<TransactionOutput> outputs = getUnspentOutputs(address, true);
+				long balance = 0L;
+				int utxoCount = 0;
+
+				for (TransactionOutput output : outputs) {
+					balance += output.getValue().value;
+					utxoCount++;
+				}
+
+				return new UtxoSummary(balance, utxoCount);
+			}));
+		}
+
+		Map<String, UtxoSummary> summaries = new HashMap<>(addresses.size());
+		for (Map.Entry<String, Future<UtxoSummary>> entry : futures.entrySet()) {
+			try {
+				summaries.put(entry.getKey(), entry.getValue().get(10, TimeUnit.SECONDS));
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new ForeignBlockchainException("Interrupted while fetching unspent outputs", e);
+			} catch (ExecutionException | TimeoutException e) {
+				throw new ForeignBlockchainException("Unable to fetch unspent outputs", e);
+			}
+		}
+
+		return summaries;
+	}
+
+	private long estimateSweepFee(int inputCount, Coin feePerKb) {
+		if (inputCount <= 0 || feePerKb == null)
+			return 0L;
+
+		int outputCount = 1;
+		int txSize = 10 + (inputCount * 148) + (outputCount * 34);
+		return (feePerKb.value * txSize) / 1000L;
+	}
+
+	public RepairWalletPreview previewRepairOldWallet(String key58) throws ForeignBlockchainException {
+		Context.propagate(this.bitcoinjContext);
+
+		List<DeterministicKey> oldKeys = getOldWalletKeys(key58);
+		if (oldKeys.isEmpty())
+			throw new ForeignBlockchainException("Unable to derive old wallet keys");
+
+		Set<String> oldAddresses = oldKeys.stream()
+				.map(key -> Address.fromKey(this.params, key, ScriptType.P2PKH).toString())
+				.collect(Collectors.toSet());
+
+		Set<String> currentAddresses = getWalletAddressesWithExecutor(key58, EXECUTOR);
+
+		Set<String> allAddresses = new HashSet<>(oldAddresses);
+		allAddresses.addAll(currentAddresses);
+
+		Map<String, UtxoSummary> summaries = getUtxoSummaries(allAddresses);
+
+		long oldBalance = 0L;
+		int oldUtxoCount = 0;
+		for (String address : oldAddresses) {
+			UtxoSummary summary = summaries.get(address);
+			if (summary != null) {
+				oldBalance += summary.balance;
+				oldUtxoCount += summary.utxoCount;
+			}
+		}
+
+		long currentBalance = 0L;
+		for (String address : currentAddresses) {
+			UtxoSummary summary = summaries.get(address);
+			if (summary != null) {
+				currentBalance += summary.balance;
+			}
+		}
+
+		Set<String> missingAddresses = new HashSet<>(oldAddresses);
+		missingAddresses.removeAll(currentAddresses);
+
+		long missingBalance = 0L;
+		int missingUtxoCount = 0;
+		for (String address : missingAddresses) {
+			UtxoSummary summary = summaries.get(address);
+			if (summary != null) {
+				missingBalance += summary.balance;
+				missingUtxoCount += summary.utxoCount;
+			}
+		}
+
+		Coin feePerKb = this.getFeePerKb();
+		long estimatedFee = estimateSweepFee(oldUtxoCount, feePerKb);
+
+		Address primaryAddress = Address.fromKey(this.params, oldKeys.get(0), ScriptType.P2PKH);
+		TransactionOutput output = new TransactionOutput(this.params, null, Coin.ZERO, primaryAddress);
+		Coin dustThresholdCoin = feePerKb != null ? output.getMinNonDustValue(feePerKb) : output.getMinNonDustValue();
+		long dustThreshold = dustThresholdCoin.value;
+
+		boolean repairRecommended = missingBalance > 0 && missingBalance > (estimatedFee + dustThreshold);
+
+		return new RepairWalletPreview(
+				oldBalance,
+				currentBalance,
+				missingBalance,
+				estimatedFee,
+				dustThreshold,
+				repairRecommended,
+				oldAddresses.size(),
+				currentAddresses.size(),
+				missingUtxoCount);
+	}
+
 	/**
 	 * Repair Wallet
 	 *
@@ -1634,12 +1768,12 @@ private Set<String> processKeysIterative(ExecutorService executor, Deterministic
 	 *
 	 * @param privateMasterKey
 	 *
-	 * @return the transaction Id of the spend operation that moves the balances or the exception name if an exception
-	 * is thrown
+	 * @return the transaction Id of the spend operation that moves the balances
 	 *
 	 * @throws ForeignBlockchainException
+	 * @throws InsufficientMoneyException
 	 */
-	public String repairOldWallet(String privateMasterKey) throws ForeignBlockchainException {
+	public String repairOldWallet(String privateMasterKey) throws ForeignBlockchainException, InsufficientMoneyException {
 
 		// create a deterministic wallet to satisfy the bitcoinj API
 		Wallet wallet = Wallet.createDeterministic(this.bitcoinjContext, ScriptType.P2PKH);
@@ -1669,10 +1803,13 @@ private Set<String> processKeysIterative(ExecutorService executor, Deterministic
 			// return the transaction Id
 			return sendRequest.tx.getTxId().toString();
 		}
-		catch( Exception e ) {
-			// log error and return exception name
-			LOGGER.error(e.getMessage(), e);
-			return e.getClass().getSimpleName();
+		catch (InsufficientMoneyException e) {
+			LOGGER.warn("Unable to repair wallet due to insufficient funds", e);
+			throw e;
+		}
+		catch (Exception e) {
+			LOGGER.error("Failed to repair wallet", e);
+			throw new ForeignBlockchainException("Unable to repair wallet", e);
 		}
 	}
 }
