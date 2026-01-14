@@ -67,7 +67,7 @@ public class Peer {
     private boolean isLocal;
 
     /**
-     * True if connected for the purposes of transfering specific QDN data
+     * True if connected for the purposes of transferring specific QDN data
      */
     private boolean isDataPeer;
 

@@ -129,7 +129,7 @@ public class ArbitraryDataStorageManager extends Thread {
 
         // Don't check for storage limits here, as it can cause the cleanup manager to delete existing data
 
-        // Check if our storage policy and and lists allow us to host data for this name
+        // Check if our storage policy and lists allow us to host data for this name
         switch (Settings.getInstance().getStoragePolicy()) {
             case FOLLOWED_OR_VIEWED:
             case ALL:

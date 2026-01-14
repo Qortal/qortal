@@ -69,7 +69,7 @@ import static org.ciyam.at.OpCode.calcOffset;
  * 			<li>Alice sends 'redeem' MESSAGE to Qortal AT from her trade address, containing:
  * 				<ul>
  * 					<li>secret-A</li>
- * 					<li>Qortal receiving address of her chosing</li>
+ * 					<li>Qortal receiving address of her choosing</li>
  * 				</ul>
  * 			</li>
  * 			<li>AT's QORT funds are sent to Qortal receiving address</li>

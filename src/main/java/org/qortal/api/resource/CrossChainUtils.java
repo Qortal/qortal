@@ -622,25 +622,25 @@ public class CrossChainUtils {
     }
 
     /**
-     * Reduce Delimeters
+     * Reduce Delimiters
      *
      * @param value the raw string
-     * @param max the max number of the delimeter
-     * @param delimeter the delimeter
-     * @return the processed value with the max number of delimeters
+     * @param max the max number of the delimiter
+     * @param delimiter the delimiter
+     * @return the processed value with the max number of delimiters
      */
-    public static String reduceDelimeters(String value, int max, char delimeter) {
+    public static String reduceDelimeters(String value, int max, char delimiter) {
 
         if( max < 1 ) return value;
 
-        String[] splits = Strings.split(value, delimeter);
+        String[] splits = Strings.split(value, delimiter);
 
         StringBuffer buffer = new StringBuffer(splits[0]);
 
         int limit = Math.min(max + 1, splits.length);
 
         for( int index = 1; index < limit; index++) {
-            buffer.append(delimeter);
+            buffer.append(delimiter);
             buffer.append(splits[index]);
         }
 

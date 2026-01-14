@@ -496,7 +496,7 @@ public class ForeignFeesManager implements Listener {
     /**
      * Maintain AT's
      *
-     * This removes fee data for AT addreses that are no longer offered on the trade portal.
+     * This removes fee data for AT addresses that are no longer offered on the trade portal.
      */
     private void maintainCrossChainOffers() {
 
@@ -538,7 +538,7 @@ public class ForeignFeesManager implements Listener {
     private List<CrossChainTradeData> resetOffersByAddress(Repository repository) throws DataException {
         List<CrossChainTradeData> crossChainTradeOffers = new ArrayList<>();
 
-        // lockdown map while reseting offers by address
+        // lockdown map while resetting offers by address
         synchronized( this.offersByAddress) {
 
             // for each supported foreign blockchaine, get AT data for trade offers
@@ -572,7 +572,7 @@ public class ForeignFeesManager implements Listener {
         // return value, false until there is a removal
         boolean anyRemovals = false;
 
-        // prepate iterator for all AT -> fee mappings
+        // prepare iterator for all AT -> fee mappings
         Iterator<Map.Entry<String, Optional<ForeignFeeDecodedData>>> iterator = feeByAT.entrySet().iterator();
 
         // iterate over all AT's mapped under management
@@ -1087,7 +1087,7 @@ public class ForeignFeesManager implements Listener {
      */
     public void importDataFromFile(String filename) throws DataException, IOException {
 
-        // file path and check for existance
+        // file path and check for existence
         Path path = Paths.get(filename);
         if (!path.toFile().exists()) {
             throw new FileNotFoundException(String.format("File doesn't exist: %s", filename));

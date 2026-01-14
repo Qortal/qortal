@@ -117,7 +117,10 @@ public class PirateWallet {
             } else {
                 // Restore existing wallet
                 String response = LiteWalletJni.initfromb64(serverUri, params, wallet, saplingOutput64, saplingSpend64);
-                if (response != null && !response.contains("\"initalized\":true")) {
+                // Upstream currently uses the misspelled "initalized"; accept both in case it is corrected.
+                boolean isInitialized = response != null
+                        && (response.contains("\"initialized\":true") || response.contains("\"initalized\":true"));
+                if (!isInitialized) {
                     LOGGER.info("Unable to initialize Pirate Chain wallet at {}: {}", serverUri, response);
                     return false;
                 }

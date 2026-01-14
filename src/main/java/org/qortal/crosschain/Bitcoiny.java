@@ -1039,8 +1039,8 @@ public List<SimpleTransaction> getWalletTransactions(String key58) throws Foreig
 	 *
 	 * Get wallet keys asynchronously
 	 *
-	 * @param key58 the master key to determine kday generation
-	 * @param executor the executor for asychronous processing
+	 * @param key58 the master key to determine key generation
+	 * @param executor the executor for asynchronous processing
 	 *
 	 * @return the keys
 	 *
@@ -1262,9 +1262,9 @@ public List<SimpleTransaction> getWalletTransactions(String key58) throws Foreig
 	 *
 	 * @param address the address
 	 * @param futures where the transaction fetch tasks get collected
-	 * @param executor for asychronous processing
+	 * @param executor for asynchronous processing
 	 *
-	 * @return true if the adddress has any transactions, false for no transactions
+	 * @return true if the address has any transactions, false for no transactions
 	 *
 	 * @throws ForeignBlockchainException
 	 */

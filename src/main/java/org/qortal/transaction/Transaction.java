@@ -587,7 +587,7 @@ public abstract class Transaction {
 		return result;
 	}
 
-	/** Returns whether transaction's fee is valid. Might be overriden in transaction subclasses. */
+	/** Returns whether transaction's fee is valid. Might be overridden in transaction subclasses. */
 	protected ValidationResult isFeeValid() throws DataException {
 		if (!hasMinimumFee() || !hasMinimumFeePerByte())
 			return ValidationResult.INSUFFICIENT_FEE;

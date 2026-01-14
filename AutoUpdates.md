@@ -16,7 +16,7 @@
 * Nodes will start to download, and apply, the update over the next 20 minutes or so (see CHECK_INTERVAL in AutoUpdate.java)
 
 ## Theory
-* Using a specific git commit (e.g. abcdef123) we produce a determinstic JAR with consistent hash.
+* Using a specific git commit (e.g. abcdef123) we produce a deterministic JAR with consistent hash.
 * To avoid issues with over-eager anti-virus / firewalls we obfuscate JAR using very simplistic XOR-based method.
 * Obfuscated JAR is uploaded to various well-known locations, usually including github itself, referenced in settings.
 * An `ARBITRARY` transaction is published by a **non-admin** member of the "dev" group (groupID 1) with:
@@ -43,7 +43,7 @@ The git SHA1 commit hash is used to replace `%s` in various download locations, 
 * https://github.com/Qortal/qortal/raw/%s/qortal.update
 * https://raw.githubusercontent.com@151.101.16.133/Qortal/qortal/%s/qortal.update
 
-These locations are part of the org.qortal.settings.Settings class and can be overriden in settings.json like:
+These locations are part of the org.qortal.settings.Settings class and can be overridden in settings.json like:
 ```
   "autoUpdateRepos": [
     "http://mirror.qortal.org/auto-updates/%s",

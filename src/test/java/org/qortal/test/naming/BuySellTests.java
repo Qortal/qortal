@@ -106,7 +106,7 @@ public class BuySellTests extends Common {
 		RegisterNameTransactionData transactionData2 = new RegisterNameTransactionData(TestTransaction.generateBase(alice), name2, "{}");
 		Transaction.ValidationResult resultBeforeFeatureTrigger = TransactionUtils.signAndImport(repository, transactionData2, alice);
 
-		// check that that multiple names is forbidden
+		// check that multiple names is forbidden
 		assertTrue(Transaction.ValidationResult.MULTIPLE_NAMES_FORBIDDEN.equals(resultBeforeFeatureTrigger));
 
 		// mint passed the feature trigger block

@@ -79,7 +79,7 @@ public class HtlcTests extends Common {
 
 			assertArrayEquals(secret1, secret2);
 
-			assertTrue("2st execution period should be effectively instant!", executionPeriod2 < 10);
+			assertTrue("2nd execution period should be effectively instant!", executionPeriod2 < 10);
 		} while (false);
 	}
 
@@ -123,7 +123,7 @@ public class HtlcTests extends Common {
 			if (System.currentTimeMillis() / 30_000L != timestampBoundary)
 				continue;
 
-			assertTrue("2st execution period should be effectively instant!", executionPeriod2 < 10);
+			assertTrue("2nd execution period should be effectively instant!", executionPeriod2 < 10);
 		} while (false);
 	}
 

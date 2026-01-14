@@ -575,7 +575,7 @@ public class CrossChainHtlcResource {
 				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
 
 			// If the AT is "finished" then it will have a zero balance
-			// In these cases we should avoid HTLC refunds if tbe QORT haven't been returned to the seller
+			// In these cases we should avoid HTLC refunds if the QORT haven't been returned to the seller
 			if (atData.getIsFinished() && crossChainTradeData.mode != AcctMode.REFUNDED && crossChainTradeData.mode != AcctMode.CANCELLED) {
 				LOGGER.info(String.format("Skipping AT %s because the QORT has already been redeemed by the buyer", atAddress));
 				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);

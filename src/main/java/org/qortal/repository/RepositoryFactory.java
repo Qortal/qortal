@@ -14,7 +14,7 @@ public interface RepositoryFactory {
 
 	public void close() throws DataException;
 
-	// Not ideal place for this but implementating class will know the answer without having to open a new DB session
+	// Not ideal place for this but implementing class will know the answer without having to open a new DB session
 	public boolean isDeadlockException(SQLException e);
 
 }

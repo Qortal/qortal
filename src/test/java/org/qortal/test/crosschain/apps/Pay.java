@@ -70,7 +70,7 @@ public class Pay {
 
 		Transaction transaction = bitcoiny.buildSpend(xprv58, address.toString(), amount.value);
 		if (transaction == null) {
-			System.err.println("Insufficent funds");
+			System.err.println("Insufficient funds");
 			System.exit(1);
 		}
 

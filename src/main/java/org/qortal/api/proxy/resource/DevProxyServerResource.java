@@ -65,7 +65,7 @@ public class DevProxyServerResource {
             }
             catch (ConnectException e) {
 
-                // Tey converting localhost / 127.0.0.1 to IPv6 [::1]
+                // Try converting localhost / 127.0.0.1 to IPv6 [::1]
                 if (source.startsWith("localhost") || source.startsWith("127.0.0.1")) {
                     int port = 80;
                     String[] parts = source.split(":");

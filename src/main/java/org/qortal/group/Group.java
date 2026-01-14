@@ -277,7 +277,7 @@ public class Group {
 	}
 
 	public void uncreate() throws DataException {
-		// Repository takes care of cleaning up ancilliary data!
+		// Repository takes care of cleaning up ancillary data!
 		this.repository.getGroupRepository().delete(this.groupData.getGroupId());
 	}
 

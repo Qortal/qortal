@@ -19,7 +19,7 @@ public interface ACCT {
 
 	public CrossChainTradeData populateTradeData(Repository repository, ATData atData) throws DataException;
 
-	public List<CrossChainTradeData> populateTradeDataList(Repository respository, List<ATData> atDataList) throws DataException;
+	public List<CrossChainTradeData> populateTradeDataList(Repository repository, List<ATData> atDataList) throws DataException;
 
 	public CrossChainTradeData populateTradeData(Repository repository, ATStateData atStateData) throws DataException;
 

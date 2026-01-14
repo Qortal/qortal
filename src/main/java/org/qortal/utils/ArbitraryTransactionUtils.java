@@ -380,7 +380,7 @@ public class ArbitraryTransactionUtils {
 
                         ArbitraryTransactionUtils.deleteCompleteFile(arbitraryTransactionData, now, cleanupAfter);
                     } else {
-                        // File might be in use. It's best to leave it and it it will be cleaned up later.
+                        // File might be in use. It's best to leave it and it will be cleaned up later.
                     }
                 }
             }

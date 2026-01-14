@@ -108,7 +108,7 @@ public class ArbitraryDataFileRequestThread {
             // Skip if already requesting, but don't remove, as we might want to retry later
             if (arbitraryDataFileManager.arbitraryDataFileRequests.containsKey(responseInfo.getHash58())) {
                 // Already requesting - leave this attempt for later
-                arbitraryDataFileManager.addResponse(responseInfo); // don't remove -> adding back, beacause it was removed already above
+                arbitraryDataFileManager.addResponse(responseInfo); // don't remove -> adding back, because it was removed already above
                 continue;
             }
 

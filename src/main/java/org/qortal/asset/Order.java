@@ -377,7 +377,7 @@ public class Order {
 			Trade trade = new Trade(this.repository, tradeData);
 			trade.process();
 
-			// Update our order in terms of fulfilment, etc. but do not save into repository as that's handled by Trade above
+			// Update our order in terms of fulfillment, etc. but do not save into repository as that's handled by Trade above
 			long amountFulfilled = matchedAmount;
 			this.orderData.setFulfilled(this.orderData.getFulfilled() + amountFulfilled);
 			LOGGER.trace(() -> String.format("Updated our order's fulfilled amount to: %s %s", prettyAmount(this.orderData.getFulfilled()), matchingAssetData.getName()));

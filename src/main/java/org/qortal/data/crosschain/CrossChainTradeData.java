@@ -62,7 +62,7 @@ public class CrossChainTradeData {
 	public Integer tradeRefundHeight;
 
 	@Deprecated
-	@Schema(description = "DEPRECATED: use expectedForeignAmount instread")
+	@Schema(description = "DEPRECATED: use expectedForeignAmount instead")
 	@XmlJavaTypeAdapter(value = org.qortal.api.AmountTypeAdapter.class)
 	public long expectedBitcoin;
 

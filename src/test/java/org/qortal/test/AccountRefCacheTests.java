@@ -47,7 +47,7 @@ public class AccountRefCacheTests extends Common {
 			// fetch 3rd ref
 			byte[] lastRef3 = account.getLastReference();
 
-			// 3rd ref should match 2st ref
+			// 3rd ref should match 2nd ref
 			assertTrue("getLastReference() should return latest value", Arrays.equals(lastRef2, lastRef3));
 
 			// 3rd ref should not match 1st ref
@@ -73,7 +73,7 @@ public class AccountRefCacheTests extends Common {
 			// fetch 3rd ref
 			byte[] lastRef3 = account.getLastReference();
 
-			// 3rd ref should match 2st ref
+			// 3rd ref should match 2nd ref
 			assertTrue("getLastReference() should return latest value", Arrays.equals(lastRef2, lastRef3));
 
 			// 3rd ref should not match 1st ref

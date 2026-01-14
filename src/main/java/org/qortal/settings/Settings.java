@@ -402,8 +402,8 @@ public class Settings {
 	/**
 	 * DB Cache Thread Priority
 	 *
-	 * If DB Cache is disabled, then this is ignored. If value is lower then 1, than 1 is used. If value is higher
-	 * than 10,, then 10 is used.
+	 * If DB Cache is disabled, then this is ignored. If value is lower than 1, then 1 is used. If value is higher
+	 * than 10, then 10 is used.
 	 */
 	private int dbCacheThreadPriority = 1;
 
@@ -427,7 +427,7 @@ public class Settings {
 	/**
 	 * The Handshake Thread Priority
 	 *
-	 * The thread priority (1 i slowest, 10 is highest) of the threads used for peer handshake messaging. This is a
+	 * The thread priority (1 is slowest, 10 is highest) of the threads used for peer handshake messaging. This is a
 	 * secondary thread to exchange status messaging to a peer in the network.
 	 */
 	private int handshakeThreadPriority = 7;
@@ -440,9 +440,9 @@ public class Settings {
 	private int pruningThreadPriority = 2;
 
 	/**
-	 * Sychronizer Thread Priority
+	 * Synchronizer Thread Priority
 	 *
-	 * The thread priority (1 is lowest, 10 is highest) of the threads used for synchronizing with the others peers.
+	 * The thread priority (1 is lowest, 10 is highest) of the threads used for synchronizing with the other peers.
 	 */
 	private int synchronizerThreadPriority = 10;
 
@@ -486,7 +486,7 @@ public class Settings {
 	/**
 	 * Minimum Balance Recording
 	 *
-	 * The minimum recored balance change in Qortoshis (1/100000000 QORT)
+	 * The minimum recorded balance change in Qortoshis (1/100000000 QORT)
 	 */
     private long minimumBalanceRecording = 100000000;
 
@@ -520,9 +520,9 @@ public class Settings {
     private boolean connectionPoolMonitorEnabled = false;
 
 	/**
-	 * Buiild Arbitrary Resources Batch Size
+	 * Build Arbitrary Resources Batch Size
 	 *
-	 * The number resources to batch per iteration when rebuilding.
+	 * The number of resources to batch per iteration when rebuilding.
 	 */
 	private int buildArbitraryResourcesBatchSize = 200;
 

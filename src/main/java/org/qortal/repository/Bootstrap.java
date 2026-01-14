@@ -206,7 +206,7 @@ public class Bootstrap {
 
         // Make sure we have a repository instance
         if (repository == null) {
-            throw new DataException("Repository instance required in order to create a boostrap");
+            throw new DataException("Repository instance required in order to create a bootstrap");
         }
 
         LOGGER.info("Deleting temp directory if it exists...");

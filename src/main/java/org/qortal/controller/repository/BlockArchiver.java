@@ -98,7 +98,7 @@ public class BlockArchiver implements Runnable {
 								// We didn't reach our file size target, so that must mean that we don't have enough blocks
 								// yet or something went wrong. Sleep for a while and then try again.
 								repository.discardChanges();
-								Thread.sleep(2 * 60 * 60 * 1000L); // 1 hour
+								Thread.sleep(2 * 60 * 60 * 1000L); // 2 hours
 								break;
 
 							case BLOCK_NOT_FOUND:

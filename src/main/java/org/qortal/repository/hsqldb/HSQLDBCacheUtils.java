@@ -472,8 +472,8 @@ public class HSQLDBCacheUtils {
 
                 Thread.currentThread().setName(DB_CACHE_TIMER_TASK);
 
-                try (final Repository respository = RepositoryManager.getRepository()) {
-                    fillCache(ArbitraryResourceCache.getInstance(), respository);
+                try (final Repository repository = RepositoryManager.getRepository()) {
+                    fillCache(ArbitraryResourceCache.getInstance(), repository);
                 }
                 catch( DataException e ) {
                     LOGGER.error(e.getMessage(), e);

@@ -1085,7 +1085,7 @@ public class BlockChain {
 					if (Controller.isStopping()) {
 						return false;
 					}
-					LOGGER.info(String.format("Forcably orphaning block %d", height));
+					LOGGER.info(String.format("Forcibly orphaning block %d", height));
 
 					Block block = new Block(repository, orphanBlockData);
 					block.orphan();

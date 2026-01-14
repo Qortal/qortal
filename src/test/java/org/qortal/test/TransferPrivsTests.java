@@ -273,7 +273,7 @@ public class TransferPrivsTests extends Common {
 			checkAccountDataRestored("recipient", pre2ndCombineChloeData, orphanedChloeData);
 			assertTrue(chloe.canMint(false));
 
-			// Orphan 1nd combine
+			// Orphan 1st combine
 			BlockUtils.orphanToBlock(repository, pre1stCombineBlockHeight);
 
 			// Sender checks

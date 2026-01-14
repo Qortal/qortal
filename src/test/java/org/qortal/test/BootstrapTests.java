@@ -228,7 +228,7 @@ public class BootstrapTests extends Common {
                 long lastModified = connection.getLastModified();
                 connection.disconnect();
 
-                // Ensure the bootstrap exists and has a size greated than 100MiB
+				// Ensure the bootstrap exists and has a size greater than 100MiB
                 System.out.println(String.format("%s %s size is %d bytes", host, type, fileSize));
                 assertTrue("Bootstrap size must be at least 100MiB", fileSize > 100*1024*1024L);
 

@@ -835,7 +835,7 @@ public class SelfSponsorshipAlgoV1Tests extends Common {
 
 			// Alice can no longer create a reward share transaction
 			// Used to Chehck for ACCOUNT_CANNOT_REWARD_SHARE / Updated post canMint() function changes
-			// canMint returns False because reward penality  != 0 (account.java:240)
+			// canMint returns False because reward penalty  != 0 (account.java:240)
 			// Causes trip in RewardShareTransaction.java:126, Returns NOT_MINTING_ACCOUNT
 			assertThat(Transaction.ValidationResult.OK, not(AccountUtils.createRandomRewardShare(repository, aliceAccount)));
 

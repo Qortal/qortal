@@ -28,7 +28,7 @@ public class BitcoinyTBD extends Bitcoiny {
 	/**
 	 * Default ElectrumX Ports
 	 *
-	 * These are the defualts for all Bitcoin forks.
+	 * These are the defaults for all Bitcoin forks.
 	 */
 	private static final Map<ConnectionType, Integer> DEFAULT_ELECTRUMX_PORTS = new EnumMap<>(ConnectionType.class);
 	static {
