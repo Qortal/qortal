@@ -218,7 +218,7 @@ public class TradeBot implements Listener {
 		}
 
 		// Check Alice doesn't already have an existing, on-going trade-bot entry for this AT.
-		if (repository.getCrossChainRepository().existsTradeWithAtExcludingStates(atData.getATAddress(), acctTradeBot.getEndStates()))
+		if (repository.getCrossChainRepository().existsAliceTradeWithAtExcludingStates(atData.getATAddress(), acctTradeBot.getEndStates()))
 			return ResponseResult.TRADE_ALREADY_EXISTS;
 
 		return acctTradeBot.startResponse(repository, atData, acct, crossChainTradeData, foreignKey, receivingAddress);
@@ -253,7 +253,7 @@ public class TradeBot implements Listener {
 
 		for( CrossChainTradeData tradeData : crossChainTradeDataList) {
 			// Check Alice doesn't already have an existing, on-going trade-bot entry for this AT.
-			if (repository.getCrossChainRepository().existsTradeWithAtExcludingStates(tradeData.qortalAtAddress, acctTradeBot.getEndStates()))
+			if (repository.getCrossChainRepository().existsAliceTradeWithAtExcludingStates(tradeData.qortalAtAddress, acctTradeBot.getEndStates()))
 				return ResponseResult.TRADE_ALREADY_EXISTS;
 		}
 		return TradeBotUtils.startResponseMultiple(repository, acct, crossChainTradeDataList, receiveAddress, foreignKey, bitcoiny);
