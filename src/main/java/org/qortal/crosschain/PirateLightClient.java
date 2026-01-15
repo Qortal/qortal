@@ -646,7 +646,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	}
 
 	private Optional<ChainableServerConnection> makeConnection(ChainableServer server, String requestedBy) {
-		LOGGER.info(() -> String.format("Connecting to %s", server));
+		LOGGER.debug(() -> String.format("Connecting to %s", server));
 
 		try {
 			this.channel = ManagedChannelBuilder.forAddress(server.getHostName(), server.getPort()).build();
@@ -665,7 +665,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 //				if (this.expectedGenesisHash != null && !((String) featuresJson.get("genesis_hash")).equals(this.expectedGenesisHash))
 //					continue;
 
-			LOGGER.info(() -> String.format("Connected to %s", server));
+			LOGGER.debug(() -> String.format("Connected to %s", server));
 			this.currentServer = server;
 			return Optional.of( this.recorder.recordConnection(server, requestedBy,true, true, EMPTY) );
 		} catch (Exception e) {

@@ -691,7 +691,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 		List<ElectrumServer> servers = drainRandomly(this.availableConnections, this.availableConnections.size() / 2);
 
-		LOGGER.info("{} draining count {}", this.blockchain.currencyCode, servers.size());
+		LOGGER.debug("{} draining count {}", this.blockchain.currencyCode, servers.size());
 		return servers;
 	}
 
@@ -926,7 +926,10 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 			return Optional.of( this.recorder.recordConnection( server, requestedBy, true, true, EMPTY) );
 		} catch (IOException | ForeignBlockchainException | ClassCastException | NullPointerException e) {
 			// Didn't work, try another server...
-			return Optional.of( this.recorder.recordConnection( server, requestedBy, true, false, CrossChainUtils.getNotes(e)));
+			return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false, CrossChainUtils.getNotes(e)));
+		} catch (IllegalStateException e) {
+			// Don't show error when handshake is not complete
+			return Optional.empty();
 		} catch( Exception e ) {
 			LOGGER.error(e.getMessage(), e);
 			return Optional.empty();

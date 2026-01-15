@@ -312,8 +312,6 @@ public class PirateChain extends Bitcoiny {
 	private void establishConnection() {
 		try {
 
-			LOGGER.info("Checking Pirate Chain Connection ... ");
-
 			int height;
 			synchronized( this ) {
 				height = this.blockchainProvider.getCurrentHeight();
