@@ -207,7 +207,7 @@ public class AssetsResource {
 			@Parameter(ref = "limit") @QueryParam("limit") Integer limit,
 			@Parameter(ref = "reverse") @QueryParam("reverse") Boolean reverse) {
 
-		Optional<HSQLDBBalanceRecorder> recorder = HSQLDBBalanceRecorder.getInstance();
+		Optional<HSQLDBBalanceRecorder> recorder = Optional.ofNullable(HSQLDBBalanceRecorder.getInstance());
 
 		if( recorder.isPresent()) {
 			return recorder.get().getRanges(offset, limit, reverse);
@@ -237,7 +237,7 @@ public class AssetsResource {
 	})
 	public BlockHeightRange getBalanceDynamicRange(@PathParam("height") int height) {
 
-		Optional<HSQLDBBalanceRecorder> recorder = HSQLDBBalanceRecorder.getInstance();
+		Optional<HSQLDBBalanceRecorder> recorder = Optional.ofNullable(HSQLDBBalanceRecorder.getInstance());
 
 		if( recorder.isPresent()) {
 			Optional<BlockHeightRange> range = recorder.get().getRange(height);
@@ -280,7 +280,7 @@ public class AssetsResource {
 			@Parameter(ref = "offset") @QueryParam("offset") Integer offset,
 			@Parameter(ref = "limit") @QueryParam("limit") Integer limit) {
 
-		Optional<HSQLDBBalanceRecorder> recorder = HSQLDBBalanceRecorder.getInstance();
+		Optional<HSQLDBBalanceRecorder> recorder = Optional.ofNullable(HSQLDBBalanceRecorder.getInstance());
 
 		if( recorder.isPresent()) {
 			Optional<BlockHeightRangeAddressAmounts> addressAmounts = recorder.get().getAddressAmounts(new BlockHeightRange(begin, end, false));
