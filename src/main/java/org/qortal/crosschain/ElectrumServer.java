@@ -38,6 +38,7 @@ public class ElectrumServer {
 
         this.socket = new Socket();
         this.socket.connect(endpoint, timeout);
+        this.socket.setSoTimeout(timeout);
         this.socket.setTcpNoDelay(true);
 
         if (this.server.getConnectionType() == ElectrumX.Server.ConnectionType.SSL) {

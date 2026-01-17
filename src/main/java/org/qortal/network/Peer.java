@@ -5,6 +5,7 @@ import org.qortal.data.block.BlockSummaryData;
 import org.qortal.data.block.CommonBlockData;
 import org.qortal.data.network.PeerData;
 import org.qortal.network.message.Message;
+import org.qortal.network.RNSCommon.PeerType;
 import org.qortal.utils.ExecuteProduceConsume.Task;
 
 import java.io.IOException;
@@ -78,7 +79,7 @@ public interface Peer {
     default void setPeersPublicKey(byte[] peersPublicKey) { return; }
     default void setPeersChallenge(byte[] peersChallenge) { return; }
     default byte[] getOurChallenge() { return  null; }
-    default byte[] getPeersPublicKey() { return null; }
+    default byte[] getPeersPublicKey() { return new byte[]{}; }
     default byte[] getPeersChallenge() { return null; }
     default void setHandshakeStatus(Handshake handshake) { return; }
     default InetSocketAddress getResolvedAddress() { return null; }
@@ -91,5 +92,6 @@ public interface Peer {
     default SocketChannel getSocketChannel() { return null; }
     default boolean hasReachedMaxConnectionAge() { return false; }
     default void resetHandshakeMessagePending() { return; }
+    PeerType getPeerType();
 }
 

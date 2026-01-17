@@ -58,8 +58,8 @@ public class ArbitraryIndexUtils {
             }
         };
 
-        // delay 1 second
-        timer.scheduleAtFixedRate(task, 1_000, frequency * 60_000);
+        // delay by the frequency
+        timer.scheduleAtFixedRate(task, frequency * 60_000, frequency * 60_000);
     }
 
     private static void fillCache(IndexCache instance) throws DataException, IOException {

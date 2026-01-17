@@ -9,7 +9,7 @@ import org.qortal.controller.Controller;
 import org.qortal.data.block.BlockSummaryData;
 import org.qortal.data.block.CommonBlockData;
 import org.qortal.data.network.PeerData;
-//import org.qortal.network.RNSCommon.PeerType;
+import org.qortal.network.RNSCommon.PeerType;
 import org.qortal.network.message.ChallengeMessage;
 import org.qortal.network.message.Message;
 import org.qortal.network.message.MessageException;
@@ -35,8 +35,8 @@ import java.util.regex.Pattern;
 // For managing one peer
 public class IPPeer implements Peer {
     private static final Logger LOGGER = LogManager.getLogger(IPPeer.class);
+    private PeerType peerType = PeerType.IP;
 
-    //private PeerType peerType = PeerType.IP;
     /**
      * Maximum time to allow <tt>connect()</tt> to remote peer to complete. (ms)
      */
@@ -180,7 +180,7 @@ public class IPPeer implements Peer {
     public IPPeer(PeerData peerData) {
         this.isOutbound = true;
         this.peerData = peerData;
-        //this.peerData.setPeerType(PeerType.IP);
+        this.peerData.setPeerType(this.peerType);
     }
 
     /**
@@ -197,7 +197,7 @@ public class IPPeer implements Peer {
 
         PeerAddress peerAddress = (PeerAddress) IPPeerAddress.fromSocket(socketChannel.socket());
         this.peerData = new PeerData(peerAddress);
-        //this.peerData.setPeerType(PeerType.IP);
+        this.peerData.setPeerType(this.peerType);
     }
 
     ///**
@@ -216,13 +216,9 @@ public class IPPeer implements Peer {
 
     // Getters / setters
 
-    //public PeerType getPeerType() {
-    //    return this.peerType = peerType;
-    //}
-
-    //private void setPeerKind(PeerKind peerKind) {
-    //    this.peerKind = peerKind;
-    //}
+    public PeerType getPeerType() {
+        return this.peerType;
+    }
 
     public boolean isStopping() {
         return this.isStopping;

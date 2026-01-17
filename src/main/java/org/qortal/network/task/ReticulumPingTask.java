@@ -30,16 +30,31 @@ public class ReticulumPingTask implements Task {
 
     @Override
     public void perform() throws InterruptedException {
+        //// only do a link-level ping
+        //peer.pingRemote();
+
         PingMessage pingMessage = new PingMessage();
 
-        // Note: Even though getResponse would work, we can use
-        //       peer.sendMessage(pingMessage) using Reticulum buffer instead.
-        //       More efficient and saves room for other request/response tasks.
-        //peer.getResponse(pingMessage);
-        // Note: We chose asynchronous for ping, no need to block queues for this.
-        peer.sendMessage(pingMessage);
+        // Note: Even though getResponse works, we can also use
+        //       peer.sendMessage(pingMessage) for ReticulumPeer.
+        //       More efficient as it is asynchronous.
 
-        //// task is not over here (Reticulum is asynchronous)
+        // Approach 1: getResponse()
+        Message message = peer.getResponse(pingMessage);
+        if (message == null || message.getType() != MessageType.PONG) {
+            LOGGER.debug("[{}] Didn't receive reply from {} for PING ID {}",
+                    peer.getPeerConnectionId(), peer, pingMessage.getId());
+            // for Reticulum, ping is a keep-alive, not to steer connectivity.
+            //peer.disconnect("no pong received");
+            return;
+        }
+        peer.setLastPing(NTP.getTime() - now);
+
+
+        //// Approach 2: sendMessage(), asynchronous the ReticulumPeer case.
+        //// Note: We chose asynchronous for ping, no need to block queues for this.
+        ////       However we'll have to artificially delay to avoid rapid firing pings.
+        //peer.sendMessage(pingMessage);
         //peer.setLastPing(NTP.getTime() - now);
     }
 }
