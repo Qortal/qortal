@@ -14,6 +14,7 @@ import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.model.GroupMembers;
 import org.qortal.api.model.GroupMembers.MemberInfo;
 import org.qortal.crypto.Crypto;
+import org.qortal.data.block.BlockData;
 import org.qortal.data.group.*;
 import org.qortal.data.transaction.*;
 import org.qortal.repository.DataException;
@@ -723,7 +724,8 @@ public class GroupsResource {
 	@GET
 	@Path("/invites/{address}")
 	@Operation(
-		summary = "Pending group invites",
+		summary = "Pending group invites (expired invites filtered by chain tip; expiry == null never expires; inclusive boundary)",
+		description = "Returns pending invites for the given address. Expired invites are filtered using the current chain-tip block timestamp (inclusive: expiry >= chain tip); invites with no expiry (expiry == null) are always returned. If the node has no chain tip yet, filtering is skipped.",
 		responses = {
 			@ApiResponse(
 				description = "group invite",
@@ -737,7 +739,8 @@ public class GroupsResource {
 	@ApiErrors({ApiError.REPOSITORY_ISSUE})
 	public List<GroupInviteData> getInvitesByInvitee(@PathParam("address") String invitee) {
 		try (final Repository repository = RepositoryManager.getRepository()) {
-			return repository.getGroupRepository().getInvitesByInvitee(invitee);
+			List<GroupInviteData> invites = repository.getGroupRepository().getInvitesByInvitee(invitee);
+			return this.filterExpiredInvites(repository, invites);
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}
@@ -746,7 +749,8 @@ public class GroupsResource {
 	@GET
 	@Path("/invites/group/{groupid}")
 	@Operation(
-		summary = "Pending group invites",
+		summary = "Pending group invites (expired invites filtered by chain tip; expiry == null never expires; inclusive boundary)",
+		description = "Returns pending invites for the given group. Expired invites are filtered using the current chain-tip block timestamp (inclusive: expiry >= chain tip); invites with no expiry (expiry == null) are always returned. If the node has no chain tip yet, filtering is skipped.",
 		responses = {
 			@ApiResponse(
 				description = "group invite",
@@ -760,7 +764,8 @@ public class GroupsResource {
 	@ApiErrors({ApiError.REPOSITORY_ISSUE})
 	public List<GroupInviteData> getInvitesByGroupId(@PathParam("groupid") int groupId) {
 		try (final Repository repository = RepositoryManager.getRepository()) {
-			return repository.getGroupRepository().getInvitesByGroupId(groupId);
+			List<GroupInviteData> invites = repository.getGroupRepository().getInvitesByGroupId(groupId);
+			return this.filterExpiredInvites(repository, invites);
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}
@@ -836,6 +841,18 @@ public class GroupsResource {
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}
+	}
+
+	private List<GroupInviteData> filterExpiredInvites(Repository repository, List<GroupInviteData> invites) throws DataException {
+		BlockData chainTip = repository.getBlockRepository().getLastBlock();
+		if (chainTip == null)
+			return invites; // No chain tip yet; avoid local time
+
+		long chainTipTimestamp = chainTip.getTimestamp();
+		Predicate<GroupInviteData> unexpiredOrNoTtl = inviteData ->
+				inviteData.getExpiry() == null || inviteData.getExpiry() >= chainTipTimestamp;
+
+		return invites.stream().filter(unexpiredOrNoTtl).collect(Collectors.toList());
 	}
 
 	@POST

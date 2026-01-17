@@ -108,6 +108,7 @@
 		"enableRewardshareHeight": 9999999999999,
 		"onlyMintWithNameHeight": 9999999999990,
 		"groupMemberCheckHeight": 9999999999999,
+		"groupInviteExpiryHeight": 0,
 		"decreaseOnlineAccountsDifficultyTimestamp": 9999999999999,
 		"removeOnlyMintWithNameHeight": 9999999999999,
 		"fixBatchRewardHeight": 9999999999999,

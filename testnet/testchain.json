@@ -106,7 +106,8 @@
 		"disableRewardshareHeight": 8450,
 		"enableRewardshareHeight": 11400,
 		"onlyMintWithNameHeight": 8500,
-		"groupMemberCheckHeight": 11200
+		"groupMemberCheckHeight": 11200,
+		"groupInviteExpiryHeight": 0
 	},
 	"genesisInfo": {
 		"version": 4,

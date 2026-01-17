@@ -115,6 +115,7 @@
 		"onlyMintWithNameHeight": 1900300,
 		"removeOnlyMintWithNameHeight": 1935500,
 		"groupMemberCheckHeight": 1902700,
+		"groupInviteExpiryHeight": 99999999,
 		"fixBatchRewardHeight": 1945900,
 		"adminsReplaceFoundersHeight": 2012800,
 		"nullGroupMembershipHeight": 2012800,
