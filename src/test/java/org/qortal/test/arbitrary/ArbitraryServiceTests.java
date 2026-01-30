@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
@@ -55,6 +56,26 @@ public class ArbitraryServiceTests extends Common {
         Service service = Service.ARBITRARY_DATA;
         assertFalse(service.isValidationRequired());
         // Test validation anyway to ensure that no exception is thrown
+        assertEquals(ValidationResult.OK, service.validate(path));
+    }
+
+    @Test
+    public void testValidateChainCommentIgnoresQortalMetadata() throws IOException {
+        Path path = Files.createTempDirectory("testValidateChainCommentIgnoresQortalMetadata");
+        path.toFile().deleteOnExit();
+
+        byte[] commentData = new byte[200];
+        Arrays.fill(commentData, (byte) 'a');
+        Files.write(Paths.get(path.toString(), "comment"), commentData, StandardOpenOption.CREATE);
+
+        Path qortalPath = Paths.get(path.toString(), ".qortal");
+        Files.createDirectories(qortalPath);
+        byte[] metadata = new byte[512];
+        Arrays.fill(metadata, (byte) 'b');
+        Files.write(Paths.get(qortalPath.toString(), "cache"), metadata, StandardOpenOption.CREATE);
+
+        Service service = Service.CHAIN_COMMENT;
+        assertTrue(service.isValidationRequired());
         assertEquals(ValidationResult.OK, service.validate(path));
     }
 
