@@ -398,6 +398,11 @@ public class ArbitraryMetadataManager {
 
     private void processNetworkGetArbitraryMetadataMessage() {
 
+        // Exit gracefully if shutting down
+        if (Controller.isStopping()) {
+            return;
+        }
+
         try {
             List<PeerMessage> messagesToProcess;
             synchronized (lock) {
@@ -530,5 +535,30 @@ public class ArbitraryMetadataManager {
         } catch (Exception e) {
             LOGGER.error(e.getMessage(), e);
         }
+    }
+
+    /**
+     * Shutdown the scheduler
+     *
+     * Stops the scheduled executor service to allow clean shutdown
+     */
+    public void shutdown() {
+        LOGGER.info("Shutting down ArbitraryMetadataManager scheduler...");
+
+        if (!scheduler.isShutdown()) {
+            scheduler.shutdown();
+            try {
+                if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                    scheduler.shutdownNow();
+                    LOGGER.debug("Scheduler forced shutdown");
+                }
+            } catch (InterruptedException e) {
+                scheduler.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            LOGGER.debug("Scheduler shutdown complete");
+        }
+
+        LOGGER.info("ArbitraryMetadataManager scheduler shutdown complete");
     }
 }

@@ -92,6 +92,27 @@ public class TransactionImporter extends Thread {
     public void shutdown() {
         isStopping = true;
         this.interrupt();
+
+        // Shutdown all schedulers
+        LOGGER.info("Shutting down TransactionImporter schedulers");
+        try {
+            getTransactionMessageScheduler.shutdownNow();
+            getUnconfirmedTransactionsMessageScheduler.shutdownNow();
+            signatureMessageScheduler.shutdownNow();
+
+            if (!getTransactionMessageScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                LOGGER.warn("getTransactionMessageScheduler did not terminate in time");
+            }
+            if (!getUnconfirmedTransactionsMessageScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                LOGGER.warn("getUnconfirmedTransactionsMessageScheduler did not terminate in time");
+            }
+            if (!signatureMessageScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                LOGGER.warn("signatureMessageScheduler did not terminate in time");
+            }
+        } catch (InterruptedException e) {
+            LOGGER.warn("Interrupted while waiting for TransactionImporter schedulers to terminate", e);
+            Thread.currentThread().interrupt();
+        }
     }
 
 
@@ -245,6 +266,13 @@ public class TransactionImporter extends Thread {
             return;
         }
 
+        // discard general chat transactions, chat transactions with no group and no recipient
+        sigValidTransactions.removeIf(
+                transactionData -> transactionData.getType() == Transaction.TransactionType.CHAT &&
+                        transactionData.getTxGroupId() == 0 &&
+                        transactionData.getRecipient() == null
+        );
+
         if (Synchronizer.getInstance().isSyncRequested() || Synchronizer.getInstance().isSynchronizing()) {
             // Prioritize syncing, and don't attempt to lock
             return;
@@ -397,6 +425,9 @@ public class TransactionImporter extends Thread {
     }
 
     private void processNetworkGetTransactionMessages() {
+        if (Controller.isStopping()) {
+            return;
+        }
 
         try {
             List<PeerMessage> messagesToProcess;
@@ -490,7 +521,6 @@ public class TransactionImporter extends Thread {
     // Scheduled executor service to process messages every second
     private final ScheduledExecutorService getUnconfirmedTransactionsMessageScheduler = Executors.newScheduledThreadPool(1);
 
-
     public void onNetworkGetUnconfirmedTransactionsMessage(Peer peer, Message message) {
         synchronized (getUnconfirmedTransactionsMessageLock) {
             getUnconfirmedTransactionsMessageList.add(new PeerMessage(peer, message));
@@ -498,6 +528,9 @@ public class TransactionImporter extends Thread {
     }
 
     private void processNetworkGetUnconfirmedTransactionsMessages() {
+        if (Controller.isStopping()) {
+            return;
+        }
 
         List<PeerMessage> messagesToProcess;
         synchronized (getUnconfirmedTransactionsMessageLock) {
@@ -542,6 +575,9 @@ public class TransactionImporter extends Thread {
     }
 
     public void processNetworkTransactionSignaturesMessage() {
+        if (Controller.isStopping()) {
+            return;
+        }
 
         try {
             List<PeerMessage> messagesToProcess;

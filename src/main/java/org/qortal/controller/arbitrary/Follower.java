@@ -68,7 +68,8 @@ public class Follower {
                         final int blockHeightThreshold = repository.getBlockRepository().getBlockchainHeight() - limit.getAsInt();
 
                         transactionsInReverseOrder
-                                = latestArbitraryTransactionsByName.stream().filter(tx -> tx.getBlockHeight() > blockHeightThreshold)
+                                = latestArbitraryTransactionsByName.stream()
+                                .filter(tx -> tx.getBlockHeight() != null && tx.getBlockHeight() > blockHeightThreshold)
                                 .collect(Collectors.toList());
                     } else {
                         transactionsInReverseOrder = latestArbitraryTransactionsByName;

@@ -63,6 +63,13 @@ public class ArbitraryDataCacheManager extends Thread {
 
                     // Process queue
                     processResourceQueue();
+                } catch (InterruptedException e) {
+                    // Check if we're shutting down
+                    if (Controller.isStopping()) {
+                        LOGGER.info("Arbitrary Data Cache Manager shutting down");
+                        break;
+                    }
+                    LOGGER.warn("Arbitrary Data Cache Manager interrupted, retrying...", e);
                 } catch (Exception e) {
                     LOGGER.error(e.getMessage(), e);
                     Thread.sleep(600_000L); // wait 10 minutes to continue
@@ -71,6 +78,10 @@ public class ArbitraryDataCacheManager extends Thread {
 
             // Clear queue before terminating thread
             processResourceQueue();
+        } catch (InterruptedException e) {
+            if (!Controller.isStopping()) {
+                LOGGER.error("Arbitrary Data Cache Manager interrupted unexpectedly", e);
+            }
         } catch (Exception e) {
             LOGGER.error(e.getMessage(), e);
         }

@@ -45,6 +45,12 @@ public class ChatMessagesWebSocket extends ApiWebSocket {
 		if (txGroupIds != null && txGroupIds.size() == 1) {
 			int txGroupId = Integer.parseInt(txGroupIds.get(0));
 
+			// reject general chat
+			if( txGroupId == 0 ) {
+				session.close(4001, "invalid criteria");
+				return;
+			}
+
 			try (final Repository repository = RepositoryManager.getRepository()) {
 				List<ChatMessage> chatMessages = repository.getChatRepository().getMessagesMatchingCriteria(
 						null,

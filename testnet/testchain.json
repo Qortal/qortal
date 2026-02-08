@@ -106,7 +106,16 @@
 		"disableRewardshareHeight": 8450,
 		"enableRewardshareHeight": 11400,
 		"onlyMintWithNameHeight": 8500,
-		"groupMemberCheckHeight": 11200
+		"groupMemberCheckHeight": 11200,
+		"decreaseOnlineAccountsDifficultyTimestamp": 9999999999999,
+		"removeOnlyMintWithNameHeight": 9999999999999,
+		"fixBatchRewardHeight": 9999999999999,
+		"adminsReplaceFoundersHeight": 0,
+		"nullGroupMembershipHeight": 0,
+		"ignoreLevelForRewardShareHeight": 0,
+		"adminQueryFixHeight": 0,
+		"multipleNamesPerAccountHeight": 0,
+		"mintedBlocksAdjustmentRemovalHeight": 0
 	},
 	"genesisInfo": {
 		"version": 4,

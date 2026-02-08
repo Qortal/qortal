@@ -30,6 +30,7 @@ public class NamesDatabaseIntegrityCheck {
     );
 
     private List<TransactionData> nameTransactions = new ArrayList<>();
+    private Map<String, List<TransactionData>> transactionsByNameCache = null;
 
 
     public int rebuildName(String name, Repository repository) {
@@ -130,18 +131,55 @@ public class NamesDatabaseIntegrityCheck {
 
     public int rebuildAllNames() {
         int modificationCount = 0;
+        long startTime = System.currentTimeMillis();
+
         try (final Repository repository = RepositoryManager.getRepository()) {
-            List<String> names = this.fetchAllNames(repository); // TODO: de-duplicate, to speed up this process
+            // Build cache of all transactions by name to avoid repeated database queries
+            long cacheStartTime = System.currentTimeMillis();
+            this.buildTransactionsByNameCache(repository);
+            long cacheEndTime = System.currentTimeMillis();
+            LOGGER.info("Cache built in {} ms", cacheEndTime - cacheStartTime);
+
+            List<String> names = this.fetchAllNames(repository);
+            int totalNames = names.size();
+            LOGGER.info("Rebuilding {} names...", totalNames);
+
+            int processedCount = 0;
+            int logInterval = Math.max(1, totalNames / 10); // Log every 10%
+
             for (String name : names) {
                 modificationCount += this.rebuildName(name, repository);
+                processedCount++;
+
+                // Log progress every logInterval names
+                if (processedCount % logInterval == 0 || processedCount == totalNames) {
+                    long elapsedTime = System.currentTimeMillis() - startTime;
+                    double percentComplete = (processedCount * 100.0) / totalNames;
+                    long estimatedTotalTime = (long) (elapsedTime / (processedCount / (double) totalNames));
+                    long estimatedTimeRemaining = estimatedTotalTime - elapsedTime;
+
+                    LOGGER.info(String.format("Progress: %d/%d names (%.1f%%) - Elapsed: %d ms - Est. remaining: %d ms",
+                            processedCount, totalNames, percentComplete,
+                            elapsedTime, estimatedTimeRemaining));
+                }
             }
+
+            long saveStartTime = System.currentTimeMillis();
             repository.saveChanges();
+            long saveEndTime = System.currentTimeMillis();
+            LOGGER.info("Changes saved in {} ms", saveEndTime - saveStartTime);
+
+            // Clear cache after use
+            this.transactionsByNameCache = null;
+
+            long totalTime = System.currentTimeMillis() - startTime;
+            LOGGER.info("Rebuild completed: {} modifications in {} ms ({} seconds)",
+                    modificationCount, totalTime, totalTime / 1000.0);
         }
         catch (DataException e) {
             LOGGER.info("Error when running integrity check for all names: {}", e.getMessage());
         }
 
-        //LOGGER.info("modificationCount: {}", modificationCount);
         return modificationCount;
     }
 
@@ -307,7 +345,86 @@ public class NamesDatabaseIntegrityCheck {
         this.nameTransactions = nameTransactions;
     }
 
+    private void buildTransactionsByNameCache(Repository repository) throws DataException {
+        LOGGER.info("Building transaction cache for all names...");
+        this.transactionsByNameCache = new HashMap<>();
+
+        // Fetch all name transactions if not already fetched
+        if (this.nameTransactions.isEmpty()) {
+            this.fetchAllNameTransactions(repository);
+        }
+
+        // Group all transactions by the names they involve
+        for (TransactionData transactionData : this.nameTransactions) {
+            // Filter out unconfirmed transactions
+            if (transactionData.getBlockHeight() == null || transactionData.getBlockHeight() <= 0) {
+                continue;
+            }
+
+            Set<String> involvedNames = new HashSet<>();
+
+            if (transactionData instanceof RegisterNameTransactionData) {
+                RegisterNameTransactionData registerNameTransactionData = (RegisterNameTransactionData) transactionData;
+                involvedNames.add(registerNameTransactionData.getName());
+                String reducedName = Unicode.sanitize(registerNameTransactionData.getName());
+                if (reducedName != null && !reducedName.equals(registerNameTransactionData.getName())) {
+                    involvedNames.add(reducedName);
+                }
+            }
+            else if (transactionData instanceof UpdateNameTransactionData) {
+                UpdateNameTransactionData updateNameTransactionData = (UpdateNameTransactionData) transactionData;
+                involvedNames.add(updateNameTransactionData.getName());
+                if (updateNameTransactionData.getNewName() != null) {
+                    involvedNames.add(updateNameTransactionData.getNewName());
+                    String reducedNewName = Unicode.sanitize(updateNameTransactionData.getNewName());
+                    if (reducedNewName != null && !reducedNewName.isEmpty()) {
+                        involvedNames.add(reducedNewName);
+                    }
+                }
+            }
+            else if (transactionData instanceof BuyNameTransactionData) {
+                BuyNameTransactionData buyNameTransactionData = (BuyNameTransactionData) transactionData;
+                involvedNames.add(buyNameTransactionData.getName());
+            }
+            else if (transactionData instanceof SellNameTransactionData) {
+                SellNameTransactionData sellNameTransactionData = (SellNameTransactionData) transactionData;
+                involvedNames.add(sellNameTransactionData.getName());
+            }
+            else if (transactionData instanceof CancelSellNameTransactionData) {
+                CancelSellNameTransactionData cancelSellNameTransactionData = (CancelSellNameTransactionData) transactionData;
+                involvedNames.add(cancelSellNameTransactionData.getName());
+            }
+
+            // Add this transaction to all involved names
+            for (String involvedName : involvedNames) {
+                if (involvedName == null || involvedName.isEmpty()) {
+                    continue;
+                }
+                this.transactionsByNameCache.computeIfAbsent(involvedName, k -> new ArrayList<>()).add(transactionData);
+            }
+        }
+
+        // Sort all transaction lists by block height and timestamp
+        for (List<TransactionData> transactions : this.transactionsByNameCache.values()) {
+            sortTransactions(transactions);
+        }
+
+        LOGGER.info("Transaction cache built for {} unique names", this.transactionsByNameCache.size());
+    }
+
     public List<TransactionData> fetchAllTransactionsInvolvingName(String name, Repository repository) throws DataException {
+        // Use cache if available
+        if (this.transactionsByNameCache != null) {
+            List<TransactionData> cachedTransactions = this.transactionsByNameCache.get(name);
+            if (cachedTransactions != null) {
+                // Return a copy to avoid external modifications
+                return new ArrayList<>(cachedTransactions);
+            }
+            // If not in cache, return empty list (all names should be in cache when it's built)
+            return new ArrayList<>();
+        }
+
+        // Fall back to database queries if cache not available
         List<byte[]> signatures = new ArrayList<>();
         String reducedName = Unicode.sanitize(name);
 
@@ -361,7 +478,7 @@ public class NamesDatabaseIntegrityCheck {
     }
 
     private List<String> fetchAllNames(Repository repository) throws DataException {
-        List<String> names = new ArrayList<>();
+        Set<String> namesSet = new HashSet<>();
 
         // Fetch all the confirmed name transactions
         if (this.nameTransactions.isEmpty()) {
@@ -372,46 +489,39 @@ public class NamesDatabaseIntegrityCheck {
 
             if ((transactionData instanceof RegisterNameTransactionData)) {
                 RegisterNameTransactionData registerNameTransactionData = (RegisterNameTransactionData) transactionData;
-                if (!names.contains(registerNameTransactionData.getName())) {
-                    names.add(registerNameTransactionData.getName());
-                }
+                namesSet.add(registerNameTransactionData.getName());
             }
             if ((transactionData instanceof UpdateNameTransactionData)) {
                 UpdateNameTransactionData updateNameTransactionData = (UpdateNameTransactionData) transactionData;
-                if (!names.contains(updateNameTransactionData.getName())) {
-                    names.add(updateNameTransactionData.getName());
-                }
-                if (!names.contains(updateNameTransactionData.getNewName())) {
-                    names.add(updateNameTransactionData.getNewName());
+                namesSet.add(updateNameTransactionData.getName());
+                if (updateNameTransactionData.getNewName() != null) {
+                    namesSet.add(updateNameTransactionData.getNewName());
                 }
             }
             if ((transactionData instanceof BuyNameTransactionData)) {
                 BuyNameTransactionData buyNameTransactionData = (BuyNameTransactionData) transactionData;
-                if (!names.contains(buyNameTransactionData.getName())) {
-                    names.add(buyNameTransactionData.getName());
-                }
+                namesSet.add(buyNameTransactionData.getName());
             }
             if ((transactionData instanceof SellNameTransactionData)) {
                 SellNameTransactionData sellNameTransactionData = (SellNameTransactionData) transactionData;
-                if (!names.contains(sellNameTransactionData.getName())) {
-                    names.add(sellNameTransactionData.getName());
-                }
+                namesSet.add(sellNameTransactionData.getName());
             }
             if ((transactionData instanceof CancelSellNameTransactionData)) {
                 CancelSellNameTransactionData cancelSellNameTransactionData = (CancelSellNameTransactionData) transactionData;
-                if (!names.contains(cancelSellNameTransactionData.getName())) {
-                    names.add(cancelSellNameTransactionData.getName());
-                }
+                namesSet.add(cancelSellNameTransactionData.getName());
             }
         }
-        return names;
+        return new ArrayList<>(namesSet);
     }
 
     private int addAdditionalTransactionsRelatingToName(List<TransactionData> transactions, String name, Repository repository) throws DataException {
         int added = 0;
 
+        // Use a HashSet for O(1) lookups when checking for existing transactions
+        Set<TransactionData> existingTransactions = new HashSet<>(transactions);
+
         // If this name has been updated at any point, we need to add transactions from the other names to the sequence
-        List<String> otherNames = new ArrayList<>();
+        Set<String> otherNames = new HashSet<>();
         List<TransactionData> updateNameTransactions = transactions.stream().filter(t -> t.getType() == TransactionType.UPDATE_NAME).collect(Collectors.toList());
         for (TransactionData transactionData : updateNameTransactions) {
             UpdateNameTransactionData updateNameTransactionData = (UpdateNameTransactionData) transactionData;
@@ -431,9 +541,10 @@ public class NamesDatabaseIntegrityCheck {
         for (String otherName : otherNames) {
             List<TransactionData> otherNameTransactions = this.fetchAllTransactionsInvolvingName(otherName, repository);
             for (TransactionData otherNameTransactionData : otherNameTransactions) {
-                if (!transactions.contains(otherNameTransactionData)) {
+                if (!existingTransactions.contains(otherNameTransactionData)) {
                     // Add new transaction relating to other name
                     transactions.add(otherNameTransactionData);
+                    existingTransactions.add(otherNameTransactionData);
                     added++;
                 }
             }

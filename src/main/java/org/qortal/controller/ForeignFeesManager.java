@@ -415,6 +415,9 @@ public class ForeignFeesManager implements Listener {
 
                     ATData atData = repository.getATRepository().fromATAddress(atAddress);
 
+                    // if AT data is not available, then continue on to the next AT
+                    if( atData == null ) continue;
+
                     LOGGER.debug("verify signer for atAddress = " + atAddress);
 
                     // determine if the creator authorized the foreign fee

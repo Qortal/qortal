@@ -7,6 +7,7 @@ import org.qortal.data.chat.ActiveChats;
 import org.qortal.data.chat.ActiveChats.DirectChat;
 import org.qortal.data.chat.ActiveChats.GroupChat;
 import org.qortal.data.chat.ChatMessage;
+import org.qortal.data.group.GroupMemberData;
 import org.qortal.data.transaction.ChatTransactionData;
 import org.qortal.repository.ChatRepository;
 import org.qortal.repository.DataException;
@@ -16,6 +17,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import static org.qortal.data.chat.ChatMessage.Encoding;
 
@@ -148,6 +150,17 @@ public class HSQLDBChatRepository implements ChatRepository {
 
 				chatMessages.add(chatMessage);
 			} while (resultSet.next());
+
+			// if this is a group chat, then ensure that the sender is in the group
+			if( txGroupId != null && txGroupId > 0 ) {
+				List<String> members
+					= this.repository.getGroupRepository()
+						.getGroupMembers(txGroupId).stream()
+						.map(GroupMemberData::getMember)
+						.collect(Collectors.toList());
+
+				chatMessages.removeIf( data -> !members.contains(data.getSender()) );
+			}
 
 			return chatMessages;
 		} catch (SQLException e) {

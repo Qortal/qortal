@@ -35,6 +35,13 @@ public class OnlineAccountsSignaturesTrimmer implements Runnable {
 			Thread.sleep(INITIAL_SLEEP_PERIOD);
 
 			trimStartHeight = repository.getBlockRepository().getOnlineAccountsSignaturesTrimHeight();
+		} catch (InterruptedException e) {
+			if (Controller.isStopping()) {
+				LOGGER.info("Online Accounts Signatures Trimming shutting down");
+			} else {
+				LOGGER.error("Online Accounts Signatures Trimming interrupted during initialization. Restart ASAP. Report this error immediately to the developers.", e);
+			}
+			return;
 		} catch (Exception e) {
 			LOGGER.error("Online Accounts Signatures Trimming is not working! Not trying again. Restart ASAP. Report this error immediately to the developers.", e);
 			return;
