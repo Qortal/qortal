@@ -574,7 +574,7 @@ public class HSQLDBRepository implements Repository {
 		 * which we never close, which means HSQLDB also caches a parsed,
 		 * prepared statement that can be reused for subsequent
 		 * calls to HSQLDB.prepareStatement(sql).
-		 * 
+		 *
 		 * See org.hsqldb.StatementManager for more details.
 		 */
 		PreparedStatement preparedStatement = this.preparedStatementCache.get(sql);
@@ -586,9 +586,19 @@ public class HSQLDBRepository implements Repository {
 			preparedStatement =  this.connection.prepareStatement(sql);
 			this.preparedStatementCache.put(sql, preparedStatement);
 		} else {
-			// Clean up ready for reuse
-			preparedStatement.clearBatch();
-			preparedStatement.clearParameters();
+			try {
+				// Clean up ready for reuse
+				preparedStatement.clearBatch();
+				preparedStatement.clearParameters();
+			} catch (SQLException e) {
+				// Connection may have been closed, try to recreate the statement
+				if (this.connection == null || this.connection.isClosed()) {
+					throw new SQLException("Connection is closed", e);
+				}
+				// Statement is closed but connection is still open, recreate
+				preparedStatement = this.connection.prepareStatement(sql);
+				this.preparedStatementCache.put(sql, preparedStatement);
+			}
 		}
 
 		return preparedStatement;
@@ -964,6 +974,18 @@ public class HSQLDBRepository implements Repository {
 	}
 
 	private void assertEmptyTransaction(String context) throws DataException {
+		// If connection is already closed, skip this check
+		try {
+			if (this.connection == null || this.connection.isClosed()) {
+				LOGGER.debug(() -> String.format("Skipping transaction check after %s - connection already closed", context));
+				return;
+			}
+		} catch (SQLException e) {
+			// If we can't check if connection is closed, assume it is and skip
+			LOGGER.debug(() -> String.format("Unable to check connection status after %s, skipping transaction check", context));
+			return;
+		}
+
 		String sql = "SELECT transaction, transaction_size FROM information_schema.system_sessions WHERE session_id = ?";
 
 		try {
@@ -993,6 +1015,16 @@ public class HSQLDBRepository implements Repository {
 				}
 			}
 		} catch (SQLException e) {
+			// During shutdown, the connection might be closed by another thread
+			// Check if this is the case and log appropriately
+			try {
+				if (this.connection == null || this.connection.isClosed()) {
+					LOGGER.debug(() -> String.format("Connection closed while checking repository status after %s", context));
+					return;
+				}
+			} catch (SQLException ignored) {
+				// Ignore - we'll throw the original exception below
+			}
 			throw new DataException("Error checking repository status after " + context, e);
 		}
 	}

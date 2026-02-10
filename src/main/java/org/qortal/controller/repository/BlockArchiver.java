@@ -45,6 +45,13 @@ public class BlockArchiver implements Runnable {
 				repository.discardChanges();
 				return;
 			}
+		} catch (InterruptedException e) {
+			if (Controller.isStopping()) {
+				LOGGER.info("Block Archiving shutting down");
+			} else {
+				LOGGER.error("Block Archiving interrupted during initialization. Restart ASAP. Report this error immediately to the developers.", e);
+			}
+			return;
 		} catch (Exception e) {
 			LOGGER.error("Block Archiving is not working! Not trying again. Restart ASAP. Report this error immediately to the developers.", e);
 			return;

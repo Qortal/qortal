@@ -126,7 +126,7 @@ fi
 
 # Get changelog between previous and current commit
 echo "Generating changelog between ${PREV_BUMP_COMMIT} and ${CURRENT_BUMP_COMMIT}..."
-CHANGELOG=$(curl -s "https://api.github.com/repos/${REPO}/compare/${PREV_BUMP_COMMIT}...${CURRENT_BUMP_COMMIT}" | jq -r '.commits[] | "- " + .sha[0:7] + " " + .commit.message')
+CHANGELOG=$(curl -s "https://api.github.com/repos/${REPO}/compare/${PREV_BUMP_COMMIT}...${CURRENT_BUMP_COMMIT}" | jq -r '.commits[] | .sha[0:7] as $sha | (.commit.message | split("\n")) as $lines | ($lines[0]) as $title | ($lines[1:] | map(select(length > 0))) as $body | "- " + $title + "\n  - " + $sha + (if ($body | length) > 0 then "\n  " + ($body | join("\n  ")) else "" end)')
 
 # Fetch latest commit timestamp from GitHub API for final file timestamping
 COMMIT_API_URL="https://api.github.com/repos/${REPO}/commits?sha=${BRANCH}&per_page=1"
@@ -235,4 +235,3 @@ Packed with \`7z a -r -tzip qortal.zip qortal/\`
 EOF
 
 echo "Release notes generated: release-notes.txt"
-

@@ -137,6 +137,19 @@ public class TradeBot implements Listener {
 		return instance;
 	}
 
+	public void shutdown() {
+		try {
+			LOGGER.info("Shutting down TradeBot scheduler");
+			tradePresenceMessageScheduler.shutdownNow();
+			if (!tradePresenceMessageScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+				LOGGER.warn("TradeBot scheduler did not terminate in time");
+			}
+		} catch (InterruptedException e) {
+			LOGGER.warn("Interrupted while waiting for TradeBot scheduler to terminate", e);
+			Thread.currentThread().interrupt();
+		}
+	}
+
 	public ACCT getAcctUsingAtData(ATData atData) {
 		byte[] codeHash = atData.getCodeHash();
 		if (codeHash == null)

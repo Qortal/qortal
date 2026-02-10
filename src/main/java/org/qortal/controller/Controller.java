@@ -38,6 +38,7 @@ import org.qortal.network.PeerAddress;
 import org.qortal.network.PeerAddressFactory;
 import org.qortal.network.message.*;
 import org.qortal.repository.*;
+import org.qortal.repository.hsqldb.HSQLDBCacheUtils;
 import org.qortal.repository.hsqldb.HSQLDBRepositoryFactory;
 import org.qortal.settings.Settings;
 import org.qortal.transaction.Transaction;
@@ -425,7 +426,7 @@ public class Controller extends Thread {
 			}
 
 			if( Settings.getInstance().isDbCacheEnabled() ) {
-				LOGGER.info("Db Cache Starting ...");
+				LOGGER.info("Starting Db Cache...");
 				HSQLDBDataCacheManager hsqldbDataCacheManager = new HSQLDBDataCacheManager();
 				hsqldbDataCacheManager.start();
 			}
@@ -433,7 +434,7 @@ public class Controller extends Thread {
 				LOGGER.info("Db Cache Disabled");
 			}
 
-			LOGGER.info("Arbitrary Indexing Starting ...");
+			LOGGER.info("Starting Arbitrary Indexing...");
 			ArbitraryIndexUtils.startCaching(
 				Settings.getInstance().getArbitraryIndexingPriority(),
 				Settings.getInstance().getArbitraryIndexingFrequency()
@@ -443,7 +444,7 @@ public class Controller extends Thread {
 				Optional<HSQLDBBalanceRecorder> recorder = HSQLDBBalanceRecorder.getInstance();
 
 				if( recorder.isPresent() ) {
-					LOGGER.info("Balance Recorder Starting ...");
+					LOGGER.info("Starting Balance Recorder...");
 					recorder.get().start();
 				}
 				else {
@@ -451,7 +452,7 @@ public class Controller extends Thread {
 				}
 			}
 			else {
-				LOGGER.info("Balance Recorder Disabled");
+				LOGGER.info("Balance Recorder disabled");
 			}
 		} catch (DataException e) {
 			// If exception has no cause or message then repository is in use by some other process.
@@ -471,17 +472,17 @@ public class Controller extends Thread {
 
 			// Rebuild Names table and check database integrity (if enabled)
 			NamesDatabaseIntegrityCheck namesDatabaseIntegrityCheck = new NamesDatabaseIntegrityCheck();
+			LOGGER.info("Rebuilding all names...");
 			namesDatabaseIntegrityCheck.rebuildAllNames();
 			if (Settings.getInstance().isNamesIntegrityCheckEnabled()) {
+				LOGGER.info("Running database integrity check...");
 				namesDatabaseIntegrityCheck.runIntegrityCheck();
 			}
-
-			LOGGER.info("Validating blockchain");
+			LOGGER.info("Validating blockchain...");
 			try {
 				BlockChain.validate();
-
 				Controller.getInstance().refillLatestBlocksCache();
-				LOGGER.info(String.format("Our chain height at start-up: %d", Controller.getInstance().getChainHeight()));
+				LOGGER.info("Chain height at start-up: {}", Controller.getInstance().getChainHeight());
 			} catch (DataException e) {
 				LOGGER.error("Couldn't validate blockchain", e);
 				Gui.getInstance().fatalError("Blockchain validation issue", e);
@@ -579,7 +580,6 @@ public class Controller extends Thread {
 			);
 		}
 
-
 		LOGGER.info("Starting online accounts manager");
 		OnlineAccountsManager.getInstance().start();
 
@@ -613,7 +613,7 @@ public class Controller extends Thread {
 		}
 
 		if (Settings.getInstance().isGatewayEnabled()) {
-			LOGGER.info(String.format("Starting gateway service on port %d", Settings.getInstance().getGatewayPort()));
+			LOGGER.info("Starting gateway service on port {}", Settings.getInstance().getGatewayPort());
 			try {
 				GatewayService gatewayService = GatewayService.getInstance();
 				gatewayService.start();
@@ -626,7 +626,7 @@ public class Controller extends Thread {
 		}
 
 		if (Settings.getInstance().isDomainMapEnabled()) {
-			LOGGER.info(String.format("Starting domain map service on port %d", Settings.getInstance().getDomainMapPort()));
+			LOGGER.info("Starting domain map service on port {}", Settings.getInstance().getDomainMapPort());
 			try {
 				DomainMapService domainMapService = DomainMapService.getInstance();
 				domainMapService.start();
@@ -871,12 +871,12 @@ public class Controller extends Thread {
 					if (ntpTime != null) {
 						if (ntpTime != now)
 							// Only log if non-zero offset
-							LOGGER.info(String.format("Adjusting system time by NTP offset: %dms", ntpTime - now));
+							LOGGER.info("Adjusting system time by NTP offset: {}ms", ntpTime - now);
 
 						ntpCheckTimestamp = now + NTP_POST_SYNC_CHECK_PERIOD;
 						requestSysTrayUpdate = true;
 					} else {
-						LOGGER.info(String.format("No NTP offset yet"));
+						LOGGER.info("No NTP offset yet");
 						ntpCheckTimestamp = now + NTP_PRE_SYNC_CHECK_PERIOD;
 						// We can't do much without a valid NTP time
 						continue;
@@ -1258,6 +1258,11 @@ public class Controller extends Thread {
 				LOGGER.info("Shutting down synchronizer");
 				Synchronizer.getInstance().shutdown();
 				//RNSSynchronizer.getInstance().shutdown();
+				try {
+					Synchronizer.getInstance().join();
+				} catch (InterruptedException e) {
+					// We were interrupted while waiting for thread to join
+				}
 
 				LOGGER.info("Shutting down API");
 				ApiService.getInstance().stop();
@@ -1318,6 +1323,17 @@ public class Controller extends Thread {
 				} catch (InterruptedException e) {
 					// We were interrupted while waiting for thread to join
 				}
+
+				LOGGER.info("Shutting down TradeBot");
+				TradeBot.getInstance().shutdown();
+
+				// Shutdown database cache timers before closing repository
+				LOGGER.info("Shutting down database cache timers");
+				HSQLDBCacheUtils.shutdown();
+
+				// Shutdown arbitrary metadata manager scheduler before closing repository
+				LOGGER.info("Shutting down arbitrary metadata manager");
+				ArbitraryMetadataManager.getInstance().shutdown();
 
 				// Make sure we're the only thread modifying the blockchain when shutting down the repository
 				ReentrantLock blockchainLock = Controller.getInstance().getBlockchainLock();

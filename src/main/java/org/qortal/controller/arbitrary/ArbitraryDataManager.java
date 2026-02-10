@@ -449,6 +449,10 @@ public class ArbitraryDataManager extends Thread {
 				);
 			} catch (DataException e) {
 				LOGGER.error("Repository issue when fetching arbitrary transaction data", e);
+			} catch (InterruptedException e) {
+				// Thread interrupted during shutdown - restore interrupt status and exit
+				Thread.currentThread().interrupt();
+				return;
 			} catch (Exception e) {
 				LOGGER.error(e.getMessage(), e);
 			}

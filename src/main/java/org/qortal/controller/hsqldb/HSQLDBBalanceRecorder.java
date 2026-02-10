@@ -45,18 +45,12 @@ public class HSQLDBBalanceRecorder extends Thread{
     public static Optional<HSQLDBBalanceRecorder> getInstance() {
 
         if( SINGLETON == null ) {
-
             SINGLETON
                 = new HSQLDBBalanceRecorder(
                     Settings.getInstance().getBalanceRecorderPriority(),
                     Settings.getInstance().getBalanceRecorderFrequency(),
                     Settings.getInstance().getBalanceRecorderCapacity()
             );
-
-        }
-        else if( SINGLETON == null ) {
-
-            return Optional.empty();
         }
 
         return Optional.of(SINGLETON);
@@ -72,13 +66,11 @@ public class HSQLDBBalanceRecorder extends Thread{
 
     public List<BlockHeightRangeAddressAmounts> getLatestDynamics(int limit, long offset) {
 
-        List<BlockHeightRangeAddressAmounts> latest = this.balanceDynamics.stream()
+        return this.balanceDynamics.stream()
                 .sorted(BalanceRecorderUtils.BLOCK_HEIGHT_RANGE_ADDRESS_AMOUNTS_COMPARATOR.reversed())
                 .skip(offset)
                 .limit(limit)
                 .collect(Collectors.toList());
-
-        return latest;
     }
 
     public List<BlockHeightRange> getRanges(Integer offset, Integer limit, Boolean reverse) {
