@@ -100,6 +100,37 @@ public class HSQLDBCrossChainRepository implements CrossChainRepository {
 	}
 
 	@Override
+	public boolean existsAliceTradeWithAtExcludingStates(String atAddress, List<String> excludeStates) throws DataException {
+		if (excludeStates == null)
+			excludeStates = Collections.emptyList();
+
+		StringBuilder whereClause = new StringBuilder(256);
+		whereClause.append("at_address = ? AND trade_state LIKE ?");
+
+		Object[] bindParams = new Object[2 + excludeStates.size()];
+		bindParams[0] = atAddress;
+		bindParams[1] = "ALICE_%";
+
+		if (!excludeStates.isEmpty()) {
+			whereClause.append(" AND trade_state NOT IN (?");
+			bindParams[2] = excludeStates.get(0);
+
+			for (int i = 1; i < excludeStates.size(); ++i) {
+				whereClause.append(", ?");
+				bindParams[2 + i] = excludeStates.get(i);
+			}
+
+			whereClause.append(")");
+		}
+
+		try {
+			return this.repository.exists("TradeBotStates", whereClause.toString(), bindParams);
+		} catch (SQLException e) {
+			throw new DataException("Unable to check for trade-bot state in repository", e);
+		}
+	}
+
+	@Override
 	public List<TradeBotData> getAllTradeBotData() throws DataException {
 		String sql = "SELECT trade_private_key, acct_name, trade_state, trade_state_value, "
 				+ "creator_address, at_address, "
