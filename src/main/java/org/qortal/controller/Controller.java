@@ -415,9 +415,9 @@ public class Controller extends Thread {
 
 		final Controller controller = Controller.newInstance(args);
 
-		NETWORK_BLOCK_SUMMARIES_V_2_MESSAGE_SCHEDULER.scheduleAtFixedRate(() -> processNetworkBlockSummariesV2Messages(), 60, 1, TimeUnit.SECONDS);
+		NETWORK_BLOCK_SUMMARIES_V_2_MESSAGE_SCHEDULER.scheduleAtFixedRate(() -> processNetworkBlockSummariesV2Messages(), 0, 1, TimeUnit.SECONDS);
 
-		GET_BLOCK_MESSAGE_SCHEDULER.scheduleAtFixedRate( () -> controller.processNetworkGetBlockMessages(), 60, 1, TimeUnit.SECONDS);
+		GET_BLOCK_MESSAGE_SCHEDULER.scheduleAtFixedRate( () -> controller.processNetworkGetBlockMessages(), 0, 1, TimeUnit.SECONDS);
 
 		cleanChunkUploadTempDir(); // cleanup leftover chunks from streaming to disk
 
@@ -1630,7 +1630,8 @@ public class Controller extends Thread {
 
 		if( messagesToProcess.isEmpty() ) return;
 
-		Map<String, PeerMessage> toProcessBySignature58 = new HashMap<>();
+		// signature (base58) -> list of peer messages
+		Map<String, List<PeerMessage>> requestsBySignature58 = new HashMap<>();
 
 		for( PeerMessage peerMessage : messagesToProcess ) {
 			Message message = peerMessage.getMessage();
@@ -1648,7 +1649,7 @@ public class Controller extends Thread {
 			if (cachedBlockMessage != null) {
 				this.stats.getBlockMessageStats.cacheHits.incrementAndGet();
 
-				// We need to duplicate it to prevent multiple threads setting ID on the same message
+				// Duplicate per peer to prevent multiple threads setting ID on the same message
 				CachedBlockMessage clonedBlockMessage = Message.cloneWithNewId(cachedBlockMessage, message.getId());
 
 				if (!peer.sendMessage(clonedBlockMessage))
@@ -1656,21 +1657,22 @@ public class Controller extends Thread {
 			}
 			// if not cached, then process later
 			else {
-				toProcessBySignature58.put(Base58.encode(signature), peerMessage);
+				String signature58 = Base58.encode(signature);
+				requestsBySignature58.computeIfAbsent(signature58, key -> new ArrayList<>()).add(peerMessage);
 			}
 
 		}
 
-		if(toProcessBySignature58.isEmpty()) return;
+		if(requestsBySignature58.isEmpty()) return;
 
 		List<byte[]> signatures
-			= toProcessBySignature58.values().stream()
-				.map( toProcess -> toProcess.getMessage() )
-				.map( message -> (GetBlockMessage) message)
-				.map(GetBlockMessage::getSignature)
+			= requestsBySignature58.entrySet().stream()
+				.map( entry -> entry.getValue().get(0).getMessage() )
+				.map( message -> (GetBlockMessage) message )
+				.map( GetBlockMessage::getSignature )
 				.collect(Collectors.toList());
 
-		List<String> signature58Processed = new ArrayList<>();
+		Set<String> signature58Processed = new HashSet<>();
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
 
@@ -1686,18 +1688,34 @@ public class Controller extends Thread {
 
 				String signature58 = Base58.encode(blockData.getSignature());
 
-				PeerMessage peerMessage = toProcessBySignature58.get(signature58);
-
-				Message message = peerMessage.getMessage();
-				Peer peer = peerMessage.getPeer();
+				List<PeerMessage> waitingPeers = requestsBySignature58.remove(signature58);
+				if (waitingPeers == null || waitingPeers.isEmpty()) {
+					continue;
+				}
 
 				signature58Processed.add(signature58);
 
 				Block block = new Block(repository, blockData);
 
-				// V2 support
-				if (peer.getPeersVersion() >= BlockV2Message.MIN_PEER_VERSION) {
-					Message blockMessage = new BlockV2Message(block);
+				for (PeerMessage peerMessage : waitingPeers) {
+					Message message = peerMessage.getMessage();
+					Peer peer = peerMessage.getPeer();
+
+					// V2 support
+					if (peer.getPeersVersion() >= BlockV2Message.MIN_PEER_VERSION) {
+						Message blockMessage = new BlockV2Message(block);
+						blockMessage.setId(message.getId());
+
+						if (!peer.sendMessage(blockMessage)) {
+							peer.disconnect("failed to send block");
+							// Don't fall-through to caching because failure to send might be from failure to build message
+							continue;
+						}
+
+						continue;
+					}
+
+					CachedBlockMessage blockMessage = new CachedBlockMessage(block);
 					blockMessage.setId(message.getId());
 
 					if (!peer.sendMessage(blockMessage)) {
@@ -1706,40 +1724,34 @@ public class Controller extends Thread {
 						continue;
 					}
 
-					continue;
-				}
+					int blockCacheSize = Settings.getInstance().getBlockCacheSize();
 
-				CachedBlockMessage blockMessage = new CachedBlockMessage(block);
-				blockMessage.setId(message.getId());
+					// If request is for a recent block, cache it
+					if (getChainHeight() - blockData.getHeight() <= blockCacheSize) {
+						this.stats.getBlockMessageStats.cacheFills.incrementAndGet();
 
-				if (!peer.sendMessage(blockMessage)) {
-					peer.disconnect("failed to send block");
-					// Don't fall-through to caching because failure to send might be from failure to build message
-					continue;
-				}
-
-				int blockCacheSize = Settings.getInstance().getBlockCacheSize();
-
-				// If request is for a recent block, cache it
-				if (getChainHeight() - blockData.getHeight() <= blockCacheSize) {
-					this.stats.getBlockMessageStats.cacheFills.incrementAndGet();
-
-					this.blockMessageCache.put(ByteArray.wrap(blockData.getSignature()), blockMessage);
+						this.blockMessageCache.put(ByteArray.wrap(blockData.getSignature()), blockMessage);
+					}
 				}
 			}
 
-			List<String> remainingSignature58ToProcess
-				= toProcessBySignature58.keySet().stream()
-					.filter(signature58 -> !signature58Processed.contains(signature58))
+			List<Map.Entry<String, List<PeerMessage>>> remainingRequests
+				= requestsBySignature58.entrySet().stream()
+					.filter(entry -> !signature58Processed.contains(entry.getKey()))
 					.collect(Collectors.toList());
 
-			for( String signature58 : remainingSignature58ToProcess) {
+			for( Map.Entry<String, List<PeerMessage>> entry : remainingRequests) {
 
-				PeerMessage peerMessage = toProcessBySignature58.get(signature58);
-				Message message = peerMessage.getMessage();
-				Peer peer = peerMessage.getPeer();
+				String signature58 = entry.getKey();
+				List<PeerMessage> peerMessages = entry.getValue();
 
-				GetBlockMessage getBlockMessage = (GetBlockMessage) message;
+				if (peerMessages == null || peerMessages.isEmpty())
+					continue;
+
+				PeerMessage firstPeerMessage = peerMessages.get(0);
+				Message firstMessage = firstPeerMessage.getMessage();
+
+				GetBlockMessage getBlockMessage = (GetBlockMessage) firstMessage;
 				byte[] signature = getBlockMessage.getSignature();
 
 				// If we have no block data, we should check the archive in case it's there
@@ -1762,33 +1774,45 @@ public class Controller extends Thread {
 							default:
 								continue;
 						}
-						blockMessage.setId(message.getId());
+						for (PeerMessage peerMessage : peerMessages) {
+							Message message = peerMessage.getMessage();
+							Peer peer = peerMessage.getPeer();
 
-						// This call also causes the other needed data to be pulled in from repository
-						if (!peer.sendMessage(blockMessage)) {
-							peer.disconnect("failed to send block");
-							// Don't fall-through to caching because failure to send might be from failure to build message
-							continue;
+							blockMessage.setId(message.getId());
+
+							// This call also causes the other needed data to be pulled in from repository
+							if (!peer.sendMessage(blockMessage)) {
+								peer.disconnect("failed to send block");
+								// Don't fall-through to caching because failure to send might be from failure to build message
+								continue;
+							}
 						}
 
-						// Sent successfully from archive, so nothing more to do
+						// Sent successfully from archive, so nothing more to do for this signature
 						continue;
 					}
 				}
 
-				// We don't have this block
-				this.stats.getBlockMessageStats.unknownBlocks.getAndIncrement();
+					// We don't have this block
+					this.stats.getBlockMessageStats.unknownBlocks.getAndIncrement();
 
-				// Send valid, yet unexpected message type in response, so peer's synchronizer doesn't have to wait for timeout
-				LOGGER.debug(() -> String.format("Sending 'block unknown' response to peer %s for GET_BLOCK request for unknown block %s", peer, Base58.encode(signature)));
+					Peer firstPeer = peerMessages.get(0).getPeer();
 
-				// Send generic 'unknown' message as it's very short
-				Message blockUnknownMessage = peer.getPeersVersion() >= GenericUnknownMessage.MINIMUM_PEER_VERSION
-						? new GenericUnknownMessage()
-						: new BlockSummariesMessage(Collections.emptyList());
-				blockUnknownMessage.setId(message.getId());
-				if (!peer.sendMessage(blockUnknownMessage))
-					peer.disconnect("failed to send block-unknown response");
+					// Send valid, yet unexpected message type in response, so peer's synchronizer doesn't have to wait for timeout
+					LOGGER.debug(() -> String.format("Sending 'block unknown' response to peer %s for GET_BLOCK request for unknown block %s", firstPeer, Base58.encode(signature)));
+
+					for (PeerMessage peerMessage : peerMessages) {
+						Message message = peerMessage.getMessage();
+						Peer peer = peerMessage.getPeer();
+
+					// Send generic 'unknown' message as it's very short
+					Message blockUnknownMessage = peer.getPeersVersion() >= GenericUnknownMessage.MINIMUM_PEER_VERSION
+							? new GenericUnknownMessage()
+							: new BlockSummariesMessage(Collections.emptyList());
+					blockUnknownMessage.setId(message.getId());
+					if (!peer.sendMessage(blockUnknownMessage))
+						peer.disconnect("failed to send block-unknown response");
+				}
 			}
 		} catch (Exception e) {
 			LOGGER.error(e.getMessage(), e);
@@ -2062,7 +2086,7 @@ public class Controller extends Thread {
 
 						if (responseMessage == null || !peer.sendMessage(responseMessage)) {
 							peer.disconnect("failed to send our chain tip info");
-							return;
+							continue;
 						}
 					}
 				}
@@ -2075,7 +2099,7 @@ public class Controller extends Thread {
 					 * Hence, these are NOT simple "here's my chain tip" broadcasts from other peers.
 					 */
 					LOGGER.debug("Discarding late {} message with ID {} from {}", message.getType().name(), message.getId(), peer);
-					return;
+					continue;
 				}
 
 				// Update peer chain tip data

@@ -479,20 +479,24 @@ public class TransactionsResource {
 					)
 			}
 	)
-	@ApiErrors({ApiError.INVALID_CRITERIA, ApiError.INVALID_ADDRESS, ApiError.REPOSITORY_ISSUE})
-	public List<TransactionData> getPaymentsBetweenAddresses(
-			@Parameter(description = "Recipient's address") @QueryParam("recipientAddress") String recipientAddress,
-			@Parameter(description = "Sender's address") @QueryParam("senderAddress") String senderAddress,
-			@Parameter(description = "Payment amount (e.g., 1 or 1.5 for QORT)") @QueryParam("amount") String amountString,
-			@Parameter(description = "Start block height") @QueryParam("startBlock") Integer startBlock,
-			@Parameter(description = "Block limit (number of blocks to search from startBlock)") @QueryParam("blockLimit") Integer blockLimit,
-			@Parameter(
-					description = "whether to include confirmed, unconfirmed or both",
-					required = true
-			) @QueryParam("confirmationStatus") ConfirmationStatus confirmationStatus,
-			@Parameter(ref = "limit") @QueryParam("limit") Integer limit,
-			@Parameter(ref = "offset") @QueryParam("offset") Integer offset,
-			@Parameter(ref = "reverse") @QueryParam("reverse") Boolean reverse) {
+		@ApiErrors({ApiError.INVALID_CRITERIA, ApiError.INVALID_ADDRESS, ApiError.REPOSITORY_ISSUE})
+		public List<TransactionData> getPaymentsBetweenAddresses(
+				@Parameter(description = "Recipient's address") @QueryParam("recipientAddress") String recipientAddress,
+				@Parameter(description = "Sender's address") @QueryParam("senderAddress") String senderAddress,
+				@Parameter(description = "Payment amount (e.g., 1 or 1.5 for QORT)") @QueryParam("amount") String amountString,
+				@Parameter(description = "Start block height") @QueryParam("startBlock") Integer startBlock,
+				@Parameter(description = "Block limit (number of blocks to search from startBlock)") @QueryParam("blockLimit") Integer blockLimit,
+				@Parameter(
+						description = "whether to include confirmed, unconfirmed or both",
+						required = true
+				) @QueryParam("confirmationStatus") ConfirmationStatus confirmationStatus,
+				@Parameter(ref = "limit") @QueryParam("limit") Integer limit,
+				@Parameter(ref = "offset") @QueryParam("offset") Integer offset,
+				@Parameter(ref = "reverse") @QueryParam("reverse") Boolean reverse) {
+
+			if (confirmationStatus == null) {
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+			}
 
 		// Validate that at least one address is provided
 		boolean hasRecipient = recipientAddress != null && !recipientAddress.isEmpty();
