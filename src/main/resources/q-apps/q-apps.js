@@ -115,33 +115,97 @@ const path = pathurl || '/'
     isManualNavigation = true;
 }
 
+// Request deduplication cache
+const requestCache = new Map();
+const REQUEST_CACHE_TTL = 5000; // 5 seconds
+
+// Pending request tracking for cleanup
+const pendingMessageChannels = new Map();
+
+// Request queue to limit concurrent requests
+const MAX_CONCURRENT_REQUESTS = 10;
+let activeRequestCount = 0;
+const requestQueue = [];
+
+// Debug logging (set to true to enable)
+const DEBUG_REQUESTS = false;
+
+function debugLog(...args) {
+    if (DEBUG_REQUESTS) {
+        console.log('[q-apps.js]', ...args);
+    }
+}
+
 function httpGet(url) {
+    // Check cache first
+    const cached = requestCache.get(url);
+    if (cached && Date.now() - cached.timestamp < REQUEST_CACHE_TTL) {
+        return cached.data;
+    }
+
     var request = new XMLHttpRequest();
     request.open("GET", url, false);
     request.send(null);
+
+    // Cache the response
+    requestCache.set(url, {
+        data: request.responseText,
+        timestamp: Date.now()
+    });
+
     return request.responseText;
 }
 
+// Async request deduplication
+const pendingAsyncRequests = new Map();
+
 function httpGetAsyncWithEvent(event, url) {
-    fetch(url)
+    // Check if same request is already pending
+    if (pendingAsyncRequests.has(url)) {
+        // Attach to existing request instead of creating new one
+        pendingAsyncRequests.get(url).then((responseText) => {
+            handleResponse(event, responseText);
+        }).catch((error) => {
+            let res = {};
+            res.error = error;
+            handleResponse(event, JSON.stringify(res));
+        });
+        return;
+    }
+
+    // Create new request and cache the promise
+    const requestPromise = fetch(url)
         .then((response) => response.text())
         .then((responseText) => {
+            // Remove from pending cache
+            pendingAsyncRequests.delete(url);
 
             if (responseText == null) {
                 // Pass to parent (UI), in case they can fulfil this request
                 event.data.requestedHandler = "UI";
                 parent.postMessage(event.data, '*', [event.ports[0]]);
-                return;
+                return null;
             }
 
-            handleResponse(event, responseText);
+            return responseText;
+        });
 
+    // Store the promise for deduplication
+    pendingAsyncRequests.set(url, requestPromise);
+
+    requestPromise
+        .then((responseText) => {
+            if (responseText !== null) {
+                handleResponse(event, responseText);
+            }
         })
         .catch((error) => {
+            // Remove from pending cache on error
+            pendingAsyncRequests.delete(url);
             let res = {};
             res.error = error;
             handleResponse(event, JSON.stringify(res));
-        })
+        });
 }
 
 function handleResponse(event, response) {
@@ -663,35 +727,203 @@ function getDefaultTimeout(action) {
 }
 
 /**
+ * Process queued requests when a slot becomes available
+ */
+function processRequestQueue() {
+    while (activeRequestCount < MAX_CONCURRENT_REQUESTS && requestQueue.length > 0) {
+        const queuedRequest = requestQueue.shift();
+        queuedRequest.execute();
+    }
+}
+
+/**
+ * Execute a request immediately (bypasses queue)
+ */
+function executeQortalRequestImmediate(request) {
+    return new Promise((res, rej) => {
+        const channel = new MessageChannel();
+        const requestId = Math.random().toString(36).substring(2, 15) + Date.now();
+
+        // Track this channel for cleanup
+        pendingMessageChannels.set(requestId, {
+            channel: channel,
+            request: request,
+            timestamp: Date.now()
+        });
+
+        channel.port1.onmessage = ({data}) => {
+            channel.port1.close();
+            pendingMessageChannels.delete(requestId);
+            activeRequestCount--;
+            processRequestQueue(); // Process next queued request
+
+            if (data.error) {
+                rej(data.error);
+            } else {
+                res(data.result);
+            }
+        };
+
+        // Handle port closure/errors
+        channel.port1.onmessageerror = () => {
+            channel.port1.close();
+            pendingMessageChannels.delete(requestId);
+            activeRequestCount--;
+            processRequestQueue();
+            rej(new Error("MessageChannel error"));
+        };
+
+        window.postMessage(request, '*', [channel.port2]);
+    });
+}
+
+/**
  * Make a Qortal (Q-Apps) request with no timeout
  */
-const qortalRequestWithNoTimeout = (request) => new Promise((res, rej) => {
-    const channel = new MessageChannel();
+const qortalRequestWithNoTimeout = (request) => {
+    return new Promise((res, rej) => {
+        const executeRequest = () => {
+            activeRequestCount++;
+            executeQortalRequestImmediate(request)
+                .then(res)
+                .catch(rej);
+        };
 
-    channel.port1.onmessage = ({data}) => {
-        channel.port1.close();
-
-        if (data.error) {
-            rej(data.error);
+        // If under concurrent limit, execute immediately
+        if (activeRequestCount < MAX_CONCURRENT_REQUESTS) {
+            executeRequest();
         } else {
-            res(data.result);
+            // Queue the request
+            requestQueue.push({ execute: executeRequest });
         }
-    };
+    });
+};
 
-    window.postMessage(request, '*', [channel.port2]);
-});
+// Pending qortal request deduplication
+const pendingQortalRequests = new Map();
+
+/**
+ * Create a unique key for request deduplication
+ */
+function getRequestKey(request) {
+    // Create a stable key from the request object
+    const keyObj = {
+        action: request.action,
+        // Include key parameters that make requests unique
+        service: request.service,
+        name: request.name,
+        identifier: request.identifier,
+        path: request.path,
+        address: request.address,
+        // For search/query requests
+        query: request.query,
+        limit: request.limit,
+        offset: request.offset
+    };
+    return JSON.stringify(keyObj);
+}
 
 /**
  * Make a Qortal (Q-Apps) request with the default timeout (10 seconds)
  */
-const qortalRequest = (request) =>
-    Promise.race([qortalRequestWithNoTimeout(request), awaitTimeout(getDefaultTimeout(request.action), "The request timed out")]);
+const qortalRequest = (request) => {
+    // Check if identical request is already pending
+    const requestKey = getRequestKey(request);
+
+    if (pendingQortalRequests.has(requestKey)) {
+        debugLog('Request deduplication hit for:', request.action);
+        // Return the existing promise instead of creating a new request
+        return pendingQortalRequests.get(requestKey);
+    }
+
+    debugLog('New request:', request.action, 'Queue size:', requestQueue.length, 'Active:', activeRequestCount);
+
+    // Create new request promise
+    const requestPromise = Promise.race([
+        qortalRequestWithNoTimeout(request),
+        awaitTimeout(getDefaultTimeout(request.action), "The request timed out")
+    ]).then((result) => {
+        debugLog('Request completed:', request.action);
+        return result;
+    }).catch((error) => {
+        debugLog('Request failed:', request.action, error);
+        throw error;
+    }).finally(() => {
+        // Remove from pending cache when done (success or failure)
+        pendingQortalRequests.delete(requestKey);
+    });
+
+    // Store in pending cache
+    pendingQortalRequests.set(requestKey, requestPromise);
+
+    return requestPromise;
+};
 
 /**
  * Make a Qortal (Q-Apps) request with a custom timeout, specified in milliseconds
  */
-const qortalRequestWithTimeout = (request, timeout) =>
-    Promise.race([qortalRequestWithNoTimeout(request), awaitTimeout(timeout, "The request timed out")]);
+const qortalRequestWithTimeout = (request, timeout) => {
+    // Check if identical request is already pending
+    const requestKey = getRequestKey(request);
+
+    if (pendingQortalRequests.has(requestKey)) {
+        // Return the existing promise instead of creating a new request
+        return pendingQortalRequests.get(requestKey);
+    }
+
+    // Create new request promise
+    const requestPromise = Promise.race([
+        qortalRequestWithNoTimeout(request),
+        awaitTimeout(timeout, "The request timed out")
+    ]).finally(() => {
+        // Remove from pending cache when done (success or failure)
+        pendingQortalRequests.delete(requestKey);
+    });
+
+    // Store in pending cache
+    pendingQortalRequests.set(requestKey, requestPromise);
+
+    return requestPromise;
+};
+
+/**
+ * Cleanup orphaned MessageChannels that have been waiting too long
+ */
+function cleanupOrphanedChannels() {
+    const now = Date.now();
+    const MAX_CHANNEL_AGE = 5 * 60 * 1000; // 5 minutes
+    let cleanedCount = 0;
+
+    for (const [requestId, data] of pendingMessageChannels.entries()) {
+        if (now - data.timestamp > MAX_CHANNEL_AGE) {
+            console.warn('Cleaning up orphaned MessageChannel for request:', data.request.action, 'Age:', Math.round((now - data.timestamp) / 1000), 'seconds');
+            try {
+                data.channel.port1.close();
+            } catch (e) {
+                // Port may already be closed
+            }
+            pendingMessageChannels.delete(requestId);
+            cleanedCount++;
+        }
+    }
+
+    // Cleanup old cache entries
+    let cacheCleanedCount = 0;
+    for (const [url, cached] of requestCache.entries()) {
+        if (now - cached.timestamp > REQUEST_CACHE_TTL * 2) {
+            requestCache.delete(url);
+            cacheCleanedCount++;
+        }
+    }
+
+    if (cleanedCount > 0 || cacheCleanedCount > 0) {
+        debugLog('Cleanup complete. Channels:', cleanedCount, 'Cache entries:', cacheCleanedCount);
+        debugLog('Stats - Pending channels:', pendingMessageChannels.size, 'Active requests:', activeRequestCount, 'Queued:', requestQueue.length);
+    }
+}
+
+// Run cleanup every 30 seconds
+setInterval(cleanupOrphanedChannels, 30000);
 
 
 /**
@@ -734,5 +966,29 @@ navigation.addEventListener('navigate', (event) => {
    setTimeout(()=> {
     handleQDNResourceDisplayed(processedPath);
    }, 100)
+});
+
+/**
+ * Cleanup on page unload
+ */
+window.addEventListener('beforeunload', () => {
+    // Close all pending MessageChannels
+    for (const [requestId, data] of pendingMessageChannels.entries()) {
+        try {
+            data.channel.port1.close();
+        } catch (e) {
+            // Port may already be closed
+        }
+    }
+    pendingMessageChannels.clear();
+
+    // Clear all caches
+    requestCache.clear();
+    pendingAsyncRequests.clear();
+    pendingQortalRequests.clear();
+
+    // Clear request queue
+    requestQueue.length = 0;
+    activeRequestCount = 0;
 });
 
