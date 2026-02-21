@@ -202,10 +202,6 @@ public class ArbitraryDataWriter {
                 // Nothing to do
                 break;
 
-            case PATCH:
-                this.processPatch();
-                break;
-
             default:
                 throw new DataException(String.format("Unknown method specified: %s", method.toString()));
         }
