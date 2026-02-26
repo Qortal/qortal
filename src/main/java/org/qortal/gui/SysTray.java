@@ -21,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -411,8 +412,8 @@ public class SysTray {
 					break;
 
 				case LINUX_NATIVE:
-					// Linux-native backend doesn't support AWT message bubbles directly.
-					LOGGER.debug("Tray notification [{}]: {}", caption, text);
+					if (!this.showLinuxNativeNotification(caption, text, messagetype))
+						LOGGER.debug("Tray notification [{}]: {}", caption, text);
 					break;
 
 				case NONE:
@@ -422,6 +423,43 @@ public class SysTray {
 		} catch (Exception e) {
 			LOGGER.debug("Unable to show tray message: {}", e.getMessage());
 		}
+	}
+
+	private boolean showLinuxNativeNotification(String caption, String text, TrayIcon.MessageType messagetype) {
+		List<String> command = new ArrayList<>();
+		command.add("notify-send");
+
+		String urgency = "normal";
+		if (messagetype == TrayIcon.MessageType.ERROR)
+			urgency = "critical";
+		else if (messagetype == TrayIcon.MessageType.WARNING)
+			urgency = "normal";
+		else if (messagetype == TrayIcon.MessageType.INFO)
+			urgency = "low";
+
+		command.add("-u");
+		command.add(urgency);
+		command.add(this.normalizeLinuxNativeText(caption));
+		command.add(this.normalizeLinuxNativeText(text));
+
+		try {
+			Process process = new ProcessBuilder(command)
+					.redirectErrorStream(true)
+					.start();
+
+			int exitCode = process.waitFor();
+			if (exitCode == 0)
+				return true;
+
+			LOGGER.debug("notify-send exited with non-zero code: {}", exitCode);
+		} catch (IOException e) {
+			LOGGER.debug("notify-send is unavailable: {}", e.getMessage());
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			LOGGER.debug("Interrupted while waiting for notify-send");
+		}
+
+		return false;
 	}
 
 	public void setToolTipText(String text) {
