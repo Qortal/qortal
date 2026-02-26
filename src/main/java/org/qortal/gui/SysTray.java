@@ -48,6 +48,7 @@ public class SysTray {
 
 	// Linux-native backend state
 	private dorkbox.systemTray.SystemTray linuxTray = null;
+	private dorkbox.systemTray.SystemTray.TrayType linuxTrayType = null;
 
 	private SysTray() {
 		final String requestedBackend = System.getProperty(TRAY_BACKEND_PROPERTY, "auto").trim().toLowerCase(Locale.ROOT);
@@ -206,10 +207,10 @@ public class SysTray {
 			if (initialIcon != null)
 				tray.setImage(initialIcon);
 
-			tray.setTooltip("qortal");
-			populateLinuxNativeMenu(tray.getMenu());
-
 			this.linuxTray = tray;
+			this.linuxTrayType = tray.getType();
+			populateLinuxNativeMenu(tray.getMenu());
+			this.updateLinuxNativeStatusOrTooltip("qortal");
 			this.backend = TrayBackend.LINUX_NATIVE;
 			LOGGER.info("System tray backend initialized: linux-native ({})", tray.getType());
 			return true;
@@ -220,6 +221,32 @@ public class SysTray {
 		} finally {
 			dorkbox.systemTray.SystemTray.FORCE_TRAY_TYPE = dorkbox.systemTray.SystemTray.TrayType.AutoDetect;
 		}
+	}
+
+	private boolean supportsLinuxNativeTooltip() {
+		return this.linuxTrayType != dorkbox.systemTray.SystemTray.TrayType.AppIndicator;
+	}
+
+	private String normalizeLinuxNativeText(String text) {
+		if (text == null)
+			return "";
+
+		String normalized = text.replace('\n', ' ').replace('\r', ' ').replaceAll("\\s+", " ").trim();
+		if (normalized.length() > 180)
+			normalized = normalized.substring(0, 177) + "...";
+
+		return normalized;
+	}
+
+	private void updateLinuxNativeStatusOrTooltip(String text) {
+		if (this.linuxTray == null)
+			return;
+
+		String normalizedText = this.normalizeLinuxNativeText(text);
+		if (this.supportsLinuxNativeTooltip())
+			this.linuxTray.setTooltip(normalizedText);
+		else
+			this.linuxTray.setStatus(normalizedText);
 	}
 
 	private void populateLinuxNativeMenu(dorkbox.systemTray.Menu menu) {
@@ -406,8 +433,7 @@ public class SysTray {
 					break;
 
 				case LINUX_NATIVE:
-					if (this.linuxTray != null)
-						this.linuxTray.setTooltip(text);
+					this.updateLinuxNativeStatusOrTooltip(text);
 					break;
 
 				case NONE:
@@ -482,6 +508,7 @@ public class SysTray {
 				LOGGER.debug("Unable to shut down Linux native tray cleanly: {}", e.getMessage());
 			}
 			this.linuxTray = null;
+			this.linuxTrayType = null;
 		}
 
 		this.backend = TrayBackend.NONE;
