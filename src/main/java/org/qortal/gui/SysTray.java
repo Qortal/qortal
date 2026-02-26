@@ -23,70 +23,220 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 public class SysTray {
 
 	protected static final Logger LOGGER = LogManager.getLogger(SysTray.class);
 	private static final String NTP_SCRIPT = "ntpcfg.bat";
+	private static final String TRAY_BACKEND_PROPERTY = "qortal.tray.backend";
+
+	private enum TrayBackend {
+		NONE,
+		AWT,
+		LINUX_NATIVE
+	}
 
 	private static SysTray instance;
+	private TrayBackend backend = TrayBackend.NONE;
+
+	// AWT backend state
 	private TrayIcon trayIcon = null;
 	private JPopupMenu popupMenu = null;
 	/** The hidden dialog has 'focus' when menu displayed so closes the menu when user clicks elsewhere. */
 	private JDialog hiddenDialog = null;
 
+	// Linux-native backend state
+	private dorkbox.systemTray.SystemTray linuxTray = null;
+
 	private SysTray() {
-		try {
-			if (!SystemTray.isSupported())
+		final String requestedBackend = System.getProperty(TRAY_BACKEND_PROPERTY, "auto").trim().toLowerCase(Locale.ROOT);
+		final String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+		final boolean isLinux = osName.contains("linux");
+		final boolean isHeadless = GraphicsEnvironment.isHeadless();
+		final boolean awtSupported = this.isAwtSystemTraySupported();
+
+		LOGGER.info(
+				"Tray startup: requestedBackend={}, os={}, headless={}, awtSupported={}, xdgSessionType={}, xdgDesktop={}",
+				requestedBackend, osName, isHeadless, awtSupported, System.getenv("XDG_SESSION_TYPE"), System.getenv("XDG_CURRENT_DESKTOP")
+		);
+
+		if (isHeadless)
+			return;
+
+		switch (requestedBackend) {
+			case "none":
+			case "off":
+			case "disabled":
+				LOGGER.info("Tray backend explicitly disabled by {}", TRAY_BACKEND_PROPERTY);
 				return;
-		} catch (AWTError e) {
-			// Even SystemTray.isSupported can fail, so catch that too
+
+			case "awt":
+				this.initializeForcedAwt(awtSupported);
+				return;
+
+			case "sni":
+			case "linux":
+				this.initializeForcedLinuxNative(isLinux, false);
+				return;
+
+			case "appindicator":
+				this.initializeForcedLinuxNative(isLinux, true);
+				return;
+
+			case "auto":
+			default:
+				this.initializeAutoBackend(isLinux, awtSupported);
+		}
+	}
+
+	private void initializeAutoBackend(boolean isLinux, boolean awtSupported) {
+		if (awtSupported && this.initAwtTray())
+			return;
+
+		if (isLinux && this.initLinuxNativeTray(false))
+			return;
+
+		if (!awtSupported)
+			LOGGER.info("No tray backend initialized: AWT tray unsupported and Linux native tray unavailable");
+		else
+			LOGGER.info("No tray backend initialized: AWT tray initialization failed and Linux native tray unavailable");
+	}
+
+	private void initializeForcedAwt(boolean awtSupported) {
+		if (!awtSupported) {
+			LOGGER.warn("AWT tray requested but SystemTray is unsupported on this system");
 			return;
 		}
 
-		LOGGER.info("Launching system tray icon");
+		if (!this.initAwtTray())
+			LOGGER.warn("AWT tray requested but initialization failed");
+	}
+
+	private void initializeForcedLinuxNative(boolean isLinux, boolean forceAppIndicator) {
+		if (!isLinux) {
+			LOGGER.warn("Linux native tray requested on non-Linux OS");
+			return;
+		}
+
+		if (!this.initLinuxNativeTray(forceAppIndicator))
+			LOGGER.warn("Linux native tray requested but initialization failed");
+	}
+
+	private boolean isAwtSystemTraySupported() {
+		try {
+			return SystemTray.isSupported();
+		} catch (AWTError e) {
+			LOGGER.info("AWT SystemTray support check failed: {}", e.getMessage());
+			return false;
+		}
+	}
+
+	private boolean initAwtTray() {
+		LOGGER.info("Initializing system tray backend: awt");
 
 		this.popupMenu = createJPopupMenu();
 
-		// Build TrayIcon without AWT PopupMenu (which doesn't support Unicode)...
-		this.trayIcon = new TrayIcon(Gui.loadImage("icons/qortal_ui_tray_synced.png"), "qortal", null);
-		// ...and attach mouse listener instead so we can use JPopupMenu (which does support Unicode)
-		this.trayIcon.addMouseListener(new MouseAdapter() {
-			@Override
-			public void mousePressed (MouseEvent me) {
-				this.maybePopupMenu(me);
-			}
-
-			@Override
-			public void mouseReleased (MouseEvent me) {
-				this.maybePopupMenu(me);
-			}
-
-			private void maybePopupMenu(MouseEvent me) {
-				if (me.isPopupTrigger()) {
-					// We destroy, then recreate, the hidden dialog to prevent taskbar entries on X11
-					if (!popupMenu.isVisible())
-						destroyHiddenDialog();
-
-					createHiddenDialog();
-					hiddenDialog.setLocation(me.getX() + 1, me.getY() - 1);
-					popupMenu.setLocation(me.getX() + 1, me.getY() - 1);
-
-					popupMenu.setInvoker(hiddenDialog);
-
-					hiddenDialog.setVisible(true);
-					popupMenu.setVisible(true);
-				}
-			}
-		});
-
-		this.trayIcon.setImageAutoSize(true);
+		Image initialIcon = Gui.loadImage("icons/qortal_ui_tray_synced.png");
+		if (initialIcon == null) {
+			LOGGER.warn("Unable to initialize AWT tray icon image");
+			return false;
+		}
 
 		try {
+			// Build TrayIcon without AWT PopupMenu (which doesn't support Unicode)...
+			this.trayIcon = new TrayIcon(initialIcon, "qortal", null);
+			// ...and attach mouse listener instead so we can use JPopupMenu (which does support Unicode)
+			this.trayIcon.addMouseListener(new MouseAdapter() {
+				@Override
+				public void mousePressed(MouseEvent me) {
+					this.maybePopupMenu(me);
+				}
+
+				@Override
+				public void mouseReleased(MouseEvent me) {
+					this.maybePopupMenu(me);
+				}
+
+				private void maybePopupMenu(MouseEvent me) {
+					if (me.isPopupTrigger()) {
+						// We destroy, then recreate, the hidden dialog to prevent taskbar entries on X11
+						if (!popupMenu.isVisible())
+							destroyHiddenDialog();
+
+						createHiddenDialog();
+						hiddenDialog.setLocation(me.getX() + 1, me.getY() - 1);
+						popupMenu.setLocation(me.getX() + 1, me.getY() - 1);
+
+						popupMenu.setInvoker(hiddenDialog);
+
+						hiddenDialog.setVisible(true);
+						popupMenu.setVisible(true);
+					}
+				}
+			});
+
+			this.trayIcon.setImageAutoSize(true);
 			SystemTray.getSystemTray().add(this.trayIcon);
-		} catch (AWTException e) {
+			this.backend = TrayBackend.AWT;
+			LOGGER.info("System tray backend initialized: awt");
+			return true;
+		} catch (AWTException | RuntimeException e) {
+			LOGGER.warn("Unable to initialize AWT tray backend: {}", e.getMessage());
 			this.trayIcon = null;
+			this.popupMenu = null;
+			destroyHiddenDialog();
+			return false;
 		}
+	}
+
+	private boolean initLinuxNativeTray(boolean forceAppIndicator) {
+		LOGGER.info("Initializing system tray backend: linux-native");
+
+		try {
+			dorkbox.systemTray.SystemTray.FORCE_TRAY_TYPE = forceAppIndicator
+					? dorkbox.systemTray.SystemTray.TrayType.AppIndicator
+					: dorkbox.systemTray.SystemTray.TrayType.AutoDetect;
+
+			dorkbox.systemTray.SystemTray tray = dorkbox.systemTray.SystemTray.get("qortal");
+			if (tray == null)
+				return false;
+
+			Image initialIcon = Gui.loadImage("icons/qortal_ui_tray_synced.png");
+			if (initialIcon != null)
+				tray.setImage(initialIcon);
+
+			tray.setTooltip("qortal");
+			populateLinuxNativeMenu(tray.getMenu());
+
+			this.linuxTray = tray;
+			this.backend = TrayBackend.LINUX_NATIVE;
+			LOGGER.info("System tray backend initialized: linux-native ({})", tray.getType());
+			return true;
+		} catch (Throwable e) {
+			LOGGER.warn("Unable to initialize Linux native tray backend: {}", e.getMessage());
+			this.linuxTray = null;
+			return false;
+		} finally {
+			dorkbox.systemTray.SystemTray.FORCE_TRAY_TYPE = dorkbox.systemTray.SystemTray.TrayType.AutoDetect;
+		}
+	}
+
+	private void populateLinuxNativeMenu(dorkbox.systemTray.Menu menu) {
+		menu.add(new dorkbox.systemTray.MenuItem(Translator.INSTANCE.translate("SysTray", "CHECK_TIME_ACCURACY"), actionEvent -> {
+			try {
+				URLViewer.openWebpage(new URL("https://time.is"));
+			} catch (Exception e) {
+				LOGGER.error("Unable to open time-check website in browser");
+			}
+		}));
+
+		menu.add(new dorkbox.systemTray.MenuItem(Translator.INSTANCE.translate("SysTray", "BUILD_VERSION"), actionEvent ->
+				JOptionPane.showMessageDialog(null,
+						"Qortal Core\n" + Translator.INSTANCE.translate("SysTray", "BUILD_VERSION") + ":\n" + Controller.getInstance().getVersionStringWithoutPrefix(),
+						"Qortal Core", 1)));
+
+		menu.add(new dorkbox.systemTray.MenuItem(Translator.INSTANCE.translate("SysTray", "EXIT"), actionEvent -> new ClosingWorker().execute()));
 	}
 
 	private void createHiddenDialog() {
@@ -96,14 +246,14 @@ public class SysTray {
 		hiddenDialog = new JDialog();
 		hiddenDialog.setUndecorated(true);
 		hiddenDialog.setSize(10, 10);
-		hiddenDialog.addWindowFocusListener(new WindowFocusListener () {
+		hiddenDialog.addWindowFocusListener(new WindowFocusListener() {
 			@Override
-			public void windowLostFocus (WindowEvent we ) {
+			public void windowLostFocus(WindowEvent we) {
 				destroyHiddenDialog();
 			}
 
 			@Override
-			public void windowGainedFocus (WindowEvent we) {
+			public void windowGainedFocus(WindowEvent we) {
 			}
 		});
 	}
@@ -162,7 +312,7 @@ public class SysTray {
 		about.addActionListener(actionEvent -> {
 			destroyHiddenDialog();
 
-			JOptionPane.showMessageDialog(null,"Qortal Core\n" + Translator.INSTANCE.translate("SysTray", "BUILD_VERSION") + ":\n" + Controller.getInstance().getVersionStringWithoutPrefix(),"Qortal Core",1);
+			JOptionPane.showMessageDialog(null, "Qortal Core\n" + Translator.INSTANCE.translate("SysTray", "BUILD_VERSION") + ":\n" + Controller.getInstance().getVersionStringWithoutPrefix(), "Qortal Core", 1);
 		});
 		menu.add(about);
 
@@ -226,32 +376,86 @@ public class SysTray {
 	}
 
 	public void showMessage(String caption, String text, TrayIcon.MessageType messagetype) {
-		if (trayIcon != null)
-			trayIcon.displayMessage(caption, text, messagetype);
+		try {
+			switch (this.backend) {
+				case AWT:
+					if (this.trayIcon != null)
+						this.trayIcon.displayMessage(caption, text, messagetype);
+					break;
+
+				case LINUX_NATIVE:
+					// Linux-native backend doesn't support AWT message bubbles directly.
+					LOGGER.debug("Tray notification [{}]: {}", caption, text);
+					break;
+
+				case NONE:
+				default:
+					break;
+			}
+		} catch (Exception e) {
+			LOGGER.debug("Unable to show tray message: {}", e.getMessage());
+		}
 	}
 
 	public void setToolTipText(String text) {
-		if (trayIcon != null)
-			this.trayIcon.setToolTip(text);
+		try {
+			switch (this.backend) {
+				case AWT:
+					if (this.trayIcon != null)
+						this.trayIcon.setToolTip(text);
+					break;
+
+				case LINUX_NATIVE:
+					if (this.linuxTray != null)
+						this.linuxTray.setTooltip(text);
+					break;
+
+				case NONE:
+				default:
+					break;
+			}
+		} catch (Exception e) {
+			LOGGER.debug("Unable to set tray tooltip: {}", e.getMessage());
+		}
 	}
 
 	public void setTrayIcon(int iconid) {
 		try {
-			if (trayIcon != null) {
-				switch (iconid) {
-					case 1:
-						this.trayIcon.setImage(Gui.loadImage("icons/qortal_ui_tray_syncing_time-alt.png"));
-						break;
-					case 2:
-						this.trayIcon.setImage(Gui.loadImage("icons/qortal_ui_tray_minting.png"));
-						break;
-					case 3:
-						this.trayIcon.setImage(Gui.loadImage("icons/qortal_ui_tray_syncing.png"));
-						break;
-					case 4:
-						this.trayIcon.setImage(Gui.loadImage("icons/qortal_ui_tray_synced.png"));
-						break;
-				}
+			Image iconImage = null;
+			switch (iconid) {
+				case 1:
+					iconImage = Gui.loadImage("icons/qortal_ui_tray_syncing_time-alt.png");
+					break;
+				case 2:
+					iconImage = Gui.loadImage("icons/qortal_ui_tray_minting.png");
+					break;
+				case 3:
+					iconImage = Gui.loadImage("icons/qortal_ui_tray_syncing.png");
+					break;
+				case 4:
+					iconImage = Gui.loadImage("icons/qortal_ui_tray_synced.png");
+					break;
+				default:
+					break;
+			}
+
+			if (iconImage == null)
+				return;
+
+			switch (this.backend) {
+				case AWT:
+					if (this.trayIcon != null)
+						this.trayIcon.setImage(iconImage);
+					break;
+
+				case LINUX_NATIVE:
+					if (this.linuxTray != null)
+						this.linuxTray.setImage(iconImage);
+					break;
+
+				case NONE:
+				default:
+					break;
 			}
 		} catch (Exception e) {
 			LOGGER.info("Unable to set tray icon: {}", e.getMessage());
@@ -259,8 +463,28 @@ public class SysTray {
 	}
 
 	public void dispose() {
-		if (trayIcon != null)
-			SystemTray.getSystemTray().remove(this.trayIcon);
+		if (this.trayIcon != null) {
+			try {
+				SystemTray.getSystemTray().remove(this.trayIcon);
+			} catch (Exception e) {
+				LOGGER.debug("Unable to remove AWT tray icon cleanly: {}", e.getMessage());
+			}
+			this.trayIcon = null;
+		}
+
+		destroyHiddenDialog();
+		this.popupMenu = null;
+
+		if (this.linuxTray != null) {
+			try {
+				this.linuxTray.shutdown();
+			} catch (Exception e) {
+				LOGGER.debug("Unable to shut down Linux native tray cleanly: {}", e.getMessage());
+			}
+			this.linuxTray = null;
+		}
+
+		this.backend = TrayBackend.NONE;
 	}
 
 }
