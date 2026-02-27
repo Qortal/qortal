@@ -46,6 +46,7 @@ function parseUrl(url) {
         // Remove theme, identifier, and time queries if they exist
         parsedUrl.searchParams.delete("theme");
         parsedUrl.searchParams.delete("lang");
+        parsedUrl.searchParams.delete("themePalette");
         parsedUrl.searchParams.delete("identifier");
         parsedUrl.searchParams.delete("time");
         parsedUrl.searchParams.delete("isManualNavigation");
@@ -218,6 +219,17 @@ function buildResourceUrl(service, name, identifier, path, isLink) {
         const hasQuery = url.includes("?");
         const queryPrefix = hasQuery ? "&" : "?";
         url += queryPrefix + "theme=" + _qdnTheme + "&lang=" + _qdnLang;
+
+        if (typeof _qdnThemePalette !== "undefined" && _qdnThemePalette !== null) {
+            try {
+                const serializedThemePalette = JSON.stringify(_qdnThemePalette);
+                if (serializedThemePalette != null) {
+                    url += "&themePalette=" + encodeURIComponent(serializedThemePalette);
+                }
+            } catch (error) {
+                console.warn("Unable to serialize _qdnThemePalette:", error);
+            }
+        }
     }
     return url;
 }
@@ -735,4 +747,3 @@ navigation.addEventListener('navigate', (event) => {
     handleQDNResourceDisplayed(processedPath);
    }, 100)
 });
-
