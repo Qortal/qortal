@@ -152,10 +152,12 @@ public class DevProxyServerResource {
             theme = "light";
         }
 
+        String themePalette = request.getParameter("themePalette");
+
         // Parse and modify output if needed
         if (HTMLParser.isHtmlFile(filename)) {
             // HTML file - needs to be parsed
-            HTMLParser htmlParser = new HTMLParser("", inPath, "", false, data, "proxy", Service.APP, null, theme , true, lang);
+            HTMLParser htmlParser = new HTMLParser("", inPath, "", false, data, "proxy", Service.APP, null, theme, true, lang, themePalette);
             htmlParser.addAdditionalHeaderTags();
             response.addHeader("Content-Security-Policy", "default-src 'self' 'unsafe-inline' 'unsafe-eval'; media-src 'self' data: blob:; img-src 'self' data: blob:; connect-src 'self' ws:; font-src 'self' data:;");
             response.setContentType(con.getContentType());

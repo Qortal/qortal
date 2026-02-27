@@ -41,6 +41,7 @@ public class ArbitraryDataRenderer {
     private final String identifier;
     private String theme = "light";
     private String lang = "en"; 
+    private String themePalette = null;
     private String inPath;
     private final String secret58;
     private final String prefix;
@@ -177,7 +178,7 @@ public class ArbitraryDataRenderer {
                 } else {
                     encodedResourceId = resourceId;
                 }
-                HTMLParser htmlParser = new HTMLParser(encodedResourceId, inPath, prefix, includeResourceIdInPrefix, data, qdnContext, service, identifier, theme, usingCustomRouting, lang);
+                HTMLParser htmlParser = new HTMLParser(encodedResourceId, inPath, prefix, includeResourceIdInPrefix, data, qdnContext, service, identifier, theme, usingCustomRouting, lang, themePalette);
                 htmlParser.addAdditionalHeaderTags();
                 response.addHeader(
                     "Content-Security-Policy",
@@ -279,6 +280,9 @@ public class ArbitraryDataRenderer {
     }
     public void setLang(String lang) {
         this.lang = lang;
-    }    
+    }
+    public void setThemePalette(String themePalette) {
+        this.themePalette = themePalette;
+    }
 
 }
