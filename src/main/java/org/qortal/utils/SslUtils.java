@@ -19,6 +19,8 @@ import org.qortal.settings.Settings;
 
 import java.io.*;
 import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.*;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
@@ -88,6 +90,7 @@ public class SslUtils {
 
             // Create keystore
             createKeystore();
+            cleanupFiles();
         } catch (Exception e) {
             throw new RuntimeException("Failed to generate SSL certificates", e);
         }
@@ -282,6 +285,17 @@ public class SslUtils {
         // Save keystore (encryption performed by default provider; no BC authentication required).
         try (FileOutputStream fos = new FileOutputStream(Settings.getInstance().getSslKeystorePathname())) {
             keyStore.store(fos, Settings.getInstance().getSslKeystorePassword().toCharArray());
+        }
+    }
+
+    private static void cleanupFiles() {
+        try {
+        Files.delete(Path.of(CA_CERT_PATH));
+        Files.delete(Path.of(CA_KEY_PATH));
+        Files.delete(Path.of(SERVER_CERT_PATH));
+        Files.delete(Path.of(SERVER_KEY_PATH));
+        } catch (IOException e) {
+        LOGGER.warn("Could not remove certificate flat files: {}", e.getMessage());
         }
     }
 }
