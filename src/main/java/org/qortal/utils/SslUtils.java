@@ -47,6 +47,18 @@ public class SslUtils {
         Security.addProvider(new org.bouncycastle.jsse.provider.BouncyCastleJsseProvider());
     }
 
+    /** Returns true if the string is a literal IP address (IPv4 or IPv6), so it must not be used as a DNS name in SAN. */
+    private static boolean isIpAddress(String s) {
+        if (s == null || s.isEmpty()) {
+            return false;
+        }
+        try {
+            return InetAddress.getByName(s).getHostAddress().equals(s);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public static void generateSsl() {
         try {
             // Generate key pair
@@ -116,8 +128,11 @@ public class SslUtils {
             String hostName = localHost.getHostName(); // Shortname
             String canonicalHostName = localHost.getCanonicalHostName(); // FQDN
 
-            altNames.add(new GeneralName(GeneralName.dNSName, hostName));
-            if (!canonicalHostName.equalsIgnoreCase(hostName)) {
+         
+            if (!isIpAddress(hostName)) {
+                altNames.add(new GeneralName(GeneralName.dNSName, hostName));
+            }
+            if (!canonicalHostName.equalsIgnoreCase(hostName) && !isIpAddress(canonicalHostName)) {
                 altNames.add(new GeneralName(GeneralName.dNSName, canonicalHostName));
             }
         } catch (Exception e) {
