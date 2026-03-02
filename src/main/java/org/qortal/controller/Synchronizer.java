@@ -116,6 +116,29 @@ public class Synchronizer extends Thread {
 		}
 	}
 
+	/**
+	 * Container for blocks pre-fetched from a peer before the blockchain lock is acquired.
+	 * Separating network I/O (Phase 1, no lock) from DB writes (Phase 2, with lock) ensures
+	 * that network timeouts and retries never block the /process endpoint or BlockMinter.
+	 */
+	private static class PrefetchedBlocks {
+		final SynchronizationResult result;
+		final List<Block> blocks;
+
+		private PrefetchedBlocks(SynchronizationResult result, List<Block> blocks) {
+			this.result = result;
+			this.blocks = blocks;
+		}
+
+		static PrefetchedBlocks error(SynchronizationResult result) {
+			return new PrefetchedBlocks(result, null);
+		}
+
+		static PrefetchedBlocks success(List<Block> blocks) {
+			return new PrefetchedBlocks(SynchronizationResult.OK, blocks);
+		}
+	}
+
 	// Constructors
 
 	private Synchronizer() {
@@ -996,8 +1019,136 @@ public class Synchronizer extends Thread {
 	 * @throws InterruptedException
 	 */
 	public SynchronizationResult synchronize(Peer peer, boolean force) throws InterruptedException {
-		// Make sure we're the only thread modifying the blockchain
-		// If we're already synchronizing with another peer then this will also return fast
+		/*
+		 * Two-phase sync to prevent network I/O from blocking the blockchain lock.
+		 *
+		 * PHASE 1 (no lock): Read our chain state, perform all network I/O with the
+		 * peer (finding common block, comparing chains, fetching blocks). Any timeouts
+		 * or retries happen here without holding the blockchain lock, so /process
+		 * endpoint and BlockMinter remain unblocked during this phase.
+		 *
+		 * PHASE 2 (with lock): Verify our chain hasn't changed since Phase 1. If it
+		 * hasn't, apply the pre-fetched blocks atomically. Lock is held only for the
+		 * brief DB write phase, not for any network I/O.
+		 */
+
+		// ── PHASE 1: No lock ──────────────────────────────────────────────────────────
+		// ── PHASE 1a: DB reads + common-block search ──────────────────────────────────
+		// Repository is held only for fast, local DB reads and brief block-summary network
+		// requests (SYNC_RESPONSE_TIMEOUT).  It is closed before any full-block fetch.
+		final byte[] ourInitialSignature;
+		final int ourInitialHeight;
+		final BlockData ourInitialBlockData;
+		final BlockData commonBlockData;
+		final boolean isReorg;
+		final int finalPeerHeight;
+		final List<BlockSummaryData> finalPeerBlockSummaries;
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			try {
+				ourInitialBlockData = repository.getBlockRepository().getLastBlock();
+				ourInitialHeight = ourInitialBlockData.getHeight();
+				ourInitialSignature = ourInitialBlockData.getSignature();
+
+				BlockSummaryData peerChainTipData = peer.getChainTipData();
+				int peerHeight = peerChainTipData.getHeight();
+				byte[] peersLastBlockSignature = peerChainTipData.getSignature();
+
+				byte[] ourLastBlockSignature = ourInitialBlockData.getSignature();
+				String syncString = String.format("Synchronizing with peer %s at height %d, sig %.8s, ts %d; our height %d, sig %.8s, ts %d", peer,
+						peerHeight, Base58.encode(peersLastBlockSignature), peerChainTipData.getTimestamp(),
+						ourInitialHeight, Base58.encode(ourLastBlockSignature), ourInitialBlockData.getTimestamp());
+				LOGGER.info(syncString);
+
+				// Reset last re-org size as we are starting a new sync round
+				this.lastReorgSize = 0;
+
+				// Set the initial value of timeValidBlockLastReceived if it's null
+				Long now = NTP.getTime();
+				if (this.timeValidBlockLastReceived == null) {
+					this.timeValidBlockLastReceived = now;
+				}
+
+				// Delete invalid signatures with older timestamps
+				this.deleteOlderInvalidSignatures(now);
+
+				// Find common block (block-summary requests — fast network I/O)
+				List<BlockSummaryData> peerBlockSummaries = new ArrayList<>();
+				SynchronizationResult findCommonBlockResult = fetchSummariesFromCommonBlock(repository, peer, ourInitialHeight, force, peerBlockSummaries, true);
+				if (findCommonBlockResult != SynchronizationResult.OK) {
+					// Logging performed by fetchSummariesFromCommonBlock() above
+					peer.setCommonBlockData(null);
+					return findCommonBlockResult;
+				}
+
+				// First summary is common block
+				commonBlockData = repository.getBlockRepository().fromSignature(peerBlockSummaries.get(0).getSignature());
+				final int commonBlockHeight = commonBlockData.getHeight();
+				final byte[] commonBlockSig = commonBlockData.getSignature();
+				final String commonBlockSig58 = Base58.encode(commonBlockSig);
+				LOGGER.debug(String.format("Common block with peer %s is at height %d, sig %.8s, ts %d", peer,
+						commonBlockHeight, commonBlockSig58, commonBlockData.getTimestamp()));
+				peerBlockSummaries.remove(0);
+
+				// If common block height is higher than peer's last reported height
+				// then peer must have a very recent sync. Update our idea of peer's height.
+				if (commonBlockHeight > peerHeight) {
+					LOGGER.debug(String.format("Peer height %d was lower than common block height %d - using higher value", peerHeight, commonBlockHeight));
+					peerHeight = commonBlockHeight;
+				}
+
+				// If common block is peer's latest block then we simply have the same, or longer, chain to peer, so exit now
+				if (commonBlockHeight == peerHeight) {
+					if (peerHeight == ourInitialHeight)
+						LOGGER.debug(String.format("We have the same blockchain as peer %s", peer));
+					else
+						LOGGER.debug(String.format("We have the same blockchain as peer %s, but longer", peer));
+
+					return SynchronizationResult.NOTHING_TO_DO;
+				}
+
+				// Unless we're doing a forced sync, we might need to compare chains (block-summary requests — fast)
+				if (!force && ourInitialHeight > commonBlockHeight) {
+					SynchronizationResult chainCompareResult = compareChains(repository, commonBlockData, ourInitialBlockData, peer, peerHeight, peerBlockSummaries);
+					if (chainCompareResult != SynchronizationResult.OK)
+						return chainCompareResult;
+				}
+
+				// Capture everything we need and let the repository close here.
+				// Phase 1b (block fetch) holds NO DB connection.
+				isReorg = (commonBlockHeight < ourInitialHeight);
+				finalPeerHeight = peerHeight;
+				finalPeerBlockSummaries = peerBlockSummaries;
+
+			} finally {
+				repository.discardChanges(); // Free repository locks, if any
+			}
+		} catch (DataException e) {
+			LOGGER.error("Repository issue during pre-fetch phase with peer " + peer, e);
+			return SynchronizationResult.REPOSITORY_ISSUE;
+		}
+
+		// ── PHASE 1b: Block fetching — no repository, no lock ─────────────────────────
+		// Full-block network requests (with SYNC_RESPONSE_TIMEOUT retries or FETCH_BLOCKS_TIMEOUT)
+		// happen here without holding any DB connection.  Blocks are constructed with a null
+		// repository; setRepository() is called in Phase 2 (apply phase) before any DB operation.
+		final PrefetchedBlocks prefetched;
+		try {
+			if (isReorg) {
+				prefetched = fetchPeerChainBlocks(ourInitialBlockData, commonBlockData, ourInitialHeight, peer, finalPeerHeight, finalPeerBlockSummaries);
+			} else {
+				prefetched = fetchNewBlocks(commonBlockData, ourInitialHeight, peer, finalPeerHeight, finalPeerBlockSummaries);
+			}
+		} catch (DataException e) {
+			LOGGER.error("Repository issue during block-fetch phase with peer " + peer, e);
+			return SynchronizationResult.REPOSITORY_ISSUE;
+		}
+
+		if (prefetched.result != SynchronizationResult.OK)
+			return prefetched.result;
+
+		// ── PHASE 2: With lock ────────────────────────────────────────────────────────
+		// Lock held only for DB writes; network I/O is already done.
 		ReentrantLock blockchainLock = Controller.getInstance().getBlockchainLock();
 		if (!blockchainLock.tryLock(3, TimeUnit.SECONDS)) {
 			// Wasn't peer's fault we couldn't sync
@@ -1008,108 +1159,45 @@ public class Synchronizer extends Thread {
 		try {
 			try (final Repository repository = RepositoryManager.getRepository()) {
 				try {
-					final BlockData ourLatestBlockData = repository.getBlockRepository().getLastBlock();
-					final int ourInitialHeight = ourLatestBlockData.getHeight();
-
-					BlockSummaryData peerChainTipData = peer.getChainTipData();
-					int peerHeight = peerChainTipData.getHeight();
-					byte[] peersLastBlockSignature = peerChainTipData.getSignature();
-
-					byte[] ourLastBlockSignature = ourLatestBlockData.getSignature();
-					String syncString = String.format("Synchronizing with peer %s at height %d, sig %.8s, ts %d; our height %d, sig %.8s, ts %d", peer,
-							peerHeight, Base58.encode(peersLastBlockSignature), peerChainTipData.getTimestamp(),
-							ourInitialHeight, Base58.encode(ourLastBlockSignature), ourLatestBlockData.getTimestamp());
-					LOGGER.info(syncString);
-
-					// Reset last re-org size as we are starting a new sync round
-					this.lastReorgSize = 0;
-
-					// Set the initial value of timeValidBlockLastReceived if it's null
-					Long now = NTP.getTime();
-					if (this.timeValidBlockLastReceived == null) {
-						this.timeValidBlockLastReceived = now;
-					}
-
-					// Delete invalid signatures with older timestamps
-					this.deleteOlderInvalidSignatures(now);
-
-					List<BlockSummaryData> peerBlockSummaries = new ArrayList<>();
-					SynchronizationResult findCommonBlockResult = fetchSummariesFromCommonBlock(repository, peer, ourInitialHeight, force, peerBlockSummaries, true);
-					if (findCommonBlockResult != SynchronizationResult.OK) {
-						// Logging performed by fetchSummariesFromCommonBlock() above
-						// Clear our common block cache for this peer
-						peer.setCommonBlockData(null);
-						return findCommonBlockResult;
-					}
-
-					// First summary is common block
-					final BlockData commonBlockData = repository.getBlockRepository().fromSignature(peerBlockSummaries.get(0).getSignature());
-					final int commonBlockHeight = commonBlockData.getHeight();
-					final byte[] commonBlockSig = commonBlockData.getSignature();
-					final String commonBlockSig58 = Base58.encode(commonBlockSig);
-					LOGGER.debug(String.format("Common block with peer %s is at height %d, sig %.8s, ts %d", peer,
-							commonBlockHeight, commonBlockSig58, commonBlockData.getTimestamp()));
-					peerBlockSummaries.remove(0);
-
-					// If common block height is higher than peer's last reported height
-					// then peer must have a very recent sync. Update our idea of peer's height.
-					if (commonBlockHeight > peerHeight) {
-						LOGGER.debug(String.format("Peer height %d was lower than common block height %d - using higher value", peerHeight, commonBlockHeight));
-						peerHeight = commonBlockHeight;
-					}
-
-					// If common block is peer's latest block then we simply have the same, or longer, chain to peer, so exit now
-					if (commonBlockHeight == peerHeight) {
-						if (peerHeight == ourInitialHeight)
-							LOGGER.debug(String.format("We have the same blockchain as peer %s", peer));
-						else
-							LOGGER.debug(String.format("We have the same blockchain as peer %s, but longer", peer));
-
+					// Guard: verify our chain hasn't changed while we were fetching from peer.
+					// If it has, discard pre-fetched blocks — the next sync cycle will decide freshly.
+					final BlockData currentTip = repository.getBlockRepository().getLastBlock();
+					if (!Arrays.equals(ourInitialSignature, currentTip.getSignature())) {
+						LOGGER.debug("Chain changed during pre-fetch from peer {} — discarding pre-fetched blocks", peer);
 						return SynchronizationResult.NOTHING_TO_DO;
 					}
 
-					// Unless we're doing a forced sync, we might need to compare blocks after common block
-					if (!force && ourInitialHeight > commonBlockHeight) {
-						SynchronizationResult chainCompareResult = compareChains(repository, commonBlockData, ourLatestBlockData, peer, peerHeight, peerBlockSummaries);
-						if (chainCompareResult != SynchronizationResult.OK)
-							return chainCompareResult;
-					}
-
-					SynchronizationResult syncResult = null;
-					if (commonBlockHeight < ourInitialHeight) {
-						// Peer's chain is better, sync to that one
-						syncResult = syncToPeerChain(repository, commonBlockData, ourInitialHeight, peer, peerHeight, peerBlockSummaries);
+					// Apply the pre-fetched blocks
+					SynchronizationResult syncResult;
+					if (isReorg) {
+						syncResult = applyPeerChainBlocks(repository, commonBlockData, ourInitialHeight, peer, prefetched.blocks);
 					} else {
-						// Simply fetch and apply blocks as they arrive
-						syncResult = applyNewBlocks(repository, commonBlockData, ourInitialHeight, peer, peerHeight, peerBlockSummaries);
+						syncResult = applyNewBlocksList(repository, peer, prefetched.blocks);
 					}
 
 					if (syncResult != SynchronizationResult.OK)
 						return syncResult;
 
-					// Commit
+					// Final commit
 					repository.saveChanges();
 
-					// Create string for logging
+					// Log sync result
 					final BlockData newLatestBlockData = repository.getBlockRepository().getLastBlock();
 					String syncLog = String.format("Synchronized with peer %s to height %d, sig %.8s, ts: %d", peer,
 							newLatestBlockData.getHeight(), Base58.encode(newLatestBlockData.getSignature()),
 							newLatestBlockData.getTimestamp());
 
-					// Append re-org info
-					if (this.lastReorgSize > 0) {
+					if (this.lastReorgSize > 0)
 						syncLog = syncLog.concat(String.format(", size: %d", this.lastReorgSize));
-					}
 
-					// Log sync info
 					LOGGER.info(syncLog);
 
 					return SynchronizationResult.OK;
 				} finally {
-					repository.discardChanges(); // Free repository locks, if any, also in case anything went wrong
+					repository.discardChanges(); // Free repository locks, if any
 				}
 			} catch (DataException e) {
-				LOGGER.error("Repository issue during synchronization with peer", e);
+				LOGGER.error("Repository issue during apply phase with peer " + peer, e);
 				return SynchronizationResult.REPOSITORY_ISSUE;
 			}
 		} finally {
@@ -1143,7 +1231,7 @@ public class Synchronizer extends Thread {
 			// Fetch our block signature at this height
 			testBlockData = repository.getBlockRepository().fromHeight(testHeight);
 			if (testBlockData == null) {
-				// Not found? But we've locked the blockchain and height is below blockchain's tip!
+				// Not found? Height is below our reported tip — should not happen.
 				LOGGER.error("Failed to get block at height lower than blockchain tip during synchronization?");
 				return SynchronizationResult.REPOSITORY_ISSUE;
 			}
@@ -1301,8 +1389,13 @@ public class Synchronizer extends Thread {
 		return SynchronizationResult.OK;
 	}
 
-	private SynchronizationResult syncToPeerChain(Repository repository, BlockData commonBlockData, int ourInitialHeight,
-												  Peer peer, final int peerHeight, List<BlockSummaryData> peerBlockSummaries) throws DataException, InterruptedException {
+	/**
+	 * Phase 1 (no lock): Pre-fetches all peer chain blocks needed for a reorg.
+	 * All network I/O with timeouts/retries occurs here.
+	 * Approval status and full validation are deferred to the apply phase.
+	 */
+	private PrefetchedBlocks fetchPeerChainBlocks(BlockData ourInitialBlockData, BlockData commonBlockData, int ourInitialHeight,
+			Peer peer, final int peerHeight, List<BlockSummaryData> peerBlockSummaries) throws DataException, InterruptedException {
 		final int commonBlockHeight = commonBlockData.getHeight();
 		final byte[] commonBlockSig = commonBlockData.getSignature();
 		String commonBlockSig58 = Base58.encode(commonBlockSig);
@@ -1310,39 +1403,25 @@ public class Synchronizer extends Thread {
 		byte[] latestPeerSignature = commonBlockSig;
 		int height = commonBlockHeight;
 
-		LOGGER.debug(() -> String.format("Fetching peer %s chain from height %d, sig %.8s", peer, commonBlockHeight, commonBlockSig58));
+		LOGGER.debug(() -> String.format("Pre-fetching peer %s chain from height %d, sig %.8s", peer, commonBlockHeight, commonBlockSig58));
 
 		final int maxRetries = Settings.getInstance().getMaxRetries();
 
-		// Overall plan: fetch peer's blocks first, then orphan, then apply
-
-		// Convert any leftover (post-common) block summaries into signatures to request from peer
 		List<byte[]> peerBlockSignatures = peerBlockSummaries.stream().map(BlockSummaryData::getSignature).collect(Collectors.toList());
-
-		// Keep a list of blocks received so far
 		List<Block> peerBlocks = new ArrayList<>();
 
-		// Calculate the total number of additional blocks this peer has beyond the common block
 		int additionalPeerBlocksAfterCommonBlock = peerHeight - commonBlockHeight;
-		// Subtract the number of signatures that we already have, as we don't need to request them again
 		int numberSignaturesRequired = additionalPeerBlocksAfterCommonBlock - peerBlockSignatures.size();
 
 		int retryCount = 0;
 
-		// Keep fetching blocks from peer until we reach their tip, or reach a count of MAXIMUM_COMMON_DELTA blocks.
-		// We need to limit the total number, otherwise too much can be loaded into memory, causing an
-		// OutOfMemoryException. This is common when syncing from 1000+ blocks behind the chain tip, after starting
-		// from a small fork that didn't become part of the main chain. This causes the entire sync process to
-		// use syncToPeerChain(), resulting in potentially thousands of blocks being held in memory if the limit
-		// below isn't applied.
+		// Fetch until peer's tip or MAXIMUM_COMMON_DELTA blocks (memory guard)
 		while (height < peerHeight && peerBlocks.size() <= MAXIMUM_COMMON_DELTA) {
 			if (Controller.isStopping())
-				return SynchronizationResult.SHUTTING_DOWN;
+				return PrefetchedBlocks.error(SynchronizationResult.SHUTTING_DOWN);
 
-			// Ensure we don't request more than MAXIMUM_REQUEST_SIZE
 			int numberRequested = Math.min(numberSignaturesRequired, MAXIMUM_REQUEST_SIZE);
 
-			// Do we need more signatures?
 			if (peerBlockSignatures.isEmpty() && numberRequested > 0) {
 				LOGGER.trace(String.format("Requesting %d signature%s after height %d, sig %.8s",
 						numberRequested, (numberRequested != 1 ? "s" : ""), height, Base58.encode(latestPeerSignature)));
@@ -1353,38 +1432,27 @@ public class Synchronizer extends Thread {
 					LOGGER.info(String.format("Peer %s failed to respond with more block signatures after height %d, sig %.8s", peer,
 							height, Base58.encode(latestPeerSignature)));
 
-					// Clear our cache of common block summaries for this peer, as they are likely to be invalid
 					CommonBlockData cachedCommonBlockData = peer.getCommonBlockData();
 					if (cachedCommonBlockData != null)
 						cachedCommonBlockData.setBlockSummariesAfterCommonBlock(null);
 
-                    // If we have already received newer blocks from this peer that what we have already, go ahead and apply them
-                    if (!peerBlocks.isEmpty()) {
-						final BlockData ourLatestBlockData = repository.getBlockRepository().getLastBlock();
-						final Block peerLatestBlock = peerBlocks.get(peerBlocks.size() - 1);
-						final Long minLatestBlockTimestamp = Controller.getMinimumLatestBlockTimestamp();
-						if (ourLatestBlockData != null && peerLatestBlock != null && minLatestBlockTimestamp != null) {
-
-							// If our latest block is very old....
-							if (ourLatestBlockData.getTimestamp() < minLatestBlockTimestamp) {
-								// ... and we have received a block that is more recent than our latest block ...
-								if (peerLatestBlock.getBlockData().getTimestamp() > ourLatestBlockData.getTimestamp()) {
-									// ... then apply the blocks, as it takes us a step forward.
-									// This is particularly useful when starting up a node that was on a small fork when it was last shut down.
-									// In these cases, we now allow the node to sync forward, and get onto the main chain again.
-									// Without this, we would require that the node syncs ENTIRELY with this peer,
-									// and any problems downloading a block would cause all progress to be lost.
-									LOGGER.debug(String.format("Newly received blocks are %d ms newer than our latest block - so we will apply them", peerLatestBlock.getBlockData().getTimestamp() - ourLatestBlockData.getTimestamp()));
-									break;
-								}
+				// If we have already received newer blocks from this peer, go ahead and apply them
+				if (!peerBlocks.isEmpty()) {
+					final Block peerLatestBlock = peerBlocks.get(peerBlocks.size() - 1);
+					final Long minLatestBlockTimestamp = Controller.getMinimumLatestBlockTimestamp();
+					if (ourInitialBlockData != null && peerLatestBlock != null && minLatestBlockTimestamp != null) {
+						if (ourInitialBlockData.getTimestamp() < minLatestBlockTimestamp) {
+							if (peerLatestBlock.getBlockData().getTimestamp() > ourInitialBlockData.getTimestamp()) {
+								LOGGER.debug(String.format("Newly received blocks are %d ms newer than our latest block - so we will apply them", peerLatestBlock.getBlockData().getTimestamp() - ourInitialBlockData.getTimestamp()));
+								break;
 							}
 						}
-                    }
-					// Otherwise, give up and move on to the next peer, to avoid putting our chain into an outdated or incomplete state
-                    return SynchronizationResult.NO_REPLY;
-                }
+					}
+				}
+				return PrefetchedBlocks.error(SynchronizationResult.NO_REPLY);
+			}
 
-				numberSignaturesRequired = peerHeight - height - peerBlockSignatures.size();
+			numberSignaturesRequired = peerHeight - height - peerBlockSignatures.size();
 				LOGGER.trace(String.format("Received %s signature%s", peerBlockSignatures.size(), (peerBlockSignatures.size() != 1 ? "s" : "")));
 			}
 
@@ -1393,64 +1461,48 @@ public class Synchronizer extends Thread {
 				break;
 			}
 
-			// Catch a block with an invalid signature before orphaning, so that we retain our existing valid candidate
+			// Catch a block with an invalid signature before orphaning
 			if (this.containsInvalidBlockSignature(peerBlockSignatures)) {
 				LOGGER.info(String.format("Peer %s sent invalid block signature: %.8s", peer, Base58.encode(latestPeerSignature)));
-				return SynchronizationResult.INVALID_DATA;
+				return PrefetchedBlocks.error(SynchronizationResult.INVALID_DATA);
 			}
 
-			// Final check to make sure the peer isn't out of date
 			if (peer.getChainTipData() != null) {
 				final Long minLatestBlockTimestamp = Controller.getMinimumLatestBlockTimestamp();
 				final Long peerLastBlockTimestamp = peer.getChainTipData().getTimestamp();
 				if (peerLastBlockTimestamp == null || peerLastBlockTimestamp < minLatestBlockTimestamp) {
 					LOGGER.info(String.format("Peer %s is out of date, so abandoning sync attempt", peer));
-					return SynchronizationResult.CHAIN_TIP_TOO_OLD;
+					return PrefetchedBlocks.error(SynchronizationResult.CHAIN_TIP_TOO_OLD);
 				}
 			}
 
 			byte[] nextPeerSignature = peerBlockSignatures.get(0);
 			int nextHeight = height + 1;
 
-			LOGGER.trace(String.format("Fetching block %d, sig %.8s from %s", nextHeight, Base58.encode(nextPeerSignature), peer));
-			Block newBlock = this.fetchBlock(repository, peer, nextPeerSignature);
+		LOGGER.trace(String.format("Fetching block %d, sig %.8s from %s", nextHeight, Base58.encode(nextPeerSignature), peer));
+		Block newBlock = this.fetchBlock(peer, nextPeerSignature);
 
 			if (newBlock == null) {
 				LOGGER.info(String.format("Peer %s failed to respond with block for height %d, sig %.8s", peer,
 						nextHeight, Base58.encode(nextPeerSignature)));
 
-				if (retryCount >= maxRetries) {
-					// If we have already received newer blocks from this peer that what we have already, go ahead and apply them
-					if (!peerBlocks.isEmpty()) {
-						final BlockData ourLatestBlockData = repository.getBlockRepository().getLastBlock();
-						final Block peerLatestBlock = peerBlocks.get(peerBlocks.size() - 1);
-						final Long minLatestBlockTimestamp = Controller.getMinimumLatestBlockTimestamp();
-						if (ourLatestBlockData != null && peerLatestBlock != null && minLatestBlockTimestamp != null) {
-
-							// If our latest block is very old....
-							if (ourLatestBlockData.getTimestamp() < minLatestBlockTimestamp) {
-								// ... and we have received a block that is more recent than our latest block ...
-								if (peerLatestBlock.getBlockData().getTimestamp() > ourLatestBlockData.getTimestamp()) {
-									// ... then apply the blocks, as it takes us a step forward.
-									// This is particularly useful when starting up a node that was on a small fork when it was last shut down.
-									// In these cases, we now allow the node to sync forward, and get onto the main chain again.
-									// Without this, we would require that the node syncs ENTIRELY with this peer,
-									// and any problems downloading a block would cause all progress to be lost.
-									LOGGER.debug(String.format("Newly received blocks are %d ms newer than our latest block - so we will apply them", peerLatestBlock.getBlockData().getTimestamp() - ourLatestBlockData.getTimestamp()));
-									break;
-								}
+			if (retryCount >= maxRetries) {
+				if (!peerBlocks.isEmpty()) {
+					final Block peerLatestBlock = peerBlocks.get(peerBlocks.size() - 1);
+					final Long minLatestBlockTimestamp = Controller.getMinimumLatestBlockTimestamp();
+					if (ourInitialBlockData != null && peerLatestBlock != null && minLatestBlockTimestamp != null) {
+						if (ourInitialBlockData.getTimestamp() < minLatestBlockTimestamp) {
+							if (peerLatestBlock.getBlockData().getTimestamp() > ourInitialBlockData.getTimestamp()) {
+								LOGGER.debug(String.format("Newly received blocks are %d ms newer than our latest block - so we will apply them", peerLatestBlock.getBlockData().getTimestamp() - ourInitialBlockData.getTimestamp()));
+								break;
 							}
 						}
 					}
-					// Otherwise, give up and move on to the next peer, to avoid putting our chain into an outdated or incomplete state
-					return SynchronizationResult.NO_REPLY;
-
+				}
+				return PrefetchedBlocks.error(SynchronizationResult.NO_REPLY);
 				} else {
-					// Re-fetch signatures, in case the peer is now on a different fork
 					peerBlockSignatures.clear();
 					numberSignaturesRequired = peerHeight - height;
-
-					// Retry until retryCount reaches maxRetries
 					retryCount++;
 					int triesRemaining = maxRetries - retryCount;
 					LOGGER.info(String.format("Re-issuing request to peer %s (%d attempt%s remaining)", peer, triesRemaining, (triesRemaining != 1 ? "s" : "")));
@@ -1458,7 +1510,6 @@ public class Synchronizer extends Thread {
 				}
 			}
 
-			// Reset retryCount because the last request succeeded
 			retryCount = 0;
 
 			LOGGER.trace(String.format("Fetched block %d, sig %.8s from %s", nextHeight, Base58.encode(latestPeerSignature), peer));
@@ -1466,22 +1517,31 @@ public class Synchronizer extends Thread {
 			if (!newBlock.isSignatureValid()) {
 				LOGGER.info(String.format("Peer %s sent block with invalid signature for height %d, sig %.8s", peer,
 						nextHeight, Base58.encode(latestPeerSignature)));
-				return SynchronizationResult.INVALID_DATA;
+				return PrefetchedBlocks.error(SynchronizationResult.INVALID_DATA);
 			}
 
-			// Transactions are transmitted without approval status so determine that now
-			for (Transaction transaction : newBlock.getTransactions())
-				transaction.setInitialApprovalStatus();
-
+			// Signature valid; full validation (setInitialApprovalStatus, preProcess, isValid) deferred to apply phase
 			peerBlocks.add(newBlock);
-
-			// Now that we've received this block, we can increase our height and move on to the next one
 			latestPeerSignature = nextPeerSignature;
 			peerBlockSignatures.remove(0);
 			++height;
 		}
 
-		// Unwind to common block (unless common block is our latest block)
+		return PrefetchedBlocks.success(peerBlocks);
+	}
+
+	/**
+	 * Phase 2 (with lock): Orphans our local blocks back to the common block, then
+	 * applies the pre-fetched peer chain blocks atomically.
+	 * Must be called with the blockchain lock already held.
+	 */
+	private SynchronizationResult applyPeerChainBlocks(Repository repository, BlockData commonBlockData, int ourInitialHeight,
+			Peer peer, List<Block> peerBlocks) throws DataException {
+		final int commonBlockHeight = commonBlockData.getHeight();
+		final byte[] commonBlockSig = commonBlockData.getSignature();
+		String commonBlockSig58 = Base58.encode(commonBlockSig);
+
+		// Unwind to common block
 		int ourHeight = ourInitialHeight;
 		LOGGER.debug(String.format("Orphaning blocks back to common block height %d, sig %.8s. Our height: %d", commonBlockHeight, commonBlockSig58, ourHeight));
 		int reorgSize = ourHeight - commonBlockHeight;
@@ -1511,6 +1571,13 @@ public class Synchronizer extends Thread {
 			if (Controller.isStopping())
 				return SynchronizationResult.SHUTTING_DOWN;
 
+			// Bind to Phase 2 repository so all DB operations use the current session
+			newBlock.setRepository(repository);
+
+			// Set approval status now that we have a live repository session
+			for (Transaction transaction : newBlock.getTransactions())
+				transaction.setInitialApprovalStatus();
+
 			newBlock.preProcess();
 
 			ValidationResult blockResult = newBlock.isValid();
@@ -1522,10 +1589,8 @@ public class Synchronizer extends Thread {
 				return SynchronizationResult.INVALID_DATA;
 			}
 
-			// Block is valid
 			this.timeValidBlockLastReceived = NTP.getTime();
 
-			// Save transactions attached to this block
 			for (Transaction transaction : newBlock.getTransactions()) {
 				TransactionData transactionData = transaction.getTransactionData();
 				repository.getTransactionRepository().save(transactionData);
@@ -1550,218 +1615,199 @@ public class Synchronizer extends Thread {
 		return SynchronizationResult.OK;
 	}
 
-    private SynchronizationResult applyNewBlocks(Repository repository, BlockData commonBlockData, int ourInitialHeight,
-                                                 Peer peer, int peerHeight, List<BlockSummaryData> peerBlockSummaries) throws InterruptedException, DataException {
+	/**
+	 * Phase 1 (no lock): Pre-fetches new blocks from a peer (no reorg needed).
+	 * Dispatches to fast or slow pre-fetch based on peer capabilities and settings.
+	 */
+	private PrefetchedBlocks fetchNewBlocks(BlockData commonBlockData, int ourInitialHeight,
+			Peer peer, int peerHeight, List<BlockSummaryData> peerBlockSummaries) throws InterruptedException, DataException {
+		int blocksBehind = peerHeight - ourInitialHeight;
+		if (Settings.getInstance().isFastSyncEnabled() && peer.getPeersVersion() >= PEER_VERSION_550 && blocksBehind >= MAXIMUM_REQUEST_SIZE) {
+			return this.fetchNewBlocksFastSync(commonBlockData, ourInitialHeight, peer, peerHeight, peerBlockSummaries);
+		} else {
+			return this.fetchNewBlocksSlowSync(commonBlockData, ourInitialHeight, peer, peerHeight, peerBlockSummaries);
+		}
+	}
 
-        //final BlockData ourLatestBlockData = repository.getBlockRepository().getLastBlock();
+	/**
+	 * Phase 1 (no lock): Pre-fetches new blocks from a peer using fast sync (multi-block batches).
+	 * Signature validation is done here; full block validation is deferred to the apply phase.
+	 */
+	private PrefetchedBlocks fetchNewBlocksFastSync(BlockData commonBlockData, int ourInitialHeight,
+			Peer peer, int peerHeight, List<BlockSummaryData> peerBlockSummaries) throws InterruptedException, DataException {
+		LOGGER.debug(String.format("Pre-fetching new blocks from peer %s using fast sync", peer));
 
-        int blocksBehind = peerHeight - ourInitialHeight;
-        if (Settings.getInstance().isFastSyncEnabled() && peer.getPeersVersion() >= PEER_VERSION_550 && blocksBehind >= MAXIMUM_REQUEST_SIZE) {
-            // This peer supports syncing multiple blocks at once via GetBlocksMessage, and it is enabled in the settings
-            return this.applyNewBlocksUsingFastSync(repository, commonBlockData, ourInitialHeight, peer, peerHeight, peerBlockSummaries);
-        }
-        else {
-            // Older peer version, or fast sync is disabled in the settings - use slow sync
-            return this.applyNewBlocksUsingSlowSync(repository, commonBlockData, ourInitialHeight, peer, peerHeight, peerBlockSummaries);
-        }
-    }
+		final int commonBlockHeight = commonBlockData.getHeight();
+		final byte[] commonBlockSig = commonBlockData.getSignature();
+		byte[] latestPeerSignature = commonBlockSig;
 
-    private SynchronizationResult applyNewBlocksUsingFastSync(Repository repository, BlockData commonBlockData, int ourInitialHeight,
-                                                              Peer peer, int peerHeight, List<BlockSummaryData> peerBlockSummaries) throws InterruptedException, DataException {
-        LOGGER.debug(String.format("Fetching new blocks from peer %s using fast sync", peer));
+		int ourHeight = ourInitialHeight;
+		int maxBatchHeight = commonBlockHeight + SYNC_BATCH_SIZE;
+		int maxBlocksPerRequest = Settings.getInstance().getMaxBlocksPerRequest();
 
-        final int commonBlockHeight = commonBlockData.getHeight();
-        final byte[] commonBlockSig = commonBlockData.getSignature();
-        byte[] latestPeerSignature = commonBlockSig;
+		List<Block> fetchedBlocks = new ArrayList<>();
 
-        int ourHeight = ourInitialHeight;
+		while (ourHeight < peerHeight && ourHeight < maxBatchHeight) {
+			if (Controller.isStopping())
+				return PrefetchedBlocks.error(SynchronizationResult.SHUTTING_DOWN);
 
-        // Fetch, and apply, blocks from peer
-        int maxBatchHeight = commonBlockHeight + SYNC_BATCH_SIZE;
+			int numberRequested = Math.min(maxBatchHeight - ourHeight, maxBlocksPerRequest);
 
-        // Ensure that we don't request more blocks than specified in the settings
-        int maxBlocksPerRequest = Settings.getInstance().getMaxBlocksPerRequest();
+			List<Block> blocks = this.fetchBlocks(peer, latestPeerSignature, numberRequested);
 
-        while (ourHeight < peerHeight && ourHeight < maxBatchHeight) {
-            if (Controller.isStopping())
-                return SynchronizationResult.SHUTTING_DOWN;
+			if (blocks == null || blocks.isEmpty()) {
+				LOGGER.warn(String.format("Peer %s failed to respond with more blocks after height %d, sig %.8s", peer,
+						ourHeight, Base58.encode(latestPeerSignature)));
+				return PrefetchedBlocks.error(SynchronizationResult.NO_REPLY);
+			}
 
-            int numberRequested = Math.min(maxBatchHeight - ourHeight, maxBlocksPerRequest);
+			LOGGER.debug("Received {} blocks after height {}, sig {} from {}", blocks.size(), ourHeight, Base58.encode(latestPeerSignature), peer);
 
-            List<Block> blocks = this.fetchBlocks(repository, peer, latestPeerSignature, numberRequested);
+			for (Block newBlock : blocks) {
+				if (Controller.isStopping())
+					return PrefetchedBlocks.error(SynchronizationResult.SHUTTING_DOWN);
 
-            if (blocks == null || blocks.isEmpty()) {
-                LOGGER.warn(String.format("Peer %s failed to respond with more blocks after height %d, sig %.8s", peer,
-                        ourHeight, Base58.encode(latestPeerSignature)));
-                return SynchronizationResult.NO_REPLY;
-            }
+				int expectedHeight = ourHeight + 1;
 
-            LOGGER.debug("Received {} blocks after height {}, sig {} from {}", blocks.size(), ourHeight, Base58.encode(latestPeerSignature), peer);
+				if (newBlock == null) {
+					LOGGER.debug(String.format("Peer %s failed to respond with block for height %d, sig %.8s", peer,
+							expectedHeight, Base58.encode(latestPeerSignature)));
+					return PrefetchedBlocks.error(SynchronizationResult.NO_REPLY);
+				}
 
-            boolean errorInBatch = false;
-            SynchronizationResult errorCode = SynchronizationResult.OK;
+				if (!newBlock.isSignatureValid()) {
+					LOGGER.debug(String.format("Peer %s sent block with invalid signature for height %d, sig %.8s", peer,
+							expectedHeight, Base58.encode(latestPeerSignature)));
+					return PrefetchedBlocks.error(SynchronizationResult.INVALID_DATA);
+				}
 
-            repository.setSavepoint();
+				// Full validation (setRepository, setInitialApprovalStatus, isValid) deferred to apply phase
+				++ourHeight;
+				latestPeerSignature = newBlock.getSignature();
+				fetchedBlocks.add(newBlock);
+			}
+		}
 
-            for (Block newBlock : blocks) {
-                if (Controller.isStopping()){
-                    errorInBatch = true;
-                    errorCode = SynchronizationResult.SHUTTING_DOWN;
-                    break;
-                }
+		return PrefetchedBlocks.success(fetchedBlocks);
+	}
 
-                // Increment height at the start, but we'll only use it if block processing succeeds
-                int expectedHeight = ourHeight + 1;
+	/**
+	 * Phase 1 (no lock): Pre-fetches new blocks from a peer using slow sync (one block at a time).
+	 * Signature validation is done here; full block validation is deferred to the apply phase.
+	 */
+	private PrefetchedBlocks fetchNewBlocksSlowSync(BlockData commonBlockData, int ourInitialHeight,
+			Peer peer, int peerHeight, List<BlockSummaryData> peerBlockSummaries) throws InterruptedException, DataException {
+		LOGGER.debug(String.format("Pre-fetching new blocks from peer %s using slow sync", peer));
 
-                if (newBlock == null) {
-                    LOGGER.debug(String.format("Peer %s failed to respond with block for height %d, sig %.8s", peer,
-                            expectedHeight, Base58.encode(latestPeerSignature)));
-                    errorInBatch = true;
-                    errorCode = SynchronizationResult.NO_REPLY;
-                    break; // Stop processing batch - can't trust subsequent blocks
-                }
+		final int commonBlockHeight = commonBlockData.getHeight();
+		final byte[] commonBlockSig = commonBlockData.getSignature();
 
-                if (!newBlock.isSignatureValid()) {
-                    LOGGER.debug(String.format("Peer %s sent block with invalid signature for height %d, sig %.8s", peer,
-                            expectedHeight, Base58.encode(latestPeerSignature)));
-                    errorInBatch = true;
-                    errorCode = SynchronizationResult.INVALID_DATA;
-                    break; // Stop processing batch - can't trust subsequent blocks
-                }
+		int ourHeight = ourInitialHeight;
+		byte[] latestPeerSignature = commonBlockSig;
+		int maxBatchHeight = commonBlockHeight + SYNC_BATCH_SIZE;
 
-                // Set the repository, because we couldn't do that when originally constructing the Block
-                newBlock.setRepository(repository);
+		List<byte[]> peerBlockSignatures = peerBlockSummaries.stream().map(BlockSummaryData::getSignature).collect(Collectors.toList());
+		List<Block> fetchedBlocks = new ArrayList<>();
 
-                // Transactions are transmitted without approval status so determine that now
-                for (Transaction transaction : newBlock.getTransactions()) {
-                    transaction.setInitialApprovalStatus();
-                }
+		while (ourHeight < peerHeight && ourHeight < maxBatchHeight) {
+			if (Controller.isStopping())
+				return PrefetchedBlocks.error(SynchronizationResult.SHUTTING_DOWN);
 
-                ValidationResult blockResult = newBlock.isValid();
-                if (blockResult != ValidationResult.OK) {
-                    LOGGER.warn(String.format("Peer %s sent invalid block for height %d, sig %.8s: %s", peer,
-                            expectedHeight, Base58.encode(latestPeerSignature), blockResult.name()));
-                    errorInBatch = true;
-                    errorCode = SynchronizationResult.INVALID_DATA;
-                    break; // Stop processing batch - can't trust subsequent blocks
-                }
+			if (peerBlockSignatures.isEmpty()) {
+				int numberRequested = Math.min(maxBatchHeight - ourHeight, MAXIMUM_REQUEST_SIZE);
 
-                // Block is valid - now we can increment height and process it
-                ++ourHeight;
+				LOGGER.trace(String.format("Requesting %d signature%s after height %d, sig %.8s",
+						numberRequested, (numberRequested != 1 ? "s" : ""), ourHeight, Base58.encode(latestPeerSignature)));
 
-                // Save transactions attached to this block
-                for (Transaction transaction : newBlock.getTransactions()) {
-                    TransactionData transactionData = transaction.getTransactionData();
-                    repository.getTransactionRepository().save(transactionData);
-                }
+				peerBlockSignatures = this.getBlockSignatures(peer, latestPeerSignature, numberRequested);
 
-                newBlock.process();
+				if (peerBlockSignatures == null || peerBlockSignatures.isEmpty()) {
+					LOGGER.info(String.format("Peer %s failed to respond with more block signatures after height %d, sig %.8s", peer,
+							ourHeight, Base58.encode(latestPeerSignature)));
+					return PrefetchedBlocks.error(SynchronizationResult.NO_REPLY);
+				}
 
-                LOGGER.trace(String.format("Processed block height %d, sig %.8s", newBlock.getBlockData().getHeight(), Base58.encode(newBlock.getBlockData().getSignature())));
+				LOGGER.trace(String.format("Received %s signature%s", peerBlockSignatures.size(), (peerBlockSignatures.size() != 1 ? "s" : "")));
+			}
 
-                Controller.getInstance().onNewBlock(newBlock.getBlockData());
+			latestPeerSignature = peerBlockSignatures.get(0);
+			peerBlockSignatures.remove(0);
+			++ourHeight;
 
-                // Update latestPeerSignature so that subsequent batches start requesting from the correct block
-                latestPeerSignature = newBlock.getSignature();
-            }
+		LOGGER.trace(String.format("Fetching block %d, sig %.8s from %s", ourHeight, Base58.encode(latestPeerSignature), peer));
+		Block newBlock = this.fetchBlock(peer, latestPeerSignature);
+		LOGGER.trace(String.format("Fetched block %d, sig %.8s from %s", ourHeight, Base58.encode(latestPeerSignature), peer));
 
-            if(errorInBatch) {  // if error
-                repository.rollbackToSavepoint();
-                return errorCode;
-            }
-            else{
-                repository.saveChanges();
-            }
-        }
-        return SynchronizationResult.OK;
-    }
+			if (newBlock == null) {
+				LOGGER.info(String.format("Peer %s failed to respond with block for height %d, sig %.8s", peer,
+						ourHeight, Base58.encode(latestPeerSignature)));
+				return PrefetchedBlocks.error(SynchronizationResult.NO_REPLY);
+			}
 
-    private SynchronizationResult applyNewBlocksUsingSlowSync(Repository repository, BlockData commonBlockData, int ourInitialHeight,
-                                                              Peer peer, int peerHeight, List<BlockSummaryData> peerBlockSummaries) throws InterruptedException, DataException {
-        LOGGER.debug(String.format("Fetching new blocks from peer %s using slow sync", peer));
+			if (!newBlock.isSignatureValid()) {
+				LOGGER.info(String.format("Peer %s sent block with invalid signature for height %d, sig %.8s", peer,
+						ourHeight, Base58.encode(latestPeerSignature)));
+				return PrefetchedBlocks.error(SynchronizationResult.INVALID_DATA);
+			}
 
-        final int commonBlockHeight = commonBlockData.getHeight();
-        final byte[] commonBlockSig = commonBlockData.getSignature();
+			// Full validation (setRepository, setInitialApprovalStatus, isValid) deferred to apply phase
+			fetchedBlocks.add(newBlock);
+		}
 
-        int ourHeight = ourInitialHeight;
+		return PrefetchedBlocks.success(fetchedBlocks);
+	}
 
-        // Fetch, and apply, blocks from peer
-        byte[] latestPeerSignature = commonBlockSig;
-        int maxBatchHeight = commonBlockHeight + SYNC_BATCH_SIZE;
+	/**
+	 * Phase 2 (with lock): Applies pre-fetched new blocks to extend the chain (no orphaning).
+	 * Used for both slow-sync and fast-sync paths after pre-fetching is complete.
+	 * Must be called with the blockchain lock already held.
+	 */
+	private SynchronizationResult applyNewBlocksList(Repository repository, Peer peer, List<Block> blocks) throws DataException {
+		for (Block newBlock : blocks) {
+			if (Controller.isStopping())
+				return SynchronizationResult.SHUTTING_DOWN;
 
-        // Convert any block summaries from above into signatures to request from peer
-        List<byte[]> peerBlockSignatures = peerBlockSummaries.stream().map(BlockSummaryData::getSignature).collect(Collectors.toList());
+			// Bind to Phase 2 repository so all DB operations use the current session.
+			// Fast-sync blocks arrive with no repository; slow-sync blocks get their reference refreshed.
+			newBlock.setRepository(repository);
 
-        while (ourHeight < peerHeight && ourHeight < maxBatchHeight) {
-            if (Controller.isStopping())
-                return SynchronizationResult.SHUTTING_DOWN;
+			// Set approval status now that we have a live repository session
+			for (Transaction transaction : newBlock.getTransactions())
+				transaction.setInitialApprovalStatus();
 
-            // Do we need more signatures?
-            if (peerBlockSignatures.isEmpty()) {
-                int numberRequested = Math.min(maxBatchHeight - ourHeight, MAXIMUM_REQUEST_SIZE);
+			ValidationResult blockResult = newBlock.isValid();
+			if (blockResult != ValidationResult.OK) {
+				LOGGER.warn(String.format("Block for height %d, sig %.8s failed validation: %s",
+						newBlock.getBlockData().getHeight(), Base58.encode(newBlock.getSignature()), blockResult.name()));
+				this.addInvalidBlockSignature(newBlock.getSignature());
+				this.timeInvalidBlockLastReceived = NTP.getTime();
+				return SynchronizationResult.INVALID_DATA;
+			}
 
-                LOGGER.trace(String.format("Requesting %d signature%s after height %d, sig %.8s",
-                        numberRequested, (numberRequested != 1 ? "s": ""), ourHeight, Base58.encode(latestPeerSignature)));
+			this.timeValidBlockLastReceived = NTP.getTime();
 
-                peerBlockSignatures = this.getBlockSignatures(peer, latestPeerSignature, numberRequested);
+			for (Transaction transaction : newBlock.getTransactions()) {
+				TransactionData transactionData = transaction.getTransactionData();
+				repository.getTransactionRepository().save(transactionData);
+			}
 
-                if (peerBlockSignatures == null || peerBlockSignatures.isEmpty()) {
-                    LOGGER.info(String.format("Peer %s failed to respond with more block signatures after height %d, sig %.8s", peer,
-                            ourHeight, Base58.encode(latestPeerSignature)));
-                    return SynchronizationResult.NO_REPLY;
-                }
+			newBlock.process();
 
-                LOGGER.trace(String.format("Received %s signature%s", peerBlockSignatures.size(), (peerBlockSignatures.size() != 1 ? "s" : "")));
-            }
+			LOGGER.trace(String.format("Processed block height %d, sig %.8s", newBlock.getBlockData().getHeight(), Base58.encode(newBlock.getBlockData().getSignature())));
 
-            latestPeerSignature = peerBlockSignatures.get(0);
-            peerBlockSignatures.remove(0);
-            ++ourHeight;
+			repository.saveChanges();
 
-            LOGGER.trace(String.format("Fetching block %d, sig %.8s from %s", ourHeight, Base58.encode(latestPeerSignature), peer));
-            Block newBlock = this.fetchBlock(repository, peer, latestPeerSignature);
-            LOGGER.trace(String.format("Fetched block %d, sig %.8s from %s", ourHeight, Base58.encode(latestPeerSignature), peer));
+			synchronized (this.syncLock) {
+				if (peer.getChainTipData() != null) {
+					this.blocksRemaining = peer.getChainTipData().getHeight() - newBlock.getBlockData().getHeight();
+				}
+			}
 
-            if (newBlock == null) {
-                LOGGER.info(String.format("Peer %s failed to respond with block for height %d, sig %.8s", peer,
-                        ourHeight, Base58.encode(latestPeerSignature)));
-                return SynchronizationResult.NO_REPLY;
-            }
+			Controller.getInstance().onNewBlock(newBlock.getBlockData());
+		}
 
-            if (!newBlock.isSignatureValid()) {
-                LOGGER.info(String.format("Peer %s sent block with invalid signature for height %d, sig %.8s", peer,
-                        ourHeight, Base58.encode(latestPeerSignature)));
-                return SynchronizationResult.INVALID_DATA;
-            }
-
-            // Transactions are transmitted without approval status so determine that now
-            for (Transaction transaction : newBlock.getTransactions())
-                transaction.setInitialApprovalStatus();
-
-            ValidationResult blockResult = newBlock.isValid();
-            if (blockResult != ValidationResult.OK) {
-                LOGGER.info(String.format("Peer %s sent invalid block for height %d, sig %.8s: %s", peer,
-                        ourHeight, Base58.encode(latestPeerSignature), blockResult.name()));
-                return SynchronizationResult.INVALID_DATA;
-            }
-
-            // Save transactions attached to this block
-            for (Transaction transaction : newBlock.getTransactions()) {
-                TransactionData transactionData = transaction.getTransactionData();
-                repository.getTransactionRepository().save(transactionData);
-            }
-
-            newBlock.process();
-
-            LOGGER.trace(String.format("Processed block height %d, sig %.8s", newBlock.getBlockData().getHeight(), Base58.encode(newBlock.getBlockData().getSignature())));
-
-            repository.saveChanges();
-
-            Controller.getInstance().onNewBlock(newBlock.getBlockData());
-        }
-
-        return SynchronizationResult.OK;
-    }
+		return SynchronizationResult.OK;
+	}
 
 	private List<BlockSummaryData> getBlockSummaries(Peer peer, byte[] parentSignature, int numberRequested) throws InterruptedException {
 		Message getBlockSummariesMessage = new GetBlockSummariesMessage(parentSignature, numberRequested);
@@ -1796,7 +1842,12 @@ public class Synchronizer extends Thread {
 		return signaturesMessage.getSignatures();
 	}
 
-	private Block fetchBlock(Repository repository, Peer peer, byte[] signature) throws InterruptedException {
+	/**
+	 * Fetches a single block from a peer over the network.
+	 * The returned Block has a {@code null} repository; call {@code block.setRepository(repo)}
+	 * in the apply phase (Phase 2) before any DB operations.
+	 */
+	private Block fetchBlock(Peer peer, byte[] signature) throws InterruptedException {
 		Message getBlockMessage = new GetBlockMessage(signature);
 
 		// Use shorter timeout for sync operations to avoid blocking transaction processing
@@ -1816,15 +1867,16 @@ public class Synchronizer extends Thread {
 		// at a later stage. For now we are only defending against serialization errors or no responses.
 		peer.getPeerData().setFailedSyncCount(0);
 
+		// Block is constructed without a repository; setRepository() is called in Phase 2 (apply phase).
 		switch (message.getType()) {
 			case BLOCK: {
 				BlockMessage blockMessage = (BlockMessage) message;
-				return new Block(repository, blockMessage.getBlockData(), blockMessage.getTransactions(), blockMessage.getAtStates());
+				return new Block(null, blockMessage.getBlockData(), blockMessage.getTransactions(), blockMessage.getAtStates());
 			}
 
 			case BLOCK_V2: {
 				BlockV2Message blockMessage = (BlockV2Message) message;
-				return new Block(repository, blockMessage.getBlockData(), blockMessage.getTransactions(), blockMessage.getAtStatesHash());
+				return new Block(null, blockMessage.getBlockData(), blockMessage.getTransactions(), blockMessage.getAtStatesHash());
 			}
 
 			default:
@@ -1832,7 +1884,12 @@ public class Synchronizer extends Thread {
 		}
 	}
 
-    private List<Block> fetchBlocks(Repository repository, Peer peer, byte[] parentSignature, int numberRequested) throws InterruptedException {
+	/**
+	 * Fetches a batch of blocks from a peer over the network (fast sync path).
+	 * The returned Blocks have {@code null} repositories; call {@code block.setRepository(repo)}
+	 * in the apply phase (Phase 2) before any DB operations.
+	 */
+    private List<Block> fetchBlocks(Peer peer, byte[] parentSignature, int numberRequested) throws InterruptedException {
         LOGGER.trace("Building GetBlocksMessage with parentSignature: {}, numberRequested: {}", parentSignature, numberRequested);
         Message getBlocksMessage = new GetBlocksMessage(parentSignature, numberRequested);
 
