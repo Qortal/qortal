@@ -1,22 +1,30 @@
 package org.qortal.network;
 
 import org.qortal.repository.DataException;
+import org.qortal.settings.Settings;
 
-import java.net.InetSocketAddress;
-import java.net.Socket;
-import java.net.UnknownHostException;
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
 import java.net.*;
 import java.util.Optional;
 
-public interface PeerAddress {
+/**
+ * Convenience class for encapsulating/parsing/rendering/converting peer addresses
+ * including late-stage resolving before actual use by a socket.
+ */
+// All properties to be converted to JSON via JAXB
+@XmlAccessorType(XmlAccessType.FIELD)
+public class PeerAddress {
 
-    InetSocketAddress toSocketAddress() throws UnknownHostException;
+    // InetSocketAddress toSocketAddress() throws UnknownHostException;
 
-    // ReticulumPeer "address"
-    default byte[] getDestinationHash() { return null; }
-    default void setDestinationHash(byte[] hash) { return; }
+    // // ReticulumPeer "address"
+    // default byte[] getDestinationHash() { return null; }
+    // default void setDestinationHash(byte[] hash) { return; }
+
+		// Properties
+	private String host;
+	private int port;
 	
 	private PeerAddress(String host, int port) {
 		this.host = host;
@@ -160,9 +168,5 @@ public interface PeerAddress {
 		// Compare host parts but without DNS lookups
 		return this.host.equalsIgnoreCase(other.host);
 	}
-
-    // IPPeer "address" components
-    default String getHost() { return null; }
-    default int getPort() { return -1; }
 }
 
