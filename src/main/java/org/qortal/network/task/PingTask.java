@@ -9,6 +9,8 @@ import org.qortal.network.message.PingMessage;
 import org.qortal.utils.ExecuteProduceConsume.Task;
 import org.qortal.utils.NTP;
 
+import static org.qortal.network.Peer.SYNC_RESPONSE_TIMEOUT;
+
 public class PingTask implements Task {
     private static final Logger LOGGER = LogManager.getLogger(PingTask.class);
 
@@ -29,16 +31,21 @@ public class PingTask implements Task {
 
     @Override
     public void perform() throws InterruptedException {
+        LOGGER.trace("[{}] Sending PING to peer {}", peer.getPeerConnectionId(), peer);
+        
         PingMessage pingMessage = new PingMessage();
-        Message message = peer.getResponse(pingMessage);
+        // Use shorter timeout - if peer doesn't respond to ping quickly, disconnect
+        Message message = peer.getResponseWithTimeout(pingMessage, SYNC_RESPONSE_TIMEOUT);
 
         if (message == null || message.getType() != MessageType.PING) {
-            LOGGER.debug("[{}] Didn't receive reply from {} for PING ID {}",
+            LOGGER.trace("[{}] Didn't receive reply from {} for PING ID {}",
                     peer.getPeerConnectionId(), peer, pingMessage.getId());
             peer.disconnect("no ping received");
             return;
         }
 
-        peer.setLastPing(NTP.getTime() - now);
+        long rtt = NTP.getTime() - now;
+        LOGGER.trace("[{}] Received PONG from peer {} (RTT: {}ms)", peer.getPeerConnectionId(), peer, rtt);
+        peer.setLastPing(rtt);
     }
 }

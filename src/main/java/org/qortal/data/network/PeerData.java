@@ -119,6 +119,10 @@ public class PeerData {
     public void setPeerType(PeerType pt) {
       this.peerType = pt;
     }
+	
+	public Boolean equals(PeerData against) {
+		return this.getAddress().equals(against.getAddress());
+	}
 
 	// Pretty peerAddress getter for JAXB
 	@XmlElement(name = "address")

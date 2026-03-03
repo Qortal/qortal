@@ -20,12 +20,16 @@ import org.qortal.utils.ArbitraryTransactionUtils;
 import org.qortal.utils.FilesystemUtils;
 import org.qortal.utils.ListUtils;
 import org.qortal.utils.NTP;
+import org.qortal.utils.StringUtils;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.qortal.data.arbitrary.ArbitraryResourceStatus.Status;
 
@@ -46,6 +50,7 @@ public class ArbitraryDataResource {
     private Integer totalChunkCount = null;
     private boolean exists = false;
 
+
     public ArbitraryDataResource(String resourceId, ResourceIdType resourceIdType, Service service, String identifier) {
         this.resourceId = resourceId.toLowerCase();
         this.resourceIdType = resourceIdType;
@@ -65,12 +70,13 @@ public class ArbitraryDataResource {
             arbitraryResourceStatus = this.getStatus(repository);
 
             if (updateCache) {
-                // Update cache if possible
-                ArbitraryResourceStatus.Status status = arbitraryResourceStatus != null ? arbitraryResourceStatus.getStatus() : null;
-                ArbitraryResourceData arbitraryResourceData = new ArbitraryResourceData(this.service, this.resourceId, this.identifier);
-                repository.discardChanges();
-                repository.getArbitraryRepository().setStatus(arbitraryResourceData, status);
-                repository.saveChanges();
+                 // Update cache if possible
+                 ArbitraryResourceStatus.Status status = arbitraryResourceStatus != null ? arbitraryResourceStatus.getStatus() : null;
+                 ArbitraryResourceData arbitraryResourceData = new ArbitraryResourceData(this.service, this.resourceId, this.identifier);
+                 repository.discardChanges();
+                 repository.getArbitraryRepository().setStatus(arbitraryResourceData, status);
+                 repository.saveChanges();
+ 
             }
         } catch (DataException e) {
             LOGGER.info("Unable to update status cache for resource {}: {}", this.toString(), e.getMessage());
@@ -211,7 +217,7 @@ public class ArbitraryDataResource {
 
         String baseDir = Settings.getInstance().getTempDataPath();
         String identifier = this.identifier != null ?  this.identifier : "default";
-        Path cachePath = Paths.get(baseDir, "reader", this.resourceIdType.toString(), this.resourceId, this.service.toString(), identifier);
+        Path cachePath = Paths.get(baseDir, "reader", this.resourceIdType.toString(), StringUtils.sanitizeString(this.resourceId), this.service.toString(), StringUtils.sanitizeString(identifier));
         if (cachePath.toFile().exists()) {
             boolean success = FilesystemUtils.safeDeleteDirectory(cachePath, true);
             if (success) {
@@ -223,7 +229,7 @@ public class ArbitraryDataResource {
     private boolean allFilesDownloaded(Repository repository) {
         // Use chunk counts to speed things up if we can
         if (this.localChunkCount != null && this.totalChunkCount != null &&
-                this.localChunkCount >= this.totalChunkCount) {
+            this.localChunkCount >= this.totalChunkCount) {
             return true;
         }
 
@@ -235,21 +241,25 @@ public class ArbitraryDataResource {
 
             List<ArbitraryTransactionData> transactionDataList = new ArrayList<>(this.transactions);
 
+            // Optimized: Create ArbitraryDataFile once per transaction instead of twice
             for (ArbitraryTransactionData transactionData : transactionDataList) {
-                if (!ArbitraryTransactionUtils.completeFileExists(transactionData) ||
-                    !ArbitraryTransactionUtils.allChunksExist(transactionData)) {
+                ArbitraryDataFile arbitraryDataFile = ArbitraryDataFile.fromTransactionData(transactionData);
+                if (arbitraryDataFile == null || !arbitraryDataFile.allFilesExist()) {
                     return false;
                 }
             }
             return true;
-
+        
         } catch (DataException e) {
             return false;
         }
     }
 
+  
+
     /**
      * Calculate chunk counts of a resource
+     * Optimized to call fromTransactionData() only once per transaction
      *
      * @param repository optional - a new instance will be created if null
      */
@@ -270,14 +280,51 @@ public class ArbitraryDataResource {
             int totalChunkCount = 0;
 
             for (ArbitraryTransactionData transactionData : transactionDataList) {
-                localChunkCount += ArbitraryTransactionUtils.ourChunkCount(transactionData);
-                totalChunkCount += ArbitraryTransactionUtils.totalChunkCount(transactionData);
+                // Create ArbitraryDataFile once and reuse it for both counts
+                ArbitraryDataFile arbitraryDataFile = ArbitraryDataFile.fromTransactionData(transactionData);
+                if (arbitraryDataFile == null) {
+                    continue;
+                }
+
+                // Calculate local chunk count (files that exist on disk)
+                Path parentPath = arbitraryDataFile.getFilePath().getParent();
+                String[] files = parentPath.toFile().list();
+                if (files != null) {
+                    // Remove the original copy indicator file if it exists
+                    int count = files.length;
+                    for (String file : files) {
+                        if (file.equals(".original")) {
+                            count--;
+                            break;
+                        }
+                    }
+                    
+                    // If the complete file exists (and this transaction has chunks), subtract it from the count
+                    if (arbitraryDataFile.chunkCount() > 0 && arbitraryDataFile.exists()) {
+                        // We are only measuring the individual chunks, not the joined file
+                        count -= 1;
+                    }
+                    
+                    localChunkCount += count;
+                }
+
+                // Calculate total chunk count (expected chunks based on metadata)
+                if (transactionData.getMetadataHash() == null) {
+                    // This file doesn't have any metadata, therefore it has a single (complete) chunk
+                    totalChunkCount += 1;
+                } else {
+                    totalChunkCount += arbitraryDataFile.fileCount();
+                }
             }
 
             this.localChunkCount = localChunkCount;
             this.totalChunkCount = totalChunkCount;
 
-        } catch (DataException e) {}
+        } catch (DataException e) {
+            // If there's an error, set counts to 0
+            this.localChunkCount = 0;
+            this.totalChunkCount = 0;
+        }
     }
 
     private boolean isRateLimited(Repository repository) {
@@ -475,4 +522,14 @@ public class ArbitraryDataResource {
     public String getIdentifier() {
         return this.identifier;
     }
+
+    public Integer getLocalChunkCount() {
+        return this.localChunkCount;
+    }
+
+    public Integer getTotalChunkCount() {
+        return this.totalChunkCount;
+    }
+
+
 }

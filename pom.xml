@@ -3,18 +3,18 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>org.qortal</groupId>
 	<artifactId>qortal</artifactId>
-	<version>5.0.8</version>
+	<version>6.0.0</version> <!-- Version must be <X.Y.Z> -->
 	<packaging>jar</packaging>
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-		<skipTests>true</skipTests>
+		<skipJUnitTests>true</skipJUnitTests>
 
-		<altcoinj.version>7dc8c6f</altcoinj.version>
-		<bitcoinj.version>0.15.10</bitcoinj.version>
-		<bouncycastle.version>1.70</bouncycastle.version>
+		<altcoinj.version>d7cf6ac</altcoinj.version> <!-- BC v16 / Updated Abstract Classes / alertSigningKey -->
+		<bitcoinj.version>0.16.3</bitcoinj.version>
+		<bouncycastle.version>1.73</bouncycastle.version>
 		<build.timestamp>${maven.build.timestamp}</build.timestamp>
-		<ciyam-at.version>1.4.2</ciyam-at.version>
-		<commons-net.version>3.8.0</commons-net.version>
+		<ciyam-at.version>1b731d1</ciyam-at.version> <!-- This is the hash for v1.4.3 -->
+		<commons-net.version>3.9.0</commons-net.version>
 		<commons-text.version>1.12.0</commons-text.version>
 		<commons-io.version>2.18.0</commons-io.version>
 		<commons-compress.version>1.27.1</commons-compress.version>
@@ -22,7 +22,7 @@
 		<dagger.version>1.2.2</dagger.version>
 		<extendedset.version>0.12.3</extendedset.version>
 		<git-commit-id-plugin.version>4.9.10</git-commit-id-plugin.version>
-		<grpc.version>1.68.1</grpc.version>
+		<grpc.version>1.68.3</grpc.version>
 		<guava.version>33.3.1-jre</guava.version>
 		<hamcrest-library.version>2.2</hamcrest-library.version>
 		<homoglyph.version>1.2.1</homoglyph.version>
@@ -31,8 +31,9 @@
 		<java-diff-utils.version>4.15</java-diff-utils.version>
 		<javax.servlet-api.version>4.0.1</javax.servlet-api.version>
 		<jaxb-runtime.version>2.3.9</jaxb-runtime.version>
-		<jersey.version>2.42</jersey.version>
+		<jersey.version>2.47</jersey.version>
 		<jetty.version>9.4.56.v20240826</jetty.version>
+		<!-- <jetty.version>9.4.57.v20241219</jetty.version> v5.2.0 Coming Soon -->
 		<json-simple.version>1.1.1</json-simple.version>
 		<json.version>20240303</json.version>
 		<jsoup.version>1.18.1</jsoup.version>
@@ -45,20 +46,22 @@
 		<maven-dependency-plugin.version>3.6.1</maven-dependency-plugin.version>
 		<maven-jar-plugin.version>3.4.2</maven-jar-plugin.version>
 		<maven-package-info-plugin.version>1.1.0</maven-package-info-plugin.version>
-		<maven-plugin.version>2.18.0</maven-plugin.version>
+		<versions-maven-plugin.version>2.21.0</versions-maven-plugin.version>
 		<maven-reproducible-build-plugin.version>0.17</maven-reproducible-build-plugin.version>
 		<maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
 		<maven-shade-plugin.version>3.6.0</maven-shade-plugin.version>
 		<maven-install-plugin.version>3.1.3</maven-install-plugin.version>
-		<maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
-		<protobuf.version>3.25.3</protobuf.version>
+		<maven-surefire-plugin.version>3.5.3</maven-surefire-plugin.version>
+		<protobuf.version>3.25.7</protobuf.version>
 		<replacer.version>1.5.3</replacer.version>
 		<reticulum.version>8924ed0</reticulum.version>
 		<jinjava.version>2.8.0</jinjava.version>
 		<simplemagic.version>1.17</simplemagic.version>
-		<swagger-api.version>2.0.10</swagger-api.version>
+		<slf4j.version>1.7.36</slf4j.version>
+		<swagger-api.version>2.2.30</swagger-api.version>
 		<swagger-ui.version>5.18.2</swagger-ui.version>
-		<upnp.version>1.2</upnp.version>
+		<tika-core.version>3.1.0</tika-core.version>
+		<upnp.version>1.3</upnp.version>
 		<xz.version>1.10</xz.version>
    	<lombok.version>1.18.30</lombok.version>
    	<jackson.version>2.16.1</jackson.version>
@@ -79,7 +82,7 @@
 			<plugin>
 				<groupId>org.codehaus.mojo</groupId>
 				<artifactId>versions-maven-plugin</artifactId>
-				<version>${maven-plugin.version}</version>
+				<version>${versions-maven-plugin.version}</version>
 				<configuration>
 					<generateBackupPoms>false</generateBackupPoms>
 				</configuration>
@@ -255,10 +258,6 @@
 							<template>${project.build.sourceDirectory}/org/qortal/data/package-info.java</template>
 						</package>
 						<package>
-							<pattern>org.qortal.api.model**</pattern>
-							<template>${project.build.sourceDirectory}/org/qortal/data/package-info.java</template>
-						</package>
-						<package>
 							<pattern>org.qortal.api.model.**</pattern>
 							<template>${project.build.sourceDirectory}/org/qortal/data/package-info.java</template>
 						</package>
@@ -296,19 +295,23 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-jar-plugin</artifactId>
 				<version>${maven-jar-plugin.version}</version>
-				<configuration>
-					<archive>
-						<manifest>
-							<addDefaultEntries>false</addDefaultEntries>
-							<addDefaultImplementationEntries>true</addDefaultImplementationEntries>
-						</manifest>
-						<manifestEntries>
-							<Last-Commit-Id>${git.commit.id.full}</Last-Commit-Id>
-							<Last-Commit-Time>${git.commit.time}</Last-Commit-Time>
-							<Reproducible-Build>true</Reproducible-Build>
-						</manifestEntries>
-					</archive>
-				</configuration>
+				<executions>
+					<execution>
+						<configuration>
+							<archive>
+								<manifest>
+									<addDefaultEntries>false</addDefaultEntries>
+									<addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+								</manifest>
+								<manifestEntries>
+									<Last-Commit-Id>${git.commit.id.full}</Last-Commit-Id>
+									<Last-Commit-Time>${git.commit.time}</Last-Commit-Time>
+									<Reproducible-Build>true</Reproducible-Build>
+								</manifestEntries>
+							</archive>
+						</configuration>
+					</execution>
+				</executions>
 			</plugin>
 			<!-- Copy modified hsqldb.jar to install / modified MANIFEST.MF-->
 			<plugin>
@@ -383,6 +386,7 @@
 					</execution>
 				</executions>
 			</plugin>
+			<!-- Removed, now use Maven reproducible by default v4.0, IntelliJ v2025.1 and later -->
 			<plugin>
 				<groupId>io.github.zlika</groupId>
 				<artifactId>reproducible-build-maven-plugin</artifactId>
@@ -395,6 +399,7 @@
 							<goal>strip-jar</goal>
 						</goals>
 						<configuration>
+							<!--suppress UnresolvedMavenProperty -->
 							<zipDateTime>${git.commit.time}</zipDateTime>
 						</configuration>
 					</execution>
@@ -405,7 +410,7 @@
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>${maven-surefire-plugin.version}</version>
 				<configuration>
-					<skipTests>${skipTests}</skipTests>
+					<skipTests>${skipJUnitTests}</skipTests>
 				</configuration>
 			</plugin>
 		</plugins>
@@ -423,7 +428,7 @@
 									<pluginExecutionFilter>
 										<groupId>org.apache.maven.plugins</groupId>
 										<artifactId>maven-dependency-plugin</artifactId>
-										<version>${maven-dependency-plugin.version}</version>
+										<!-- <version>${maven-dependency-plugin.version}</version> Not Valid here -->
 										<goals>
 											<goal>unpack</goal>
 										</goals>
@@ -436,7 +441,7 @@
 									<pluginExecutionFilter>
 										<groupId>com.google.code.maven-replacer-plugin</groupId>
 										<artifactId>replacer</artifactId>
-										<version>${replacer.version}</version>
+										<!-- <version>${replacer.version}</version> Not valid here -->
 										<goals>
 											<goal>replace</goal>
 										</goals>
@@ -493,6 +498,11 @@
   	</dependencyManagement>
     -->
 	<dependencies>
+		<!-- <dependency>
+			<groupId>org.glassfish.jersey.media</groupId>
+			<artifactId>jersey-media-json-jackson</artifactId>
+			<version>3.1.10</version>
+		</dependency> -->
 		<!-- https://mvnrepository.com/artifact/org.codehaus.mojo/build-helper-maven-plugin -->
 		<dependency>
 			<groupId>org.codehaus.mojo</groupId>
@@ -517,7 +527,7 @@
 		</dependency>
 		<!-- CIYAM AT (automated transactions) -->
 		<dependency>
-			<groupId>org.ciyam</groupId>
+			<groupId>com.github.iceburst</groupId>
 			<artifactId>AT</artifactId>
 			<version>${ciyam-at.version}</version>
 		</dependency>
@@ -535,7 +545,7 @@
 		</dependency>
 		<!-- For Litecoin, etc. support, requires bitcoinj -->
 		<dependency>
-			<groupId>com.github.qortal</groupId>
+			<groupId>com.github.iceburst</groupId>
 			<artifactId>altcoinj</artifactId>
 			<version>${altcoinj.version}</version>
 		</dependency>
@@ -684,7 +694,7 @@
 			<groupId>org.eclipse.jetty</groupId>
 			<artifactId>jetty-server</artifactId>
 			<version>${jetty.version}</version>
-			<classifier>config</classifier>
+			<!-- <classifier>config</classifier> 25-Jan Removed as there is no config classifier -->
 		</dependency>
 		<dependency>
 			<groupId>org.eclipse.jetty</groupId>
@@ -841,140 +851,10 @@
 			<artifactId>jaxb-runtime</artifactId>
 			<version>${jaxb-runtime.version}</version>
 		</dependency>
-    <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-databind</artifactId>
-      <version>${jackson.version}</version>
-    </dependency>
-    <!-- https://mvnrepository.com/artifact/commons-codec/commons-codec -->
-    <dependency>
-      <groupId>commons-codec</groupId>
-      <artifactId>commons-codec</artifactId>
-      <version>1.16.1</version>
-    </dependency>
-    <!-- already declared earlier
-    <dependency>
-      <groupId>org.apache.commons</groupId>
-      <artifactId>commons-lang3</artifactId>
-      <version>3.14.0</version>
-    </dependency>
-    -->
-    <dependency>
-      <groupId>org.apache.commons</groupId>
-      <artifactId>commons-collections4</artifactId>
-      <version>4.4</version>
-    </dependency>
-    <!-- already declared earlier
-    <dependency>
-      <groupId>org.apache.commons</groupId>
-      <artifactId>commons-compress</artifactId>
-      <version>1.26.0</version>
-    </dependency>
-    <dependency>
-      <groupId>org.slf4j</groupId>
-      <artifactId>slf4j-api</artifactId>
-      <version>${slf4j.version}</version>
-    </dependency>
-    -->
-    <!-- note: covered ? -->
-    <dependency>
-      <groupId>com.fasterxml.jackson.dataformat</groupId>
-      <artifactId>jackson-dataformat-yaml</artifactId>
-      <version>${jackson.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>org.yaml</groupId>
-      <artifactId>snakeyaml</artifactId>
-      <version>2.2</version>
-    </dependency>
-    <dependency>
-      <groupId>org.msgpack</groupId>
-      <artifactId>jackson-dataformat-msgpack</artifactId>
-      <version>0.9.8</version>
-    </dependency>
-    <dependency>
-      <groupId>org.projectlombok</groupId>
-      <artifactId>lombok</artifactId>
-      <version>${lombok.version}</version>
-      <scope>provided</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.bouncycastle</groupId>
-      <artifactId>bcpkix-jdk15on</artifactId>
-      <version>1.70</version>
-    </dependency>
-    <dependency>
-      <groupId>com.macasaet.fernet</groupId>
-      <artifactId>fernet-java8</artifactId>
-      <version>1.5.0</version>
-    </dependency>
-    <dependency>
-      <groupId>com.igormaznitsa</groupId>
-      <artifactId>jbbp</artifactId>
-      <version>2.0.6</version>
-    </dependency>
-    <dependency>
-      <groupId>io.netty</groupId>
-      <artifactId>netty-all</artifactId>
-      <!--<version>4.1.106.Final</version>-->
-      <version>5.0.0.Alpha2</version>
-    </dependency>
-    <dependency>
-      <groupId>com.github.seancfoley</groupId>
-      <artifactId>ipaddress</artifactId>
-      <version>5.4.2</version>
-    </dependency>
-    <!-- Nitrite Modules -->
-    <dependency>
-        <groupId>org.dizitart</groupId>
-        <artifactId>nitrite</artifactId>
-        <version>${nitrite.version}</version>
-    </dependency>
-    <dependency>
-        <groupId>org.dizitart</groupId>
-        <artifactId>nitrite-mvstore-adapter</artifactId>
-        <version>${nitrite.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>com.h2database</groupId>
-      <artifactId>h2</artifactId>
-      <version>2.3.230</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>com.h2database</groupId>
-      <artifactId>h2-mvstore</artifactId>
-      <version>2.3.230</version>
-    </dependency>
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter</artifactId>
-      <version>${junit.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.mockito</groupId>
-      <artifactId>mockito-junit-jupiter</artifactId>
-      <version>5.10.0</version>
-      <scope>test</scope>
-    </dependency>
-    <!-- https://mvnrepository.com/artifact/com.hubspot.jinjava/jinjava -->
-    <dependency>
-      <groupId>com.hubspot.jinjava</groupId>
-      <artifactId>jinjava</artifactId>
-      <version>${jinjava.version}</version>
-    </dependency>
-    <!-- https://mvnrepository.com/artifact/org.reflections/reflections -->
-    <dependency>
-      <groupId>org.reflections</groupId>
-      <artifactId>reflections</artifactId>
-    <version>0.10.2</version>
-</dependency>
-
-<dependency>
-<groupId>org.apache.tika</groupId>
-<artifactId>tika-core</artifactId>
-<version>3.1.0</version> 
-</dependency>
+		<dependency>
+			<groupId>org.apache.tika</groupId>
+			<artifactId>tika-core</artifactId>
+			<version>${tika-core.version}</version>
+		</dependency>
 	</dependencies>
 </project>

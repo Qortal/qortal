@@ -21,6 +21,8 @@ import org.apache.logging.log4j.Logger;
 import org.bouncycastle.util.encoders.Base64;
 import org.qortal.api.*;
 import org.qortal.api.model.FileProperties;
+import org.qortal.api.model.PeerCountInfo;
+import org.qortal.api.model.PeerInfo;
 import org.qortal.api.resource.TransactionsResource.ConfirmationStatus;
 import org.qortal.arbitrary.*;
 import org.qortal.arbitrary.ArbitraryDataFile.ResourceIdType;
@@ -30,7 +32,9 @@ import org.qortal.arbitrary.misc.Category;
 import org.qortal.arbitrary.misc.Service;
 import org.qortal.controller.Controller;
 import org.qortal.controller.arbitrary.ArbitraryDataCacheManager;
+import org.qortal.controller.arbitrary.ArbitraryDataFileRequestThread;
 import org.qortal.controller.arbitrary.ArbitraryDataHostMonitor;
+import org.qortal.controller.arbitrary.ArbitraryDataManager;
 import org.qortal.controller.arbitrary.ArbitraryDataRenderManager;
 import org.qortal.controller.arbitrary.ArbitraryDataStorageManager;
 import org.qortal.controller.arbitrary.ArbitraryMetadataManager;
@@ -44,11 +48,13 @@ import org.qortal.data.arbitrary.ArbitraryResourceMetadata;
 import org.qortal.data.arbitrary.ArbitraryResourceStatus;
 import org.qortal.data.arbitrary.IndexCache;
 import org.qortal.data.naming.NameData;
+import org.qortal.data.network.PeerData;
 import org.qortal.data.transaction.ArbitraryHostedDataInfo;
 import org.qortal.data.transaction.ArbitraryHostedDataItemInfo;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.list.ResourceListManager;
+import org.qortal.network.Peer;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
@@ -84,6 +90,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -359,6 +366,108 @@ public class ArbitraryResource {
 			Security.requirePriorAuthorizationOrApiKey(request, name, service, identifier, null);
 
 		return ArbitraryTransactionUtils.getStatus(service, name, identifier, build, true);
+	}
+
+	@GET
+	@Path("/resource/request/peers/{service}/{name}")
+	@Operation(
+			summary = "Get peer count for an active file request (default resource)",
+			description = "Returns the number of peers available for downloading chunks for the specified resource. Returns empty result if no active request is found.",
+			responses = {
+					@ApiResponse(
+							content = @Content(
+									mediaType = MediaType.APPLICATION_JSON,
+									schema = @Schema(implementation = PeerCountInfo.class)
+							)
+					)
+			}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE, ApiError.INVALID_DATA})
+	public PeerCountInfo getRequestPeerCountDefault(
+			@PathParam("service") Service service,
+			@PathParam("name") String name) {
+		return getRequestPeerCount(service, name, null);
+	}
+
+	@GET
+	@Path("/resource/request/peers/{service}/{name}/{identifier}")
+	@Operation(
+			summary = "Get peer information for an active file request",
+			description = "Returns detailed information about peers available for downloading chunks for the specified resource. Returns empty result if no active request is found.",
+			responses = {
+					@ApiResponse(
+							content = @Content(
+									mediaType = MediaType.APPLICATION_JSON,
+									schema = @Schema(implementation = PeerCountInfo.class)
+							)
+					)
+			}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE, ApiError.INVALID_DATA})
+	public PeerCountInfo getRequestPeerCount(
+			@PathParam("service") Service service,
+			@PathParam("name") String name,
+			@PathParam("identifier") String identifier) {
+		
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			// Get the latest transaction for this resource to find its signature
+			ArbitraryTransactionData transactionData = repository.getArbitraryRepository()
+					.getLatestTransaction(name, service, null, identifier);
+			
+			if (transactionData == null) {
+				return new PeerCountInfo(0);
+			}
+			
+			String signature58 = Base58.encode(transactionData.getSignature());
+			
+			// Get detailed peer information
+			Map<PeerData, ArbitraryDataFileRequestThread.PeerDetails> peerDetailsMap = 
+				ArbitraryDataFileRequestThread.getInstance().getDetailedPeersForSignature(signature58);
+			
+			if (peerDetailsMap == null || peerDetailsMap.isEmpty()) {
+				return new PeerCountInfo(0);
+			}
+			
+			// Convert to PeerInfo list
+			List<PeerInfo> peerInfoList = new ArrayList<>();
+			for (Map.Entry<PeerData, ArbitraryDataFileRequestThread.PeerDetails> entry : peerDetailsMap.entrySet()) {
+				Peer peer = entry.getValue().peer;
+				boolean isDirect = entry.getValue().isDirect;
+				
+				// Get last 10 digits of node ID
+				String nodeId = peer.getPeersNodeId();
+				String id = nodeId != null && nodeId.length() >= 10 
+					? nodeId.substring(nodeId.length() - 10) 
+					: (nodeId != null ? nodeId : "unknown");
+				
+				// Determine speed from RTT
+				// HIGH = RTT < 5000ms, LOW = RTT 5000-10000ms, IDLE = RTT > 10000ms or no data
+				PeerInfo.Speed speed = PeerInfo.Speed.IDLE;
+				Long rtt = peer.getDownloadSpeedTracker().getLatestRoundTripTime();
+				if (rtt != null) {
+					if (rtt < 5000) {
+						speed = PeerInfo.Speed.HIGH;
+					} else if (rtt <= 10000) {
+						speed = PeerInfo.Speed.LOW;
+					} else {
+						speed = PeerInfo.Speed.IDLE;
+					}
+				}
+				
+				peerInfoList.add(new PeerInfo(id, speed, isDirect));
+			}
+			
+			// Sort by speed (HIGH first, then LOW, then IDLE) then by id for consistent ordering
+			peerInfoList.sort((a, b) -> {
+				int speedCompare = a.speed.compareTo(b.speed);
+				if (speedCompare != 0) return speedCompare;
+				return a.id.compareTo(b.id);
+			});
+			
+			return new PeerCountInfo(peerInfoList.size(), peerInfoList);
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
 	}
 
 
@@ -1895,6 +2004,8 @@ public String finalizeUpload(
 	}
 
 	private void download(Service service, String name, String identifier, String filepath, String encoding, boolean rebuild, boolean async, Integer maxAttempts, boolean attachment, String attachmentFilename) {
+	
+		
 		try {
 			ArbitraryDataReader arbitraryDataReader = new ArbitraryDataReader(name, ArbitraryDataFile.ResourceIdType.NAME, service, identifier);
 	
@@ -1909,19 +2020,62 @@ public String finalizeUpload(
 				arbitraryDataReader.loadAsynchronously(false, 1);
 			} else {
 				// Synchronous
-				while (!Controller.isStopping()) {
-					attempts++;
-					if (!arbitraryDataReader.isBuilding()) {
-						try {
-							arbitraryDataReader.loadSynchronously(rebuild);
-							break;
-						} catch (MissingDataException e) {
-							if (attempts > maxAttempts) {
-								throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.INVALID_CRITERIA, "Data unavailable. Please try again later.");
+			
+				
+				// OPTIMIZATION: Fast-path for serving cached data
+				// Check 3 conditions:
+				// 1. Files exist on disk
+				// 2. No rebuild requested
+				// 3. Cache is fresh (in rate-limit cache, meaning not invalidated by updates)
+				java.nio.file.Path cachedPath = arbitraryDataReader.getUncompressedPath();
+				boolean filesExist = false;
+				boolean isCacheFresh = false;
+				
+				try {
+					filesExist = Files.exists(cachedPath) && 
+								!org.qortal.utils.FilesystemUtils.isDirectoryEmpty(cachedPath);
+					
+					// Check if this resource is in the rate-limit cache (meaning it's fresh)
+					// When a new transaction arrives, invalidateCache() removes it from this map
+					if (filesExist) {
+						String resourceId = name.toLowerCase();
+						ArbitraryDataResource resource = new ArbitraryDataResource(
+							resourceId, 
+							ResourceIdType.NAME, 
+							service, 
+							identifier
+						);
+						isCacheFresh = ArbitraryDataManager.getInstance().isResourceCached(resource);
+					}
+				} catch (Exception e) {
+					// If we can't check, assume files don't exist and proceed with normal flow
+					filesExist = false;
+					isCacheFresh = false;
+				}
+				
+				// Fast path: files exist, no rebuild, and cache is fresh (not invalidated)
+				if (!rebuild && filesExist && isCacheFresh) {
+				
+					arbitraryDataReader.setFilePath(cachedPath);
+				} else {
+					// Need to validate or rebuild
+					// This includes: new data, stale cache, updates, or explicit rebuild
+					while (!Controller.isStopping()) {
+						attempts++;
+						if (!arbitraryDataReader.isBuilding()) {
+							try {
+								arbitraryDataReader.loadSynchronously(rebuild);
+								break;
+							} catch (MissingDataException e) {
+								if (attempts > maxAttempts) {
+									throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.INVALID_CRITERIA, "Data unavailable. Please try again later.");
+								}
 							}
 						}
 					}
 				}
+				
+				
 			}
 	
 			java.nio.file.Path outputPath = arbitraryDataReader.getFilePath();
@@ -2051,21 +2205,29 @@ public String finalizeUpload(
 					response.setContentLength((int) contentLength);
 				}
 	
-				// Stream file content
-				try (InputStream inputStream = Files.newInputStream(path)) {
-					if (rangeStart > 0) {
-						inputStream.skip(rangeStart);
-					}
+			// Stream file content
 	
-					byte[] buffer = new byte[65536];
-					long bytesRemaining = contentLength;
-					int bytesRead;
-	
-					while (bytesRemaining > 0 && (bytesRead = inputStream.read(buffer, 0, (int) Math.min(buffer.length, bytesRemaining))) != -1) {
-						rawOut.write(buffer, 0, bytesRead);
-						bytesRemaining -= bytesRead;
-					}
+			try (InputStream inputStream = Files.newInputStream(path)) {
+			
+				if (rangeStart > 0) {
+					inputStream.skip(rangeStart);
 				}
+
+				byte[] buffer = new byte[65536];
+				long bytesRemaining = contentLength;
+				int bytesRead;
+				long totalBytesWritten = 0;
+				int readCount = 0;
+
+				while (bytesRemaining > 0 && (bytesRead = inputStream.read(buffer, 0, (int) Math.min(buffer.length, bytesRemaining))) != -1) {
+					rawOut.write(buffer, 0, bytesRead);
+					bytesRemaining -= bytesRead;
+					totalBytesWritten += bytesRead;
+					readCount++;
+				}
+				
+			
+			}
 	
 				// Stream finished
 				if (base64Out != null) {
@@ -2081,18 +2243,20 @@ public String finalizeUpload(
 					response.getWriter().write(" ");
 				}
 	
-			} catch (IOException e) {
-				// Streaming errors should not rethrow — just log
-				LOGGER.warn(String.format("Streaming error for %s %s: %s", service, name, e.getMessage()));
-			}
+		} catch (IOException e) {
+			// Streaming errors should not rethrow — just log
+			LOGGER.trace(String.format("Streaming error for %s %s: %s", service, name, e.getMessage()));
+		}
+		
 	
-		} catch (IOException | ApiException | DataException e) {
-			LOGGER.warn(String.format("Unable to load %s %s: %s", service, name, e.getMessage()));
+
+	} catch (IOException | ApiException | DataException e) {
+			LOGGER.debug(String.format("Unable to load %s %s: %s", service, name, e.getMessage()));
 			if (!response.isCommitted()) {
 				throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FILE_NOT_FOUND, e.getMessage());
 			}
 		} catch (NumberFormatException e) {
-			LOGGER.warn(String.format("Invalid range for %s %s: %s", service, name, e.getMessage()));
+			LOGGER.debug(String.format("Invalid range for %s %s: %s", service, name, e.getMessage()));
 			if (!response.isCommitted()) {
 				throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.INVALID_DATA, e.getMessage());
 			}
@@ -2103,8 +2267,10 @@ public String finalizeUpload(
 
 	private FileProperties getFileProperties(Service service, String name, String identifier) {
 		try {
+
 			ArbitraryDataReader arbitraryDataReader = new ArbitraryDataReader(name, ArbitraryDataFile.ResourceIdType.NAME, service, identifier);
 			arbitraryDataReader.loadSynchronously(false);
+
 			java.nio.file.Path outputPath = arbitraryDataReader.getFilePath();
 			if (outputPath == null) {
 				// Assume the resource doesn't exist

@@ -47,6 +47,7 @@ public class ApiService {
 		this.config = new ResourceConfig();
 		this.config.packages("org.qortal.api.resource", "org.qortal.api.restricted.resource");
 		this.config.register(org.glassfish.jersey.media.multipart.MultiPartFeature.class);
+		this.config.register(org.qortal.api.model.ConnectedPeerJacksonWriter.class, 10000);  // High priority for ConnectedPeer endpoints
 		this.config.register(OpenApiResource.class);
 		this.config.register(ApiDefinition.class);
 		this.config.register(AnnotationPostProcessor.class);

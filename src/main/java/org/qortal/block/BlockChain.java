@@ -42,7 +42,7 @@ public class BlockChain {
 
 	// Properties
 
-	private boolean isTestChain = false;
+	private final boolean isTestChain = false;
 
 	/** Transaction expiry period, starting from transaction's timestamp, in milliseconds. */
 	private long transactionExpiryPeriod;
@@ -96,6 +96,9 @@ public class BlockChain {
 		multipleNamesPerAccountHeight,
 		mintedBlocksAdjustmentRemovalHeight
 	}
+
+    // V5.5 Default List of Historic Triggers
+    private static final Map<FeatureTrigger, Long> defaultFeatureTriggerHeight = new EnumMap<>(FeatureTrigger.class);
 
 	// Custom transaction fees
 	/** Unit fees by transaction timestamp */
@@ -289,7 +292,6 @@ public class BlockChain {
 	private CiyamAtSettings ciyamAtSettings;
 
 	// Constructors, etc.
-
 	private BlockChain() {
 	}
 
@@ -349,6 +351,10 @@ public class BlockChain {
 			InputStream in = classLoader.getResourceAsStream("blockchain.json");
 			jsonSource = new StreamSource(in);
 		}
+
+        // Load in the default feature triggers
+        defaultFeatureTriggerHeight.put(FeatureTrigger.multipleNamesPerAccountHeight, 2206300L);
+        defaultFeatureTriggerHeight.put(FeatureTrigger.mintedBlocksAdjustmentRemovalHeight, 2206300L);
 
 		try  {
 			// Attempt to unmarshal JSON stream to BlockChain config
@@ -804,7 +810,10 @@ public class BlockChain {
 		// Check all featureTriggers are present
 		for (FeatureTrigger featureTrigger : FeatureTrigger.values())
 			if (!this.featureTriggers.containsKey(featureTrigger.name()))
-				Settings.throwValidationError(String.format("Missing feature trigger \"%s\" in blockchain config", featureTrigger.name()));
+                if(!defaultFeatureTriggerHeight.containsKey(featureTrigger))
+				    Settings.throwValidationError(String.format("Missing feature trigger \"%s\" in blockchain config", featureTrigger.name()));
+                else
+                    featureTriggers.put(featureTrigger.name(), defaultFeatureTriggerHeight.get(featureTrigger));
 
 		// Check block reward share bounds (V1)
 		long totalShareV1 = this.qoraHoldersShareByHeight.get(0).share;

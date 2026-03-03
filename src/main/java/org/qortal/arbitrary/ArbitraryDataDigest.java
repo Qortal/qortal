@@ -26,6 +26,9 @@ public class ArbitraryDataDigest {
     }
 
     public void compute() throws IOException, DataException {
+        // Buffer size: 256KB - reduces system calls while being memory-friendly for all machines
+        final int BUFFER_SIZE = 256 * 1024;
+        
         List<Path> allPaths = Files.walk(path)
             .filter(Files::isRegularFile)
             .sorted()
@@ -40,6 +43,9 @@ public class ArbitraryDataDigest {
             throw new DataException("SHA-256 hashing algorithm unavailable");
         }
     
+        // Reuse buffer across files to reduce allocations
+        byte[] buffer = new byte[BUFFER_SIZE];
+        
         for (Path path : allPaths) {
             // We need to work with paths relative to the base path, to ensure the same hash
             // is generated on different systems
@@ -62,7 +68,6 @@ public class ArbitraryDataDigest {
             sha256.update(filePathBytes);
     
             try (InputStream in = Files.newInputStream(path)) {
-                byte[] buffer = new byte[65536]; // 64 KB
                 int bytesRead;
                 while ((bytesRead = in.read(buffer)) != -1) {
                     sha256.update(buffer, 0, bytesRead);

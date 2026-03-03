@@ -268,7 +268,7 @@ public class ArbitraryTransaction extends Transaction {
 		ArbitraryTransactionUtils.checkAndRelocateMiscFiles(arbitraryTransactionData);
 
 		// Update caches
-		updateCaches();
+		updateCaches(true);
 	}
 
 	@Override
@@ -290,10 +290,10 @@ public class ArbitraryTransaction extends Transaction {
 		new Payment(this.repository).process(arbitraryTransactionData.getSenderPublicKey(), arbitraryTransactionData.getPayments());
 
 		// Update caches
-		this.updateCaches();
+		this.updateCaches(false);
 	}
 
-	private void updateCaches() {
+	private void updateCaches(boolean autoInvalidate) {
 		// Very important to use a separate repository instance from the one being used for validation/processing
 		try (final Repository repository = RepositoryManager.getRepository()) {
 			// If the data is local, we need to perform a few actions
@@ -301,7 +301,12 @@ public class ArbitraryTransaction extends Transaction {
 
 				// We have the data for this transaction, so invalidate the file cache
 				if (arbitraryTransactionData.getName() != null) {
-					ArbitraryDataManager.getInstance().invalidateCache(arbitraryTransactionData);
+					ArbitraryDataManager.getInstance().invalidateCache(arbitraryTransactionData, true);
+				}
+			}
+			else if( autoInvalidate ) {
+				if (arbitraryTransactionData.getName() != null) {
+					ArbitraryDataManager.getInstance().invalidateCache(arbitraryTransactionData, false);
 				}
 			}
 

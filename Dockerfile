@@ -16,7 +16,7 @@ COPY --from=builder /work/target/qortal*.jar /usr/local/qortal/qortal.jar
 
 USER 1000:100
 
-EXPOSE 12391 12392
+EXPOSE 12391 12392 12394
 HEALTHCHECK --start-period=5m CMD curl -sf http://127.0.0.1:12391/admin/info || exit 1
 
 WORKDIR /qortal

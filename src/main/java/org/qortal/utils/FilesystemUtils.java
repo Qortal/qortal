@@ -208,13 +208,27 @@ public class FilesystemUtils {
     }
 
     public static long getDirectorySize(Path path) throws IOException {
+        return getDirectorySize(path, false);
+    }
+
+    public static long getDirectorySize(Path path, boolean excludeQortalDirectory) throws IOException {
         if (path == null || !Files.exists(path)) {
             return 0L;
         }
         return Files.walk(path)
                 .filter(p -> p.toFile().isFile())
+                .filter(p -> !excludeQortalDirectory || !isQortalMetadataPath(p))
                 .mapToLong(p -> p.toFile().length())
                 .sum();
+    }
+
+    private static boolean isQortalMetadataPath(Path path) {
+        for (Path part : path) {
+            if (".qortal".equals(part.toString())) {
+                return true;
+            }
+        }
+        return false;
     }
 
 

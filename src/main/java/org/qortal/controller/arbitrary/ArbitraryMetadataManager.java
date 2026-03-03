@@ -8,8 +8,9 @@ import org.qortal.arbitrary.metadata.ArbitraryDataTransactionMetadata;
 import org.qortal.controller.Controller;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.TransactionData;
-import org.qortal.network.Network;
+import org.qortal.network.NetworkData;
 import org.qortal.network.Peer;
+import org.qortal.network.PeerList;
 import org.qortal.network.message.ArbitraryMetadataMessage;
 import org.qortal.network.message.GetArbitraryMetadataMessage;
 import org.qortal.network.message.Message;
@@ -24,6 +25,7 @@ import org.qortal.utils.Triple;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -61,8 +63,9 @@ public class ArbitraryMetadataManager {
      * Map to keep track of in progress arbitrary metadata requests
      * Key: string - the signature encoded in base58
      * Value: Triple<networkBroadcastCount, directPeerRequestCount, lastAttemptTimestamp>
+     * Uses ConcurrentHashMap for thread-safe atomic operations like compute()
      */
-    private Map<String, Triple<Integer, Integer, Long>> arbitraryMetadataSignatureRequests = Collections.synchronizedMap(new HashMap<>());
+    private final ConcurrentHashMap<String, Triple<Integer, Integer, Long>> arbitraryMetadataSignatureRequests = new ConcurrentHashMap<>();
 
 
     private ArbitraryMetadataManager() {
@@ -147,14 +150,66 @@ public class ArbitraryMetadataManager {
             return null;
         }
 
-        // If we've already tried too many times in a short space of time, make sure to give up
-        if (useRateLimiter && !this.shouldMakeMetadataRequestForSignature(signature58)) {
-            LOGGER.trace("Skipping metadata request for signature {} due to rate limit", signature58);
-            return null;
+        // ATOMIC check-and-update using compute() to prevent race conditions
+        // This ensures only one thread can pass the rate limit check and update the counter
+        // compute() returns the new value that was stored in the map
+        Triple<Integer, Integer, Long> updatedRequest = arbitraryMetadataSignatureRequests.compute(signature58, (key, existing) -> {
+            if (existing == null) {
+                // First request - allow it and create entry
+                return new Triple<>(1, 0, now);
+            }
+            
+            // Extract the components
+            Integer networkBroadcastCount = existing.getA();
+            Integer directPeerRequestCount = existing.getB();
+            Long lastAttemptTimestamp = existing.getC();
+            
+            if (lastAttemptTimestamp == null) {
+                // Not attempted yet - allow it
+                return new Triple<>(networkBroadcastCount + 1, directPeerRequestCount, now);
+            }
+            
+            long timeSinceLastAttempt = now - lastAttemptTimestamp;
+            
+            // Rate limiting logic (same as shouldMakeMetadataRequestForSignature)
+            // Allow a second attempt after 60 seconds
+            if (timeSinceLastAttempt > 60 * 1000L) {
+                // We haven't tried for at least 60 seconds
+                if (networkBroadcastCount < 2) {
+                    // We've made less than 2 total attempts - allow it
+                    return new Triple<>(networkBroadcastCount + 1, directPeerRequestCount, now);
+                }
+            }
+            
+            // Then allow another attempt after 60 minutes
+            if (timeSinceLastAttempt > 60 * 60 * 1000L) {
+                // We haven't tried for at least 60 minutes
+                if (networkBroadcastCount < 3) {
+                    // We've made less than 3 total attempts - allow it
+                    return new Triple<>(networkBroadcastCount + 1, directPeerRequestCount, now);
+                }
+            }
+            
+            // Rate limited - return existing value unchanged to indicate rejection
+            return existing;
+        });
+        
+        // Check if the request was rate limited by comparing the timestamp
+        // If the timestamp equals 'now', it was updated (allowed)
+        // If the timestamp is different, it was rate limited (returned existing value)
+        boolean requestAllowed = updatedRequest.getC().equals(now);
+        
+        if (!requestAllowed) {
+            if (useRateLimiter) {
+                LOGGER.trace("Skipping metadata request for signature {} due to rate limit", signature58);
+                return null;
+            }
+            // If rate limiter is disabled, we still want to proceed
+            // Update the counter manually (this shouldn't happen in normal operation)
+            this.addToSignatureRequests(signature58, true, false);
         }
-        this.addToSignatureRequests(signature58, true, false);
 
-        List<Peer> handshakedPeers = Network.getInstance().getImmutableHandshakedPeers();
+        PeerList handshakedPeers = NetworkData.getInstance().getImmutableHandshakedPeers();
         LOGGER.debug(String.format("Sending metadata request for signature %s to %d peers...", signature58, handshakedPeers.size()));
 
         // Build request
@@ -174,7 +229,7 @@ public class ArbitraryMetadataManager {
         getArbitraryMetadataMessage.setId(id);
 
         // Broadcast request
-        Network.getInstance().broadcast(peer -> getArbitraryMetadataMessage);
+        NetworkData.getInstance().broadcast(peer -> getArbitraryMetadataMessage);
 
         // Poll to see if data has arrived
         final long singleWait = 100;
@@ -277,25 +332,31 @@ public class ArbitraryMetadataManager {
     }
 
     public void addToSignatureRequests(String signature58, boolean incrementNetworkRequests, boolean incrementPeerRequests) {
-        Triple<Integer, Integer, Long> request  = arbitraryMetadataSignatureRequests.get(signature58);
         Long now = NTP.getTime();
-
-        if (request == null) {
-            // No entry yet
-            Triple<Integer, Integer, Long> newRequest = new Triple<>(0, 0, now);
-            arbitraryMetadataSignatureRequests.put(signature58, newRequest);
-        }
-        else {
-            // There is an existing entry
-            if (incrementNetworkRequests) {
-                request.setA(request.getA() + 1);
+        
+        // Use compute() for atomic check-and-update operation
+        arbitraryMetadataSignatureRequests.compute(signature58, (key, existing) -> {
+            if (existing == null) {
+                // No entry yet - create new entry
+                int networkCount = incrementNetworkRequests ? 1 : 0;
+                int peerCount = incrementPeerRequests ? 1 : 0;
+                return new Triple<>(networkCount, peerCount, now);
+            } else {
+                // There is an existing entry - update it atomically
+                int networkCount = existing.getA();
+                int peerCount = existing.getB();
+                
+                if (incrementNetworkRequests) {
+                    networkCount = networkCount + 1;
+                }
+                if (incrementPeerRequests) {
+                    peerCount = peerCount + 1;
+                }
+                
+                // Create new Triple with updated values (Triple is immutable, so we create a new one)
+                return new Triple<>(networkCount, peerCount, now);
             }
-            if (incrementPeerRequests) {
-                request.setB(request.getB() + 1);
-            }
-            request.setC(now);
-            arbitraryMetadataSignatureRequests.put(signature58, request);
-        }
+        });
     }
 
     public void removeFromSignatureRequests(String signature58) {
@@ -347,6 +408,8 @@ public class ArbitraryMetadataManager {
             ArbitraryDataFile arbitraryMetadataFile = arbitraryMetadataMessage.getArbitraryMetadataFile();
             if (!isBlocked && arbitraryMetadataFile != null) {
                 arbitraryMetadataFile.save();
+                // Clear fileContent after saving - data is now on disk and can be reloaded if needed
+                arbitraryMetadataFile.clearFileContent();
             }
 
             // Forwarding
@@ -429,7 +492,7 @@ public class ArbitraryMetadataManager {
                     continue;
                 }
 
-                LOGGER.debug("Received metadata request from peer {} for signature {}", peerMessage.peer, signature58);
+                LOGGER.trace("Received metadata request from peer {} for signature {}", peerMessage.peer, signature58);
 
                 signatureBySignature58.put(signature58, signature);
                 nowBySignature58.put(signature58, now);
@@ -519,7 +582,7 @@ public class ArbitraryMetadataManager {
 
                             Peer peer = peerMessage.peer;
                             LOGGER.debug("Rebroadcasting metadata request from peer {} for signature {} to our other peers... totalRequestTime: {}, requestHops: {}", peer, Base58.encode(signature), totalRequestTime, requestHops);
-                            Network.getInstance().broadcast(
+                            NetworkData.getInstance().broadcast(
                                     broadcastPeer ->
                                             !broadcastPeer.isAtLeastVersion(RELAY_MIN_PEER_VERSION) ? null :
                                                     broadcastPeer == peer || Objects.equals(broadcastPeer.getPeerData().getAddress().getHost(), peer.getPeerData().getAddress().getHost()) ? null : relayGetArbitraryMetadataMessage);

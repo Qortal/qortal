@@ -162,8 +162,10 @@ public class ArbitraryDataTransactionBuilder {
                 return Method.PUT;
             }
 
-            long diffSize = FilesystemUtils.getDirectorySize(patch.getFinalPath());
-            long existingStateSize = FilesystemUtils.getDirectorySize(reader.getFilePath());
+            // Check size of differences between this layer and previous layer
+            // Exclude .qortal metadata to get accurate size comparison for PATCH vs PUT decision
+            long diffSize = FilesystemUtils.getDirectorySize(patch.getFinalPath(), true);
+            long existingStateSize = FilesystemUtils.getDirectorySize(reader.getFilePath(), true);
             double difference = (double) diffSize / (double) existingStateSize;
             if (difference > MAX_SIZE_DIFF) {
                 LOGGER.info("Reached maximum difference ({} / {}) - using PUT", difference, MAX_SIZE_DIFF);

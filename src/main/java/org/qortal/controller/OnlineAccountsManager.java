@@ -441,7 +441,7 @@ public class OnlineAccountsManager {
         boolean isSuperiorEntry = isOnlineAccountsDataSuperior(onlineAccountData);
         if (isSuperiorEntry)
             // Remove existing inferior entry so it can be re-added below (it's likely the existing copy is missing a nonce value)
-            onlineAccounts.removeIf(a -> Objects.equals(a.getPublicKey(), onlineAccountData.getPublicKey()));
+            onlineAccounts.removeIf(a -> Arrays.equals(a.getPublicKey(), onlineAccountData.getPublicKey()));
 
         boolean isNewEntry = onlineAccounts.add(onlineAccountData);
 
@@ -720,9 +720,13 @@ public class OnlineAccountsManager {
      * @return true if our signature(s) have been submitted recently.
      */
     public boolean hasActiveOnlineAccountSignatures() {
-        final Long minLatestBlockTimestamp = NTP.getTime() - (2 * 60 * 60 * 1000L);
+        final Long now = NTP.getTime();
+        if (now == null)
+            return false;
+    
+        final long minLatestBlockTimestamp = now - (2 * 60 * 60 * 1000L);
         boolean isUpToDate = Controller.getInstance().isUpToDate(minLatestBlockTimestamp);
-
+    
         return isUpToDate && hasOurOnlineAccounts();
     }
 

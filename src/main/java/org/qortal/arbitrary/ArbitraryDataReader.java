@@ -1,5 +1,30 @@
 package org.qortal.arbitrary;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.InvalidObjectException;
+import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
+
 import org.apache.commons.io.FileUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -18,25 +43,13 @@ import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
 import org.qortal.settings.Settings;
 import org.qortal.transform.Transformer;
-import org.qortal.utils.*;
-
-import javax.crypto.BadPaddingException;
-import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.NoSuchPaddingException;
-import javax.crypto.SecretKey;
-import javax.crypto.spec.SecretKeySpec;
-import java.io.File;
-import java.io.IOException;
-import java.io.InvalidObjectException;
-import java.nio.file.*;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.security.InvalidAlgorithmParameterException;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import org.qortal.utils.ArbitraryTransactionUtils;
+import org.qortal.utils.Base58;
+import org.qortal.utils.FilesystemUtils;
+import org.qortal.utils.ListUtils;
+import org.qortal.utils.NTP;
+import org.qortal.utils.StringUtils;
+import org.qortal.utils.ZipUtils;
 
 public class ArbitraryDataReader {
 
@@ -61,6 +74,9 @@ public class ArbitraryDataReader {
 
     // The resource being read
     ArbitraryDataResource arbitraryDataResource = null;
+
+    // Track if decrypt+unzip was combined in a single pass (optimization)
+    private boolean decryptAndUnzipCombined = false;
 
     // Track resources that are currently being loaded, to avoid duplicate concurrent builds
     // TODO: all builds could be handled by the build queue (even synchronous ones), to avoid the need for this
@@ -180,15 +196,63 @@ public class ArbitraryDataReader {
 
             // Don't allow duplicate loads
             if (!this.canStartLoading()) {
-                LOGGER.debug("Skipping duplicate load of {}", this.arbitraryDataResource);
-                return;
+                LOGGER.debug("Skipping duplicate load of {} - waiting for other thread to complete", this.arbitraryDataResource);
+                
+                // Another thread is loading this resource
+                // Wait for it to complete (up to 60 seconds)
+                int maxWaitMs = 60000;
+                int waitedMs = 0;
+                int sleepMs = 500;
+                
+                while (waitedMs < maxWaitMs) {
+                    try {
+                        Thread.sleep(sleepMs);
+                        waitedMs += sleepMs;
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new DataException("Interrupted while waiting for concurrent load");
+                    }
+                    
+                    // Check if data is now available
+                    ArbitraryDataCache updatedCache = new ArbitraryDataCache(this.uncompressedPath, false,
+                            this.resourceId, this.resourceIdType, this.service, this.identifier);
+                    if (updatedCache.isCachedDataAvailable()) {
+                        this.filePath = this.uncompressedPath;
+                        return;
+                    }
+                    
+                    // Check if the other thread finished (no longer in progress)
+                    if (!ArbitraryDataReader.inProgress.containsKey(this.arbitraryDataResource.getUniqueKey())) {
+                        // Other thread finished but data isn't cached - proceed to load ourselves
+                        break;
+                    }
+                }
+                
+                // If we waited max time and data still isn't available, throw exception
+                if (waitedMs >= maxWaitMs) {
+                    throw new DataException("Timeout waiting for concurrent load to complete");
+                }
+                
+                // If we get here, the other thread finished but data isn't available
+                // Fall through to try loading ourselves
+                LOGGER.debug("Other thread finished but data not available for {} - attempting load", this.arbitraryDataResource);
+                
+                // Try to acquire the lock again
+                if (!this.canStartLoading()) {
+                    throw new DataException("Unable to acquire load lock after waiting");
+                }
             }
 
             this.preExecute();
             this.deleteExistingFiles();
             this.fetch();
             this.decrypt();
-            this.uncompress();
+            
+            // Only uncompress if we haven't already done it during decrypt
+            if (!this.decryptAndUnzipCombined) {
+                this.uncompress();
+            }
+            
             this.validate();
 
         } catch (DataNotPublishedException e) {
@@ -200,7 +264,7 @@ public class ArbitraryDataReader {
             throw e;
 
         } catch (DataException e) {
-            LOGGER.info("DataException when trying to load QDN resource", e);
+            LOGGER.debug("DataException when trying to load QDN resource", e);
             this.deleteWorkingDirectory();
             throw e;
 
@@ -344,10 +408,10 @@ public class ArbitraryDataReader {
 
     private void fetchFromName() throws DataException, IOException, MissingDataException {
         try {
-
             // Build the existing state using past transactions
             ArbitraryDataBuilder builder = new ArbitraryDataBuilder(this.resourceId, this.service, this.identifier);
             builder.build();
+            
             Path builtPath = builder.getFinalPath();
             if (builtPath == null) {
                 throw new DataException("Unable to build path");
@@ -369,12 +433,12 @@ public class ArbitraryDataReader {
     }
 
     private void fetchFromSignature() throws DataException, IOException, MissingDataException {
-
         // Load the full transaction data from the database so we can access the file hashes
         ArbitraryTransactionData transactionData;
         try (final Repository repository = RepositoryManager.getRepository()) {
             transactionData = (ArbitraryTransactionData) repository.getTransactionRepository().fromSignature(Base58.decode(resourceId));
         }
+        
         if (transactionData == null) {
             throw new DataException(String.format("Transaction data not found for signature %s", this.resourceId));
         }
@@ -396,6 +460,7 @@ public class ArbitraryDataReader {
         // Load data file(s)
         ArbitraryDataFile arbitraryDataFile = ArbitraryDataFile.fromTransactionData(transactionData);
         ArbitraryTransactionUtils.checkAndRelocateMiscFiles(transactionData);
+        
         if (arbitraryDataFile == null) {
             throw new DataException(String.format("arbitraryDataFile is null"));
         }
@@ -436,25 +501,23 @@ public class ArbitraryDataReader {
             if (!arbitraryDataFile.exists()) {
                 throw new IOException(String.format("File doesn't exist: %s", arbitraryDataFile));
             }
-            // Ensure the complete hash matches the joined chunks
-
-        if (!Arrays.equals(arbitraryDataFile.digest(), transactionData.getData())) {
-        
             
-            // Delete the invalid file
-            LOGGER.info("Deleting invalid file: path = {}", arbitraryDataFile.getFilePath());
-            if (arbitraryDataFile.delete()) {
-                LOGGER.info("Deleted invalid file successfully: path = {}", arbitraryDataFile.getFilePath());
-            } else {
-                LOGGER.warn("Could not delete invalid file: path = {}", arbitraryDataFile.getFilePath());
-            }
+            // Ensure the complete hash matches the joined chunks
+            if (!Arrays.equals(arbitraryDataFile.digest(), transactionData.getData())) {
+                // Delete the invalid file
+                LOGGER.info("Deleting invalid file: path = {}", arbitraryDataFile.getFilePath());
+                if (arbitraryDataFile.delete()) {
+                    LOGGER.info("Deleted invalid file successfully: path = {}", arbitraryDataFile.getFilePath());
+                } else {
+                    LOGGER.warn("Could not delete invalid file: path = {}", arbitraryDataFile.getFilePath());
+                }
 
-            // Also delete its chunks
-            if (arbitraryDataFile.deleteAllChunks()) {
-                LOGGER.info("Deleted all chunks associated with invalid file: {}", arbitraryDataFile.getFilePath());
-            } else {
-                LOGGER.warn("Failed to delete one or more chunks for invalid file: {}", arbitraryDataFile.getFilePath());
-            }
+                // Also delete its chunks
+                if (arbitraryDataFile.deleteAllChunks()) {
+                    LOGGER.info("Deleted all chunks associated with invalid file: {}", arbitraryDataFile.getFilePath());
+                } else {
+                    LOGGER.warn("Failed to delete one or more chunks for invalid file: {}", arbitraryDataFile.getFilePath());
+                }
 
                 throw new DataException("Unable to validate complete file hash");
             }
@@ -468,6 +531,32 @@ public class ArbitraryDataReader {
     }
 
     private void decrypt() throws DataException {
+        // Check if we can combine decrypt+unzip for better performance
+        // This optimization eliminates an intermediate disk write/read cycle
+        byte[] secret = this.secret58 != null ? Base58.decode(this.secret58) : null;
+        Compression compression = transactionData != null ? transactionData.getCompression() : Compression.ZIP;
+        
+        if (secret != null && secret.length == Transformer.AES256_LENGTH && compression == Compression.ZIP) {
+            // Try combined decrypt+unzip first (optimization)
+            try {
+                this.decryptAndUnzipCombined("AES/CBC/PKCS5Padding");
+                this.decryptAndUnzipCombined = true;
+                return;
+            } catch (DataException e) {
+                LOGGER.debug("Combined decrypt+unzip failed with AES/CBC/PKCS5Padding, trying fallback: {}", e.getMessage());
+                try {
+                    // Fall back to legacy AES algorithm
+                    this.decryptAndUnzipCombined("AES");
+                    this.decryptAndUnzipCombined = true;
+                    return;
+                } catch (DataException e2) {
+                    LOGGER.info("Combined decrypt+unzip failed, falling back to separate operations: {}", e2.getMessage());
+                    // Fall through to separate decrypt/uncompress
+                }
+            }
+        }
+        
+        // Standard separate decrypt (for unencrypted, NONE compression, or if combined failed)
         try {
             // First try with explicit parameters (CBC mode with PKCS5 padding)
             this.decryptUsingAlgo("AES/CBC/PKCS5Padding");
@@ -478,6 +567,50 @@ public class ArbitraryDataReader {
             this.decryptUsingAlgo("AES");
 
             // TODO: delete files and block this resource if privateDataEnabled is false and the second attempt fails too
+        }
+    }
+
+    /**
+     * Combined decrypt and unzip in a single streaming pass.
+     * This optimization eliminates the intermediate decrypted file, reducing disk I/O by ~50%.
+     * 
+     * @param algorithm The encryption algorithm to use
+     * @throws DataException If decryption or extraction fails
+     */
+    private void decryptAndUnzipCombined(String algorithm) throws DataException {
+        byte[] secret = this.secret58 != null ? Base58.decode(this.secret58) : null;
+        if (secret == null || secret.length != Transformer.AES256_LENGTH) {
+            throw new DataException("Invalid secret key for combined decrypt+unzip");
+        }
+        
+        if (this.filePath == null || !Files.exists(this.filePath)) {
+            throw new DataException("Can't decrypt+unzip non-existent file path");
+        }
+        
+        try {
+            LOGGER.debug("Decrypting and unzipping {} in single pass using algorithm {}...", this.arbitraryDataResource, algorithm);
+            SecretKey aesKey = new SecretKeySpec(secret, 0, secret.length, "AES");
+            
+            // Use combined decrypt+unzip which streams directly to destination
+            ZipUtils.decryptAndUnzip(algorithm, aesKey, this.filePath.toString(), 
+                    this.uncompressedPath.getParent().toString());
+            
+            LOGGER.debug("Finished decrypting and unzipping {} using algorithm {}", this.arbitraryDataResource, algorithm);
+            
+            // Verify the uncompressed directory was created
+            if (!this.uncompressedPath.toFile().exists()) {
+                throw new DataException(String.format("Uncompressed directory not created at %s", this.uncompressedPath));
+            }
+            
+            // Update filePath to point to uncompressed directory
+            // Don't delete the original ArbitraryDataFile chunk - it needs to be preserved for peer sharing
+            this.filePath = this.uncompressedPath;
+            
+        } catch (NoSuchAlgorithmException | InvalidAlgorithmParameterException | NoSuchPaddingException
+                | InvalidKeyException | IOException e) {
+            LOGGER.info(String.format("Exception when decrypting+unzipping %s using algorithm %s", this.arbitraryDataResource, algorithm), e);
+            throw new DataException(String.format("Unable to decrypt+unzip file at path %s using algorithm %s: %s", 
+                    this.filePath, algorithm, e.getMessage()));
         }
     }
 
@@ -508,6 +641,11 @@ public class ArbitraryDataReader {
     }
 
     private void uncompress() throws IOException, DataException {
+        // Skip if we already did combined decrypt+unzip
+        if (this.decryptAndUnzipCombined) {
+            return;
+        }
+        
         if (this.filePath == null || !Files.exists(this.filePath)) {
             throw new DataException("Can't uncompress non-existent file path");
         }
@@ -545,19 +683,8 @@ public class ArbitraryDataReader {
             throw new DataException(String.format("Unable to unzip file: %s", this.filePath));
         }
 
-        // Delete original compressed file
-        if (FilesystemUtils.pathInsideDataOrTempPath(this.filePath)) {
-            if (Files.exists(this.filePath)) {
-                try {
-                    Files.delete(this.filePath);
-                } catch (IOException e) {
-                    // Ignore failures as this isn't an essential step
-                    LOGGER.info("Unable to delete file at path {}", this.filePath);
-                }
-            }
-        }
-
-        // Replace filePath pointer with the uncompressed file path
+        // Update filePath to point to uncompressed directory
+        // Don't delete the original ArbitraryDataFile chunk - it needs to be preserved for peer sharing
         this.filePath = this.uncompressedPath;
     }
 
@@ -621,6 +748,14 @@ public class ArbitraryDataReader {
 
     public Path getFilePath() {
         return this.filePath;
+    }
+
+    public Path getUncompressedPath() {
+        return this.uncompressedPath;
+    }
+
+    public void setFilePath(Path filePath) {
+        this.filePath = filePath;
     }
 
     public int getLayerCount() {

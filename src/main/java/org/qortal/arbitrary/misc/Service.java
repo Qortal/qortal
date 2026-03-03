@@ -214,7 +214,9 @@ public enum Service {
         // Load the first 25KB of data. This only needs to be long enough to check the prefix
         // and also to allow for possible additional future validation of smaller files.
         byte[] data = FilesystemUtils.getSingleFileContents(path, 25*1024);
-        long size = FilesystemUtils.getDirectorySize(path);
+        // Exclude .qortal metadata from size calculation - it's system metadata,
+        // not user content, and shouldn't count against service size limits
+        long size = FilesystemUtils.getDirectorySize(path, true);
 
         // Validate max size if needed
         if (this.maxSize != null) {

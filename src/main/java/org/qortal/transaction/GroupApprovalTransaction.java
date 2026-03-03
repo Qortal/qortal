@@ -2,6 +2,7 @@ package org.qortal.transaction;
 
 import org.qortal.account.Account;
 import org.qortal.asset.Asset;
+import org.qortal.block.BlockValidationContext;
 import org.qortal.data.transaction.GroupApprovalTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.repository.DataException;
@@ -40,8 +41,13 @@ public class GroupApprovalTransaction extends Transaction {
 
 	@Override
 	public ValidationResult isValid() throws DataException {
-		// Grab pending transaction's data
-		TransactionData pendingTransactionData = this.repository.getTransactionRepository().fromSignature(this.groupApprovalTransactionData.getPendingSignature());
+		// Grab pending transaction's data: check current block first (same-block approval),
+		// then repository (approval of a transaction from an earlier block)
+		byte[] pendingSignature = this.groupApprovalTransactionData.getPendingSignature();
+		TransactionData pendingTransactionData = BlockValidationContext.getBySignature(pendingSignature);
+		if (pendingTransactionData == null) {
+			pendingTransactionData = this.repository.getTransactionRepository().fromSignature(pendingSignature);
+		}
 		if (pendingTransactionData == null)
 			return ValidationResult.TRANSACTION_UNKNOWN;
 

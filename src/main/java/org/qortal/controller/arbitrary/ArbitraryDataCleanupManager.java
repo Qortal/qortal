@@ -602,7 +602,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 		}
 
 		String baseDir = Settings.getInstance().getTempDataPath();
-		Path readerNameCachePath = Paths.get(baseDir, "reader", "NAME", name);
+		Path readerNameCachePath = Paths.get(baseDir, "reader", "NAME", StringUtils.sanitizeString(name));
 
 		// Loop through the contents and check each one
 		final File[] directories = readerNameCachePath.toFile().listFiles();
@@ -623,7 +623,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 			return;
 		}
 
-		Path readerNameServiceCachePath = Paths.get("reader", "NAME", name, service);
+		Path readerNameServiceCachePath = Paths.get("reader", "NAME", StringUtils.sanitizeString(name), service);
 		Long expiry = Settings.getInstance().getBuiltDataExpiryInterval();
 		this.cleanupTempDirectory(readerNameServiceCachePath.toString(), now, expiry);
 	}
