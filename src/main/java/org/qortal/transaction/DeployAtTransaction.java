@@ -8,6 +8,7 @@ import org.qortal.asset.Asset;
 import org.qortal.at.AT;
 import org.qortal.at.QortalATAPI;
 import org.qortal.at.QortalAtLoggerFactory;
+import org.qortal.block.BlockChain;
 import org.qortal.crypto.Crypto;
 import org.qortal.data.asset.AssetData;
 import org.qortal.data.at.ATData;
@@ -18,6 +19,7 @@ import org.qortal.repository.Repository;
 import org.qortal.transform.TransformationException;
 import org.qortal.transform.transaction.TransactionTransformer;
 import org.qortal.utils.Amounts;
+import org.qortal.utils.Base58;
 
 import java.util.Collections;
 import java.util.List;
@@ -35,6 +37,37 @@ public class DeployAtTransaction extends Transaction {
 	public static final int MAX_CREATION_BYTES_SIZE = 4096;
 	public static final int MAX_CODE_BYTES_LENGTH = 1024;
 	public static final int MAX_AT_STATE_LENGTH = 1024;
+
+	private final static List<String> APPROVED_CODE_HASHES
+		= List.of(
+			//q-fund version 1 - refund
+			"9gS2L74FdaG3zuEeYv815xVyHkhvLguq7ZGD6pf24i8F",
+
+			//q-fund version 2 - no refund
+			"HaqJBVVr9gZqgARZ5UZd7EU9ybyvVK2fCo9sx3gMMFsr",
+
+			//lottery
+			"GA2GF79hfJeTy1TezS4sUZWS4vxJKs4qqwJ49h3NN8H9",
+
+			//ltc
+			"4KdJETRAdymE7dodDmJbf5d9L1bp4g5Nxky8m47TBkvA",
+
+			//btc
+			"7xmoVpA6aR7cm7E9XZXAz3BRMQufdkTiku5CGxouFjcT",
+
+			//doge
+			"FTe4QDjNre2vRrGJQLKgfNdVYahvbd8CnVdhir9Zk7D",
+
+			//digi
+			"GXPEHes39dxiasWDSAZXyhGjaT44LKvZ7cJnHYgBYtng",
+
+			//raven
+			"Amtrk89znaGrHqsRqtEhEKQZzKfbWAHdetB5SSN8cYL6",
+
+			//pirate
+			"HyKCg5oiwMKkRrZKk1e5gET27kfrEVUwCNXGQALXqg9x"
+
+	);
 
 	// Constructors
 
@@ -167,6 +200,16 @@ public class DeployAtTransaction extends Transaction {
 			byte[] atStateBytes = state.toBytes();
 			if (atStateBytes == null || atStateBytes.length > MAX_AT_STATE_LENGTH)
 				return ValidationResult.INVALID_CREATION_BYTES;
+
+			if(height > BlockChain.getInstance().getAtValidateHeight()) {
+				byte[] codeHash = Crypto.digest(codeBytes);
+				String codeHash58 = Base58.encode(codeHash);
+
+				// if passed the validation feature trigger and the code hash has not been approved, then invalidate
+				if(!APPROVED_CODE_HASHES.contains(codeHash58)) {
+					return ValidationResult.INVALID_CREATION_BYTES;
+				}
+			}
 		} catch (IllegalArgumentException e) {
 			// Not valid
 			return ValidationResult.INVALID_CREATION_BYTES;
