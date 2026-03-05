@@ -157,6 +157,23 @@ public class ApiService {
 			if (keystorePathname != null && keystorePassword != null) {
 				if (!Files.isReadable(Path.of(keystorePathname))) {
 					SslUtils.generateSsl();
+				} else {
+					// Validate keystore is loadable (not corrupt/truncated). Use default PKCS12 provider
+					// so validation matches Jetty's load and works on Oracle Java SE (BC can fail JCE auth).
+					try {
+						KeyStore keyStore = KeyStore.getInstance("PKCS12");
+						try (InputStream in = Files.newInputStream(Path.of(keystorePathname))) {
+							keyStore.load(in, keystorePassword.toCharArray());
+						}
+					} catch (Exception e) {
+						LOGGER.warn("Keystore invalid or corrupt ({}), regenerating: {}", keystorePathname, e.getMessage());
+						try {
+							Files.delete(Path.of(keystorePathname));
+						} catch (Exception e2) {
+							LOGGER.warn("Could not delete corrupt keystore: {}", e2.getMessage());
+						}
+						SslUtils.generateSsl();
+					}
 				}
 
 				// 2. SSL Context Factory
@@ -164,7 +181,8 @@ public class ApiService {
 				sslContextFactory.setKeyStorePath(keystorePathname);
 				sslContextFactory.setKeyStorePassword(keystorePassword);
 				sslContextFactory.setKeyStoreType("PKCS12");
-				sslContextFactory.setKeyStoreProvider("BC");
+				// Do not set KeyStore provider: use default (SunJSSE) so keystore load works on Oracle
+				// Java SE where repackaged BC fails "JCE cannot authenticate the provider BC" during load.
 
 				// Use SunJSSE for ALPN support
 				sslContextFactory.setProvider("SunJSSE");

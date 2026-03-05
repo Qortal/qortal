@@ -152,21 +152,115 @@ if [[ -z "$LATEST_COMMIT_TS" || "$LATEST_COMMIT_TS" == "null" ]]; then
 fi
 
 # ---- ensure working dir / artifacts ----------------------------------------
+if [[ ! -d "$WORKING_QORTAL_DIR" ]]; then
+  echo "Error: working directory '${WORKING_QORTAL_DIR}' not found."
+  read -r -p "Would you like to: (1) Create it here, or (2) Specify a full path? [1/2]: " choice
+  if [[ "$choice" == "1" ]]; then
+    mkdir -p "$WORKING_QORTAL_DIR"
+    echo "Created: ${WORKING_QORTAL_DIR}"
+  elif [[ "$choice" == "2" ]]; then
+    read -r -p "Enter full path to working directory: " new_path
+    if [[ -z "$new_path" ]]; then
+      echo "Error: empty path provided. Exiting."
+      exit 1
+    fi
+    WORKING_QORTAL_DIR="$new_path"
+    mkdir -p "$WORKING_QORTAL_DIR"
+    echo "Using: ${WORKING_QORTAL_DIR}"
+  else
+    echo "Invalid choice. Exiting."
+    exit 1
+  fi
+fi
+
 mkdir -p "$WORKING_QORTAL_DIR"
 
 JAR_FILE="${WORKING_QORTAL_DIR}/qortal.jar"
 if [[ ! -f "$JAR_FILE" ]]; then
   echo "Error: ${JAR_FILE} not found."
-  echo "Provide it first (or extend this script to build it). Exiting."
-  exit 1
+  read -r -p "Would you like to: (1) Compile from source, (2) Copy from running core, or (3) Specify a local path? [1/2/3]: " choice
+
+  if [[ "$choice" == "1" ]]; then
+    need_cmd mvn
+    BUILD_DIR="${TMPDIR}/qortal-build"
+    echo "Cloning ${REPO} (${BRANCH}) and compiling..."
+    git clone --depth 1 --branch "$BRANCH" "https://github.com/${REPO}.git" "$BUILD_DIR"
+    (
+      cd "$BUILD_DIR"
+      mvn clean package
+    )
+    BUILT_JAR="$(find "${BUILD_DIR}/target" -maxdepth 1 -type f -name 'qortal-*.jar' | sort | tail -n1 || true)"
+    if [[ -z "$BUILT_JAR" || ! -f "$BUILT_JAR" ]]; then
+      echo "Error: compile completed but no target/qortal-*.jar was found."
+      exit 1
+    fi
+    cp "$BUILT_JAR" "$JAR_FILE"
+    echo "Copied compiled jar to ${JAR_FILE}"
+  elif [[ "$choice" == "2" ]]; then
+    RUNNING_JAR="${HOME}/qortal/qortal.jar"
+    if [[ -f "$RUNNING_JAR" ]]; then
+      cp "$RUNNING_JAR" "$JAR_FILE"
+      echo "Copied from ${RUNNING_JAR}"
+    else
+      echo "Error: ${RUNNING_JAR} not found."
+      exit 1
+    fi
+  elif [[ "$choice" == "3" ]]; then
+    read -r -p "Enter full path to qortal.jar: " jar_path
+    if [[ -z "$jar_path" || ! -f "$jar_path" ]]; then
+      echo "Error: invalid path '${jar_path}'. Exiting."
+      exit 1
+    fi
+    cp "$jar_path" "$JAR_FILE"
+    echo "Copied from ${jar_path}"
+  else
+    echo "Invalid choice. Exiting."
+    exit 1
+  fi
 fi
+
+download_required_file() {
+  local file="$1"
+  local target_path="${WORKING_QORTAL_DIR}/${file}"
+  local remote_path="$file"
+
+  if [[ "$file" == "settings.json" ]]; then
+    cat > "$target_path" <<'EOF'
+{
+  "balanceRecorderEnabled": true,
+  "apiWhitelistEnabled": false,
+  "allowConnectionsWithOlderPeerVersions": false,
+  "apiRestricted": false
+}
+EOF
+    return
+  fi
+
+  if [[ "$file" == "qort" ]]; then
+    remote_path="tools/${file}"
+  fi
+
+  curl -fsSL "https://raw.githubusercontent.com/${REPO}/refs/heads/${BRANCH}/${remote_path}" -o "$target_path"
+  if [[ "$file" == "qort" || "$file" == "start.sh" || "$file" == "stop.sh" ]]; then
+    chmod +x "$target_path"
+  fi
+}
 
 REQUIRED_FILES=("settings.json" "log4j2.properties" "start.sh" "stop.sh" "qort")
 for file in "${REQUIRED_FILES[@]}"; do
   if [[ ! -f "${WORKING_QORTAL_DIR}/${file}" ]]; then
     echo "Error: missing ${WORKING_QORTAL_DIR}/${file}"
-    echo "Tip: copy required runtime files into ${WORKING_QORTAL_DIR} first."
-    exit 1
+    read -r -p "Would you like to: (1) Get this file from GitHub, or (2) Exit and copy manually? [1/2]: " choice
+    if [[ "$choice" == "1" ]]; then
+      download_required_file "$file"
+      echo "Added ${file}"
+    elif [[ "$choice" == "2" ]]; then
+      echo "Copy files manually into ${WORKING_QORTAL_DIR}, then re-run."
+      exit 1
+    else
+      echo "Invalid choice. Exiting."
+      exit 1
+    fi
   fi
 done
 
