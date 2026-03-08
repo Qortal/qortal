@@ -58,7 +58,7 @@ public class HSQLDBDatabaseUpdates {
 	 * @return database version, or 0 if no schema yet
 	 * @throws SQLException
 	 */
-	private static int fetchDatabaseVersion(Connection connection) throws SQLException {
+	public static int fetchDatabaseVersion(Connection connection) throws SQLException {
 		try (Statement stmt = connection.createStatement()) {
 			if (stmt.execute("SELECT version FROM DatabaseInfo"))
 				try (ResultSet resultSet = stmt.getResultSet()) {
@@ -1057,6 +1057,16 @@ public class HSQLDBDatabaseUpdates {
 					// Primary name for a Qortal Address, 0-1 for any address
 					stmt.execute("CREATE TABLE PrimaryNames (owner QortalAddress, name RegisteredName, "
 							+ "PRIMARY KEY (owner), FOREIGN KEY (name) REFERENCES Names (name) ON DELETE CASCADE)");
+					break;
+
+				case 51:
+
+					LOGGER.info("Adding signatures to arbitrary resources cache table - this can take a while...");
+					stmt.execute("ALTER TABLE ArbitraryResourcesCache ADD latest_signature Signature");
+					stmt.execute("ALTER TABLE ArbitraryResourcesCache ADD lower_case_name RegisteredName");
+					stmt.execute("CREATE INDEX ArbitraryResourcesServiceLowerNameIdIndex ON ArbitraryResourcesCache (service, lower_case_name, identifier)");
+					stmt.execute("ALTER TABLE DatabaseInfo ADD latest_signature_populated TINYINT NOT NULL DEFAULT 0");
+
 					break;
 
 				default:

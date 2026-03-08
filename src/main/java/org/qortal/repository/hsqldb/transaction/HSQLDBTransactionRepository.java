@@ -199,7 +199,9 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 				BaseTransactionData baseTransactionData = new BaseTransactionData(timestamp, txGroupId, reference, creatorPublicKey, fee, approvalStatus, blockHeight, approvalHeight, signature);
 
-				list.add( fromBase(type, baseTransactionData) );
+				TransactionData data = fromBase(type, baseTransactionData);
+				if (data != null)
+					list.add(data);
 			} while( resultSet.next());
 
 			return list;
@@ -908,9 +910,12 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 				TransactionData transactionData = this.fromSignature(signature);
 
-				if (transactionData == null)
-					// Something inconsistent with the repository
-					throw new DataException("Unable to fetch name-related transaction from repository?");
+				if (transactionData == null) {
+					// Transaction was deleted concurrently (e.g., expired transaction cleanup)
+					// This is not an error - just skip this transaction
+					LOGGER.trace(() -> String.format("Skipping name-related transaction %s - no longer in repository (likely deleted concurrently)", Base58.encode(signature)));
+					continue;
+				}
 
 				transactions.add(transactionData);
 			} while (resultSet.next());
@@ -992,9 +997,12 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 				TransactionData transactionData = this.fromSignature(signature);
 
-				if (transactionData == null)
-					// Something inconsistent with the repository
-					throw new DataException("Unable to fetch asset-related transaction from repository?");
+				if (transactionData == null) {
+					// Transaction was deleted concurrently (e.g., expired transaction cleanup)
+					// This is not an error - just skip this transaction
+					LOGGER.trace(() -> String.format("Skipping asset-related transaction %s - no longer in repository (likely deleted concurrently)", Base58.encode(signature)));
+					continue;
+				}
 
 				transactions.add(transactionData);
 			} while (resultSet.next());
@@ -1438,9 +1446,12 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 				TransactionData transactionData = this.fromSignature(signature);
 
-				if (transactionData == null)
-					// Something inconsistent with the repository
-					throw new DataException(String.format("Unable to fetch unconfirmed transaction %s from repository?", Base58.encode(signature)));
+				if (transactionData == null) {
+					// Transaction was deleted concurrently (e.g., expired transaction cleanup)
+					// This is not an error - just skip this transaction
+					LOGGER.trace(() -> String.format("Skipping unconfirmed transaction %s - no longer in repository (likely deleted concurrently)", Base58.encode(signature)));
+					continue;
+				}
 
 				transactions.add(transactionData);
 			} while (resultSet.next());
@@ -1495,9 +1506,12 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 				TransactionData transactionData = this.fromSignature(signature);
 
-				if (transactionData == null)
-					// Something inconsistent with the repository
-					throw new DataException(String.format("Unable to fetch unconfirmed transaction %s from repository?", Base58.encode(signature)));
+				if (transactionData == null) {
+					// Transaction was deleted concurrently (e.g., expired transaction cleanup)
+					// This is not an error - just skip this transaction
+					LOGGER.trace(() -> String.format("Skipping unconfirmed transaction %s - no longer in repository (likely deleted concurrently)", Base58.encode(signature)));
+					continue;
+				}
 
 				transactions.add(transactionData);
 			} while (resultSet.next());
@@ -1547,9 +1561,12 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 				TransactionData transactionData = this.fromSignature(signature);
 
-				if (transactionData == null)
-					// Something inconsistent with the repository
-					throw new DataException(String.format("Unable to fetch unconfirmed transaction %s from repository?", Base58.encode(signature)));
+				if (transactionData == null) {
+					// Transaction was deleted concurrently (e.g., expired transaction cleanup)
+					// This is not an error - just skip this transaction
+					LOGGER.trace(() -> String.format("Skipping unconfirmed transaction %s - no longer in repository (likely deleted concurrently)", Base58.encode(signature)));
+					continue;
+				}
 
 				transactions.add(transactionData);
 			} while (resultSet.next());
@@ -1684,8 +1701,12 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 				TransactionData transactionData = this.fromSignature(signature);
 
-				if (transactionData == null)
-					throw new DataException(String.format("Unable to fetch payment transaction %s from repository?", Base58.encode(signature)));
+				if (transactionData == null) {
+					// Transaction was deleted concurrently (e.g., expired transaction cleanup)
+					// This is not an error - just skip this transaction
+					LOGGER.trace(() -> String.format("Skipping payment transaction %s - no longer in repository (likely deleted concurrently)", Base58.encode(signature)));
+					continue;
+				}
 
 				transactions.add(transactionData);
 			} while (resultSet.next());

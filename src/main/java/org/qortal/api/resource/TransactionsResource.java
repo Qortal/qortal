@@ -843,6 +843,8 @@ public class TransactionsResource {
 			if (!transaction.isSignatureValid())
 				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_SIGNATURE);
 
+			// Acquire blockchain lock with timeout to provide predictable API behavior
+			// importAsUnconfirmed() also acquires the lock, but ReentrantLock allows same thread to reacquire
 			ReentrantLock blockchainLock = Controller.getInstance().getBlockchainLock();
 			if (!blockchainLock.tryLock(60, TimeUnit.SECONDS))
 				throw createTransactionInvalidException(request, ValidationResult.NO_BLOCKCHAIN_LOCK);

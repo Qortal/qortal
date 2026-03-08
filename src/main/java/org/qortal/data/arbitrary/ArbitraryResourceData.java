@@ -14,6 +14,7 @@ public class ArbitraryResourceData {
 	public String name;
 	public Service service;
 	public String identifier;
+	public byte[] latestSignature;
 	public ArbitraryResourceStatus status;
 	public ArbitraryResourceMetadata metadata;
 

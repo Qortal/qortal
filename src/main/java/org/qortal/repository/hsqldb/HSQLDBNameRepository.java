@@ -7,7 +7,10 @@ import org.qortal.repository.NameRepository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 public class HSQLDBNameRepository implements NameRepository {
@@ -359,6 +362,42 @@ public class HSQLDBNameRepository implements NameRepository {
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch recent names from repository", e);
 		}
+	}
+
+	private static final int PRIMARY_NAMES_BATCH_SIZE = 500;
+
+	@Override
+	public Map<String, String> getPrimaryNamesByOwners(Collection<String> addresses) throws DataException {
+		Map<String, String> result = new HashMap<>();
+		if (addresses == null || addresses.isEmpty())
+			return result;
+
+		List<String> list = addresses instanceof List<?> ? (List<String>) addresses : new ArrayList<>(addresses);
+		for (int offset = 0; offset < list.size(); offset += PRIMARY_NAMES_BATCH_SIZE) {
+			int end = Math.min(offset + PRIMARY_NAMES_BATCH_SIZE, list.size());
+			List<String> batch = list.subList(offset, end);
+
+			StringBuilder sql = new StringBuilder(128);
+			sql.append("SELECT owner, name FROM PrimaryNames WHERE owner IN (");
+			for (int i = 0; i < batch.size(); i++) {
+				if (i > 0) sql.append(", ");
+				sql.append("?");
+			}
+			sql.append(")");
+
+			try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), batch.toArray(new String[0]))) {
+				if (resultSet != null) {
+					do {
+						String owner = resultSet.getString(1);
+						String name = resultSet.getString(2);
+						result.put(owner, name);
+					} while (resultSet.next());
+				}
+			} catch (SQLException e) {
+				throw new DataException("Unable to fetch primary names by owners from repository", e);
+			}
+		}
+		return result;
 	}
 
 	@Override

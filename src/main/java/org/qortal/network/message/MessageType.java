@@ -16,6 +16,7 @@ public enum MessageType {
     GOODBYE(1, GoodbyeMessage::fromByteBuffer),
     CHALLENGE(2, ChallengeMessage::fromByteBuffer),
     RESPONSE(3, ResponseMessage::fromByteBuffer),
+    HELLO_V2(4, HelloV2Message::fromByteBuffer),
 
     // Status / notifications
     HEIGHT_V2(10, HeightV2Message::fromByteBuffer),
@@ -50,11 +51,13 @@ public enum MessageType {
     ARBITRARY_DATA(90, ArbitraryDataMessage::fromByteBuffer),
     GET_ARBITRARY_DATA(91, GetArbitraryDataMessage::fromByteBuffer),
 
-    BLOCKS(100, null), // unsupported
-    GET_BLOCKS(101, null), // unsupported
+    BLOCKS(100, BlocksMessage::fromByteBuffer), 
+    GET_BLOCKS(101, GetBlocksMessage::fromByteBuffer),
 
     ARBITRARY_DATA_FILE(110, ArbitraryDataFileMessage::fromByteBuffer),
     GET_ARBITRARY_DATA_FILE(111, GetArbitraryDataFileMessage::fromByteBuffer),
+
+    GET_ARBITRARY_DATA_FILES(113, GetArbitraryDataFileMessage::fromByteBuffer),
 
     ARBITRARY_DATA_FILE_LIST(120, ArbitraryDataFileListMessage::fromByteBuffer),
     GET_ARBITRARY_DATA_FILE_LIST(121, GetArbitraryDataFileListMessage::fromByteBuffer),
@@ -83,6 +86,8 @@ public enum MessageType {
 
     FOREIGN_FEES( 200, ForeignFeesMessage::fromByteBuffer),
     GET_FOREIGN_FEES( 201, GetForeignFeesMessage::fromByteBuffer);
+
+
 
     public final int value;
     public final MessageProducer fromByteBufferMethod;

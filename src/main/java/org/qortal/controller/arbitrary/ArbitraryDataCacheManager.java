@@ -11,10 +11,16 @@ import org.qortal.gui.SplashFrame;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
+import org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates;
 import org.qortal.settings.Settings;
 import org.qortal.transaction.ArbitraryTransaction;
 import org.qortal.utils.Base58;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.text.NumberFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -22,9 +28,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public class ArbitraryDataCacheManager extends Thread {
@@ -49,6 +53,140 @@ public class ArbitraryDataCacheManager extends Thread {
         }
 
         return instance;
+    }
+
+    /**
+     * Are The Latest Signatures Populated?
+     *
+     * Assessing if the latest signatures have been cached for QDN data.
+     *
+     * @param connection a database connection
+     *
+     * @return true if the signatures have been cached, otherwise false
+     *
+     * @throws SQLException
+     */
+    private static boolean isLatestSignaturePopulated(Connection connection) throws SQLException {
+        String sql = "SELECT latest_signature_populated FROM DatabaseInfo WHERE latest_signature_populated = 1";
+        PreparedStatement preparedStatement = connection.prepareStatement(sql);
+
+        try (ResultSet rs = preparedStatement.executeQuery()) {
+            if (rs.next()) {
+                return true;
+            }
+            else {
+                return false;
+            }
+        }
+    }
+
+    /**
+     * Populate The Latest Signatures, If Necessary
+     *
+     * If it hasn't been done already, cache the latest signature for QDN data item.
+     *
+     * @param connection a connection to the database
+     *
+     * @throws DataException
+     */
+    public static void populateLatestSignaturesIfNecessary(Connection connection) throws DataException {
+
+        try {
+            int databaseVersion = HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection);
+
+            // if latest signature column is added, but not populated, then populate now
+            if( databaseVersion > 51 && !isLatestSignaturePopulated(connection)) {
+
+                SplashFrame.getInstance().updateStatus("Gathering latest signatures for QDN ...");
+                LOGGER.info("Gathering latest signatures for QDN ...");
+
+                try (Statement arbitraryTransactionSelectionStatement = connection.createStatement()) {
+                    ResultSet resultSet = arbitraryTransactionSelectionStatement.executeQuery(
+                            "SELECT signature, service, name, identifier " +
+                                    "FROM Transactions t " +
+                                    "JOIN ArbitraryTransactions a ON t.signature = a.signature " +
+                                    "WHERE name IS NOT NULL AND a.update_method = 0 " +
+                                    "ORDER BY created_when DESC "
+                    );
+
+                    Map<ArbitraryTransactionDataHashWrapper, byte[]> signatureByData = new HashMap<>();
+
+                    // process arbitrary transaction results
+                    while (resultSet.next()) {
+
+                        signatureByData.putIfAbsent(
+                                new ArbitraryTransactionDataHashWrapper(
+                                        resultSet.getInt(2),
+                                        resultSet.getString(3),
+                                        resultSet.getString(4)
+                                ),
+                                resultSet.getBytes(1));
+                    }
+
+                    LOGGER.info("Updating {} arbitrary resources with latest signatures", signatureByData.size());
+
+                    String populateSql = "UPDATE ArbitraryResourcesCache SET latest_signature = ? WHERE name = ? AND service = ? AND identifier = ?";
+                    PreparedStatement preparedStatement = connection.prepareStatement(populateSql);
+
+                    // preserve the auto commit enabling, so we can return to
+                    boolean autoCommit = connection.getAutoCommit();
+                    connection.setAutoCommit(false);
+
+                    // for each signature by data pairing, prepare a database update statement and add it to a batch
+                    for (Map.Entry<ArbitraryTransactionDataHashWrapper, byte[]> entry : signatureByData.entrySet()) {
+                        preparedStatement.setBytes(1, entry.getValue());
+
+                        ArbitraryTransactionDataHashWrapper wrapper = entry.getKey();
+                        preparedStatement.setString(2, wrapper.getName());
+                        preparedStatement.setInt(3, entry.getKey().getService());
+
+                        String identifier = entry.getKey().getIdentifier();
+                        preparedStatement.setString(4, identifier != null ? identifier : "default");
+
+                        preparedStatement.addBatch();
+                    }
+
+                    preparedStatement.executeBatch();
+
+                    LOGGER.info("Updated arbitrary resources with latest signatures");
+
+                    try (Statement stmt = connection.createStatement()) {
+                        stmt.execute("UPDATE ArbitraryResourcesCache SET lower_case_name = LCASE(name)");
+                    }
+
+                    LOGGER.info("Updated arbitrary resources with lower case names for indexing purposes");
+
+                    // update latest signature populated flag to database info
+                    String updateFlagSql = "UPDATE DatabaseInfo SET latest_signature_populated = 1";
+                    try (PreparedStatement updateFlagStatement = connection.prepareStatement(updateFlagSql)) {
+
+                        updateFlagStatement.executeUpdate();
+
+                        // verify the change
+                        String verifyFlagSql = "SELECT latest_signature_populated FROM DatabaseInfo";
+                        try (PreparedStatement verifyFlagStatement = connection.prepareStatement(verifyFlagSql);
+                             ResultSet rs = verifyFlagStatement.executeQuery()) {
+
+                            if (rs.next() && rs.getInt("latest_signature_populated") == 1) {
+                                LOGGER.info("latest signature populated flag has been set");
+                            }
+                            else {
+                                LOGGER.info("latest signature populated flag has not been set");
+                            }
+                        }
+                    }
+
+                    connection.commit();
+                    connection.setAutoCommit(autoCommit);
+
+                    LOGGER.info("arbitrary resources data latest signatures committed");
+                }
+            }
+        } catch (SQLException e) {
+            throw new DataException(e.getMessage());
+        } finally {
+            SplashFrame.getInstance().updateStatus("Proceeding to Start Qortal ...");
+        }
     }
 
     @Override

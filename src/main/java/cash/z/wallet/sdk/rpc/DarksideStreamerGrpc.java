@@ -11,14 +11,14 @@ import static io.grpc.MethodDescriptor.generateFullMethodName;
  * </pre>
  */
 @javax.annotation.Generated(
-    value = "by gRPC proto compiler (version 1.45.1)",
+    value = "by gRPC proto compiler (version 1.68.1)",
     comments = "Source: darkside.proto")
 @io.grpc.stub.annotations.GrpcGenerated
 public final class DarksideStreamerGrpc {
 
   private DarksideStreamerGrpc() {}
 
-  public static final String SERVICE_NAME = "cash.z.wallet.sdk.rpc.DarksideStreamer";
+  public static final java.lang.String SERVICE_NAME = "cash.z.wallet.sdk.rpc.DarksideStreamer";
 
   // Static method descriptors that strictly reflect the proto.
   private static volatile io.grpc.MethodDescriptor<cash.z.wallet.sdk.rpc.Darkside.DarksideMetaState,
@@ -352,7 +352,7 @@ public final class DarksideStreamerGrpc {
    * serves; transactions are placed into their corresponding blocks (by height).
    * </pre>
    */
-  public static abstract class DarksideStreamerImplBase implements io.grpc.BindableService {
+  public interface AsyncService {
 
     /**
      * <pre>
@@ -365,7 +365,7 @@ public final class DarksideStreamerGrpc {
      * activation height specified here must be where the block range starts.
      * </pre>
      */
-    public void reset(cash.z.wallet.sdk.rpc.Darkside.DarksideMetaState request,
+    default void reset(cash.z.wallet.sdk.rpc.Darkside.DarksideMetaState request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.Empty> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getResetMethod(), responseObserver);
     }
@@ -377,7 +377,7 @@ public final class DarksideStreamerGrpc {
      * the mock zcashd. Blocks are hex-encoded. Order is important, see ApplyStaged.
      * </pre>
      */
-    public io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Darkside.DarksideBlock> stageBlocksStream(
+    default io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Darkside.DarksideBlock> stageBlocksStream(
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.Empty> responseObserver) {
       return io.grpc.stub.ServerCalls.asyncUnimplementedStreamingCall(getStageBlocksStreamMethod(), responseObserver);
     }
@@ -388,7 +388,7 @@ public final class DarksideStreamerGrpc {
      * from the given URL. Blocks are one per line, hex-encoded (not JSON).
      * </pre>
      */
-    public void stageBlocks(cash.z.wallet.sdk.rpc.Darkside.DarksideBlocksURL request,
+    default void stageBlocks(cash.z.wallet.sdk.rpc.Darkside.DarksideBlocksURL request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.Empty> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getStageBlocksMethod(), responseObserver);
     }
@@ -402,7 +402,7 @@ public final class DarksideStreamerGrpc {
      * different hashes.
      * </pre>
      */
-    public void stageBlocksCreate(cash.z.wallet.sdk.rpc.Darkside.DarksideEmptyBlocks request,
+    default void stageBlocksCreate(cash.z.wallet.sdk.rpc.Darkside.DarksideEmptyBlocks request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.Empty> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getStageBlocksCreateMethod(), responseObserver);
     }
@@ -416,7 +416,7 @@ public final class DarksideStreamerGrpc {
      * by the mock zcashd).
      * </pre>
      */
-    public io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.RawTransaction> stageTransactionsStream(
+    default io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.RawTransaction> stageTransactionsStream(
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.Empty> responseObserver) {
       return io.grpc.stub.ServerCalls.asyncUnimplementedStreamingCall(getStageTransactionsStreamMethod(), responseObserver);
     }
@@ -428,7 +428,7 @@ public final class DarksideStreamerGrpc {
      * Staging transactions to different heights requires multiple calls.
      * </pre>
      */
-    public void stageTransactions(cash.z.wallet.sdk.rpc.Darkside.DarksideTransactionsURL request,
+    default void stageTransactions(cash.z.wallet.sdk.rpc.Darkside.DarksideTransactionsURL request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.Empty> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getStageTransactionsMethod(), responseObserver);
     }
@@ -451,7 +451,7 @@ public final class DarksideStreamerGrpc {
      * zcashd. That is, there doesn't need to be anything in the staging area.
      * </pre>
      */
-    public void applyStaged(cash.z.wallet.sdk.rpc.Darkside.DarksideHeight request,
+    default void applyStaged(cash.z.wallet.sdk.rpc.Darkside.DarksideHeight request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.Empty> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getApplyStagedMethod(), responseObserver);
     }
@@ -467,7 +467,7 @@ public final class DarksideStreamerGrpc {
      * into a specified block on the next ApplyStaged().
      * </pre>
      */
-    public void getIncomingTransactions(cash.z.wallet.sdk.rpc.Service.Empty request,
+    default void getIncomingTransactions(cash.z.wallet.sdk.rpc.Service.Empty request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.RawTransaction> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetIncomingTransactionsMethod(), responseObserver);
     }
@@ -477,81 +477,14 @@ public final class DarksideStreamerGrpc {
      * Clear the incoming transaction pool.
      * </pre>
      */
-    public void clearIncomingTransactions(cash.z.wallet.sdk.rpc.Service.Empty request,
+    default void clearIncomingTransactions(cash.z.wallet.sdk.rpc.Service.Empty request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.Empty> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getClearIncomingTransactionsMethod(), responseObserver);
-    }
-
-    @java.lang.Override public final io.grpc.ServerServiceDefinition bindService() {
-      return io.grpc.ServerServiceDefinition.builder(getServiceDescriptor())
-          .addMethod(
-            getResetMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Darkside.DarksideMetaState,
-                cash.z.wallet.sdk.rpc.Service.Empty>(
-                  this, METHODID_RESET)))
-          .addMethod(
-            getStageBlocksStreamMethod(),
-            io.grpc.stub.ServerCalls.asyncClientStreamingCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Darkside.DarksideBlock,
-                cash.z.wallet.sdk.rpc.Service.Empty>(
-                  this, METHODID_STAGE_BLOCKS_STREAM)))
-          .addMethod(
-            getStageBlocksMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Darkside.DarksideBlocksURL,
-                cash.z.wallet.sdk.rpc.Service.Empty>(
-                  this, METHODID_STAGE_BLOCKS)))
-          .addMethod(
-            getStageBlocksCreateMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Darkside.DarksideEmptyBlocks,
-                cash.z.wallet.sdk.rpc.Service.Empty>(
-                  this, METHODID_STAGE_BLOCKS_CREATE)))
-          .addMethod(
-            getStageTransactionsStreamMethod(),
-            io.grpc.stub.ServerCalls.asyncClientStreamingCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.RawTransaction,
-                cash.z.wallet.sdk.rpc.Service.Empty>(
-                  this, METHODID_STAGE_TRANSACTIONS_STREAM)))
-          .addMethod(
-            getStageTransactionsMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Darkside.DarksideTransactionsURL,
-                cash.z.wallet.sdk.rpc.Service.Empty>(
-                  this, METHODID_STAGE_TRANSACTIONS)))
-          .addMethod(
-            getApplyStagedMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Darkside.DarksideHeight,
-                cash.z.wallet.sdk.rpc.Service.Empty>(
-                  this, METHODID_APPLY_STAGED)))
-          .addMethod(
-            getGetIncomingTransactionsMethod(),
-            io.grpc.stub.ServerCalls.asyncServerStreamingCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.Empty,
-                cash.z.wallet.sdk.rpc.Service.RawTransaction>(
-                  this, METHODID_GET_INCOMING_TRANSACTIONS)))
-          .addMethod(
-            getClearIncomingTransactionsMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.Empty,
-                cash.z.wallet.sdk.rpc.Service.Empty>(
-                  this, METHODID_CLEAR_INCOMING_TRANSACTIONS)))
-          .build();
     }
   }
 
   /**
+   * Base class for the server implementation of the service DarksideStreamer.
    * <pre>
    * Darksidewalletd maintains two staging areas, blocks and transactions. The
    * Stage*() gRPCs add items to the staging area; ApplyStaged() "applies" everything
@@ -559,7 +492,25 @@ public final class DarksideStreamerGrpc {
    * serves; transactions are placed into their corresponding blocks (by height).
    * </pre>
    */
-  public static final class DarksideStreamerStub extends io.grpc.stub.AbstractAsyncStub<DarksideStreamerStub> {
+  public static abstract class DarksideStreamerImplBase
+      implements io.grpc.BindableService, AsyncService {
+
+    @java.lang.Override public final io.grpc.ServerServiceDefinition bindService() {
+      return DarksideStreamerGrpc.bindService(this);
+    }
+  }
+
+  /**
+   * A stub to allow clients to do asynchronous rpc calls to service DarksideStreamer.
+   * <pre>
+   * Darksidewalletd maintains two staging areas, blocks and transactions. The
+   * Stage*() gRPCs add items to the staging area; ApplyStaged() "applies" everything
+   * in the staging area to the working (operational) state that the mock zcashd
+   * serves; transactions are placed into their corresponding blocks (by height).
+   * </pre>
+   */
+  public static final class DarksideStreamerStub
+      extends io.grpc.stub.AbstractAsyncStub<DarksideStreamerStub> {
     private DarksideStreamerStub(
         io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
       super(channel, callOptions);
@@ -710,6 +661,7 @@ public final class DarksideStreamerGrpc {
   }
 
   /**
+   * A stub to allow clients to do synchronous rpc calls to service DarksideStreamer.
    * <pre>
    * Darksidewalletd maintains two staging areas, blocks and transactions. The
    * Stage*() gRPCs add items to the staging area; ApplyStaged() "applies" everything
@@ -717,7 +669,8 @@ public final class DarksideStreamerGrpc {
    * serves; transactions are placed into their corresponding blocks (by height).
    * </pre>
    */
-  public static final class DarksideStreamerBlockingStub extends io.grpc.stub.AbstractBlockingStub<DarksideStreamerBlockingStub> {
+  public static final class DarksideStreamerBlockingStub
+      extends io.grpc.stub.AbstractBlockingStub<DarksideStreamerBlockingStub> {
     private DarksideStreamerBlockingStub(
         io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
       super(channel, callOptions);
@@ -834,6 +787,7 @@ public final class DarksideStreamerGrpc {
   }
 
   /**
+   * A stub to allow clients to do ListenableFuture-style rpc calls to service DarksideStreamer.
    * <pre>
    * Darksidewalletd maintains two staging areas, blocks and transactions. The
    * Stage*() gRPCs add items to the staging area; ApplyStaged() "applies" everything
@@ -841,7 +795,8 @@ public final class DarksideStreamerGrpc {
    * serves; transactions are placed into their corresponding blocks (by height).
    * </pre>
    */
-  public static final class DarksideStreamerFutureStub extends io.grpc.stub.AbstractFutureStub<DarksideStreamerFutureStub> {
+  public static final class DarksideStreamerFutureStub
+      extends io.grpc.stub.AbstractFutureStub<DarksideStreamerFutureStub> {
     private DarksideStreamerFutureStub(
         io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
       super(channel, callOptions);
@@ -961,10 +916,10 @@ public final class DarksideStreamerGrpc {
       io.grpc.stub.ServerCalls.ServerStreamingMethod<Req, Resp>,
       io.grpc.stub.ServerCalls.ClientStreamingMethod<Req, Resp>,
       io.grpc.stub.ServerCalls.BidiStreamingMethod<Req, Resp> {
-    private final DarksideStreamerImplBase serviceImpl;
+    private final AsyncService serviceImpl;
     private final int methodId;
 
-    MethodHandlers(DarksideStreamerImplBase serviceImpl, int methodId) {
+    MethodHandlers(AsyncService serviceImpl, int methodId) {
       this.serviceImpl = serviceImpl;
       this.methodId = methodId;
     }
@@ -1023,6 +978,74 @@ public final class DarksideStreamerGrpc {
     }
   }
 
+  public static final io.grpc.ServerServiceDefinition bindService(AsyncService service) {
+    return io.grpc.ServerServiceDefinition.builder(getServiceDescriptor())
+        .addMethod(
+          getResetMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Darkside.DarksideMetaState,
+              cash.z.wallet.sdk.rpc.Service.Empty>(
+                service, METHODID_RESET)))
+        .addMethod(
+          getStageBlocksStreamMethod(),
+          io.grpc.stub.ServerCalls.asyncClientStreamingCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Darkside.DarksideBlock,
+              cash.z.wallet.sdk.rpc.Service.Empty>(
+                service, METHODID_STAGE_BLOCKS_STREAM)))
+        .addMethod(
+          getStageBlocksMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Darkside.DarksideBlocksURL,
+              cash.z.wallet.sdk.rpc.Service.Empty>(
+                service, METHODID_STAGE_BLOCKS)))
+        .addMethod(
+          getStageBlocksCreateMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Darkside.DarksideEmptyBlocks,
+              cash.z.wallet.sdk.rpc.Service.Empty>(
+                service, METHODID_STAGE_BLOCKS_CREATE)))
+        .addMethod(
+          getStageTransactionsStreamMethod(),
+          io.grpc.stub.ServerCalls.asyncClientStreamingCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.RawTransaction,
+              cash.z.wallet.sdk.rpc.Service.Empty>(
+                service, METHODID_STAGE_TRANSACTIONS_STREAM)))
+        .addMethod(
+          getStageTransactionsMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Darkside.DarksideTransactionsURL,
+              cash.z.wallet.sdk.rpc.Service.Empty>(
+                service, METHODID_STAGE_TRANSACTIONS)))
+        .addMethod(
+          getApplyStagedMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Darkside.DarksideHeight,
+              cash.z.wallet.sdk.rpc.Service.Empty>(
+                service, METHODID_APPLY_STAGED)))
+        .addMethod(
+          getGetIncomingTransactionsMethod(),
+          io.grpc.stub.ServerCalls.asyncServerStreamingCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.Empty,
+              cash.z.wallet.sdk.rpc.Service.RawTransaction>(
+                service, METHODID_GET_INCOMING_TRANSACTIONS)))
+        .addMethod(
+          getClearIncomingTransactionsMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.Empty,
+              cash.z.wallet.sdk.rpc.Service.Empty>(
+                service, METHODID_CLEAR_INCOMING_TRANSACTIONS)))
+        .build();
+  }
+
   private static abstract class DarksideStreamerBaseDescriptorSupplier
       implements io.grpc.protobuf.ProtoFileDescriptorSupplier, io.grpc.protobuf.ProtoServiceDescriptorSupplier {
     DarksideStreamerBaseDescriptorSupplier() {}
@@ -1046,9 +1069,9 @@ public final class DarksideStreamerGrpc {
   private static final class DarksideStreamerMethodDescriptorSupplier
       extends DarksideStreamerBaseDescriptorSupplier
       implements io.grpc.protobuf.ProtoMethodDescriptorSupplier {
-    private final String methodName;
+    private final java.lang.String methodName;
 
-    DarksideStreamerMethodDescriptorSupplier(String methodName) {
+    DarksideStreamerMethodDescriptorSupplier(java.lang.String methodName) {
       this.methodName = methodName;
     }
 

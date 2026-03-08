@@ -62,6 +62,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	public static final String MISSING_FEATURES_ERROR = "MISSING FEATURES ERROR";
 	public static final String EXPECTED_GENESIS_ERROR = "EXPECTED GENESIS ERROR";
 	private static final long IDLE_DISCONNECT_MS = 2 * 60 * 1000L;
+	private static final long ACQUIRE_SERVER_TIMEOUT_MS = 3000L;
 
 	private ChainableServerConnectionRecorder recorder = new ChainableServerConnectionRecorder(100);
 
@@ -613,6 +614,15 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 			throw new ForeignBlockchainException.NetworkException("Unexpected response from ElectrumX blockchain.transaction.broadcast RPC");
 	}
 
+	 // Class utility methods for status
+	public int getConnectedServerCount() {
+		return this.connections.size();
+    }
+
+    public int getKnownServerCount() {
+		return this.servers.size();
+    }
+
 	// Class-private utility methods
 
 	/**
@@ -699,10 +709,16 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	private ElectrumServer acquireServer() throws ForeignBlockchainException {
 
 		try {
-			return this.availableConnections.take();
+			ElectrumServer server = this.availableConnections.poll(ACQUIRE_SERVER_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+			if (server == null) {
+				throw new ForeignBlockchainException.NetworkException(String.format("No ElectrumX connection available after %dms", ACQUIRE_SERVER_TIMEOUT_MS));
+			}
+
+			return server;
 		}
 		catch( InterruptedException e ) {
-			throw new ForeignBlockchainException(e.getMessage());
+			Thread.currentThread().interrupt();
+			throw new ForeignBlockchainException("Interrupted while waiting for ElectrumX connection");
 		}
 	}
 

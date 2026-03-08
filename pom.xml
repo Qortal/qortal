@@ -3,18 +3,18 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>org.qortal</groupId>
 	<artifactId>qortal</artifactId>
-	<version>5.0.8</version>
+	<version>6.1.0</version> <!-- Version must be <X.Y.Z> -->
 	<packaging>jar</packaging>
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-		<skipTests>true</skipTests>
+		<skipJUnitTests>true</skipJUnitTests>
 
-		<altcoinj.version>7dc8c6f</altcoinj.version>
-		<bitcoinj.version>0.15.10</bitcoinj.version>
-		<bouncycastle.version>1.70</bouncycastle.version>
+		<altcoinj.version>d7cf6ac</altcoinj.version> <!-- BC v16 / Updated Abstract Classes / alertSigningKey -->
+		<bitcoinj.version>0.16.3</bitcoinj.version>
+		<bouncycastle.version>1.78.1</bouncycastle.version>
 		<build.timestamp>${maven.build.timestamp}</build.timestamp>
-		<ciyam-at.version>1.4.2</ciyam-at.version>
-		<commons-net.version>3.8.0</commons-net.version>
+		<ciyam-at.version>1b731d1</ciyam-at.version> <!-- This is the hash for v1.4.3 -->
+		<commons-net.version>3.9.0</commons-net.version>
 		<commons-text.version>1.12.0</commons-text.version>
 		<commons-io.version>2.18.0</commons-io.version>
 		<commons-compress.version>1.27.1</commons-compress.version>
@@ -22,7 +22,7 @@
 		<dagger.version>1.2.2</dagger.version>
 		<extendedset.version>0.12.3</extendedset.version>
 		<git-commit-id-plugin.version>4.9.10</git-commit-id-plugin.version>
-		<grpc.version>1.68.1</grpc.version>
+		<grpc.version>1.68.3</grpc.version>
 		<guava.version>33.3.1-jre</guava.version>
 		<hamcrest-library.version>2.2</hamcrest-library.version>
 		<homoglyph.version>1.2.1</homoglyph.version>
@@ -31,13 +31,12 @@
 		<java-diff-utils.version>4.15</java-diff-utils.version>
 		<javax.servlet-api.version>4.0.1</javax.servlet-api.version>
 		<jaxb-runtime.version>2.3.9</jaxb-runtime.version>
-		<jersey.version>2.42</jersey.version>
-		<jetty.version>9.4.56.v20240826</jetty.version>
+		<jersey.version>2.47</jersey.version>
+		<jetty.version>10.0.26</jetty.version> <!-- Next logical jump -->
 		<json-simple.version>1.1.1</json-simple.version>
 		<json.version>20240303</json.version>
 		<jsoup.version>1.18.1</jsoup.version>
 		<junit-jupiter-engine.version>5.11.0-M2</junit-jupiter-engine.version>
-		<lifecycle-mapping.version>1.0.0</lifecycle-mapping.version>
 		<log4j.version>2.23.1</log4j.version>
 		<mail.version>1.5.0-b01</mail.version>
 		<maven-build-helper-plugin.version>3.6.0</maven-build-helper-plugin.version>
@@ -45,23 +44,34 @@
 		<maven-dependency-plugin.version>3.6.1</maven-dependency-plugin.version>
 		<maven-jar-plugin.version>3.4.2</maven-jar-plugin.version>
 		<maven-package-info-plugin.version>1.1.0</maven-package-info-plugin.version>
-		<maven-plugin.version>2.18.0</maven-plugin.version>
+		<versions-maven-plugin.version>2.21.0</versions-maven-plugin.version>
 		<maven-reproducible-build-plugin.version>0.17</maven-reproducible-build-plugin.version>
 		<maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
 		<maven-shade-plugin.version>3.6.0</maven-shade-plugin.version>
 		<maven-install-plugin.version>3.1.3</maven-install-plugin.version>
-		<maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
-		<protobuf.version>3.25.3</protobuf.version>
+		<maven-surefire-plugin.version>3.5.3</maven-surefire-plugin.version>
+		<os-maven-plugin.version>1.7.1</os-maven-plugin.version>
+		<protobuf-maven-plugin.version>0.6.1</protobuf-maven-plugin.version>
+		<!-- Toolchain versions used for code generation -->
+		<protoc.version>3.25.3</protoc.version>
+		<protoc-gen-grpc-java.version>1.68.1</protoc-gen-grpc-java.version>
+		<!-- Keep committed generated sources authoritative during normal builds.
+		     Set -Dprotoc.skip=false when intentionally regenerating proto/grpc Java classes. -->
+		<protoc.skip>true</protoc.skip>
+		<protobuf.version>3.25.7</protobuf.version>
 		<replacer.version>1.5.3</replacer.version>
 		<reticulum.version>8924ed0</reticulum.version>
 		<jinjava.version>2.8.0</jinjava.version>
 		<simplemagic.version>1.17</simplemagic.version>
-		<swagger-api.version>2.0.10</swagger-api.version>
+		<!--<swagger-api.version>2.0.10</swagger-api.version>-->
+		<swagger-api.version>2.2.30</swagger-api.version>
 		<swagger-ui.version>5.18.2</swagger-ui.version>
-		<upnp.version>1.2</upnp.version>
+		<tika-core.version>3.1.0</tika-core.version>
+		<upnp.version>1.3</upnp.version>
 		<xz.version>1.10</xz.version>
    	<lombok.version>1.18.30</lombok.version>
    	<jackson.version>2.16.1</jackson.version>
+		<!--<slf4j.version>1.7.36</slf4j.version>-->
 		<slf4j.version>2.0.12</slf4j.version>
     <nitrite.version>4.3.0</nitrite.version>
     <junit.version>5.9.2</junit.version>
@@ -75,11 +85,18 @@
 				<filtering>true</filtering>
 			</resource>
 		</resources>
+		<extensions>
+			<extension>
+				<groupId>kr.motd.maven</groupId>
+				<artifactId>os-maven-plugin</artifactId>
+				<version>${os-maven-plugin.version}</version>
+			</extension>
+		</extensions>
 		<plugins>
 			<plugin>
 				<groupId>org.codehaus.mojo</groupId>
 				<artifactId>versions-maven-plugin</artifactId>
-				<version>${maven-plugin.version}</version>
+				<version>${versions-maven-plugin.version}</version>
 				<configuration>
 					<generateBackupPoms>false</generateBackupPoms>
 				</configuration>
@@ -255,10 +272,6 @@
 							<template>${project.build.sourceDirectory}/org/qortal/data/package-info.java</template>
 						</package>
 						<package>
-							<pattern>org.qortal.api.model**</pattern>
-							<template>${project.build.sourceDirectory}/org/qortal/data/package-info.java</template>
-						</package>
-						<package>
 							<pattern>org.qortal.api.model.**</pattern>
 							<template>${project.build.sourceDirectory}/org/qortal/data/package-info.java</template>
 						</package>
@@ -293,22 +306,46 @@
 				</executions>
 			</plugin>
 			<plugin>
+				<groupId>org.xolstice.maven.plugins</groupId>
+				<artifactId>protobuf-maven-plugin</artifactId>
+				<version>${protobuf-maven-plugin.version}</version>
+				<configuration>
+					<protoSourceRoot>${project.basedir}/src/main/resources/proto/zcash</protoSourceRoot>
+					<clearOutputDirectory>false</clearOutputDirectory>
+					<protocArtifact>com.google.protobuf:protoc:${protoc.version}:exe:${os.detected.classifier}</protocArtifact>
+					<pluginId>grpc-java</pluginId>
+					<pluginArtifact>io.grpc:protoc-gen-grpc-java:${protoc-gen-grpc-java.version}:exe:${os.detected.classifier}</pluginArtifact>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>compile</goal>
+							<goal>compile-custom</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-jar-plugin</artifactId>
 				<version>${maven-jar-plugin.version}</version>
-				<configuration>
-					<archive>
-						<manifest>
-							<addDefaultEntries>false</addDefaultEntries>
-							<addDefaultImplementationEntries>true</addDefaultImplementationEntries>
-						</manifest>
-						<manifestEntries>
-							<Last-Commit-Id>${git.commit.id.full}</Last-Commit-Id>
-							<Last-Commit-Time>${git.commit.time}</Last-Commit-Time>
-							<Reproducible-Build>true</Reproducible-Build>
-						</manifestEntries>
-					</archive>
-				</configuration>
+				<executions>
+					<execution>
+						<configuration>
+							<archive>
+								<manifest>
+									<addDefaultEntries>false</addDefaultEntries>
+									<addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+								</manifest>
+								<manifestEntries>
+									<Last-Commit-Id>${git.commit.id.full}</Last-Commit-Id>
+									<Last-Commit-Time>${git.commit.time}</Last-Commit-Time>
+									<Reproducible-Build>true</Reproducible-Build>
+								</manifestEntries>
+							</archive>
+						</configuration>
+					</execution>
+				</executions>
 			</plugin>
 			<!-- Copy modified hsqldb.jar to install / modified MANIFEST.MF-->
 			<plugin>
@@ -368,8 +405,7 @@
 						</goals>
 						<configuration>
 							<transformers>
-								<transformer
-									implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
+								<transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
 								<transformer
 									implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
 									<mainClass>org.qortal.controller.Controller</mainClass>
@@ -383,6 +419,7 @@
 					</execution>
 				</executions>
 			</plugin>
+			<!-- Removed, now use Maven reproducible by default v4.0, IntelliJ v2025.1 and later -->
 			<plugin>
 				<groupId>io.github.zlika</groupId>
 				<artifactId>reproducible-build-maven-plugin</artifactId>
@@ -395,6 +432,7 @@
 							<goal>strip-jar</goal>
 						</goals>
 						<configuration>
+							<!--suppress UnresolvedMavenProperty -->
 							<zipDateTime>${git.commit.time}</zipDateTime>
 						</configuration>
 					</execution>
@@ -405,52 +443,10 @@
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>${maven-surefire-plugin.version}</version>
 				<configuration>
-					<skipTests>${skipTests}</skipTests>
+					<skipTests>${skipJUnitTests}</skipTests>
 				</configuration>
 			</plugin>
 		</plugins>
-		<pluginManagement>
-			<plugins>
-				<!--This plugin's configuration is used to store Eclipse m2e settings only. It has no influence on the Maven build itself.-->
-				<plugin>
-					<groupId>org.eclipse.m2e</groupId>
-					<artifactId>lifecycle-mapping</artifactId>
-					<version>${lifecycle-mapping.version}</version>
-					<configuration>
-						<lifecycleMappingMetadata>
-							<pluginExecutions>
-								<pluginExecution>
-									<pluginExecutionFilter>
-										<groupId>org.apache.maven.plugins</groupId>
-										<artifactId>maven-dependency-plugin</artifactId>
-										<version>${maven-dependency-plugin.version}</version>
-										<goals>
-											<goal>unpack</goal>
-										</goals>
-									</pluginExecutionFilter>
-									<action>
-										<execute/>
-									</action>
-								</pluginExecution>
-								<pluginExecution>
-									<pluginExecutionFilter>
-										<groupId>com.google.code.maven-replacer-plugin</groupId>
-										<artifactId>replacer</artifactId>
-										<version>${replacer.version}</version>
-										<goals>
-											<goal>replace</goal>
-										</goals>
-									</pluginExecutionFilter>
-									<action>
-										<execute/>
-									</action>
-								</pluginExecution>
-							</pluginExecutions>
-						</lifecycleMappingMetadata>
-					</configuration>
-				</plugin>
-			</plugins>
-		</pluginManagement>
 	</build>
 	<repositories>
 		<repository>
@@ -471,8 +467,13 @@
         <updatePolicy>always</updatePolicy>
       </snapshots>
 		</repository>
+		<repository>
+			<id>central</id>
+			<name>Maven Central</name>
+			<url>https://repo.maven.apache.org/maven2</url>
+		</repository>
 	</repositories>
-	<!--
+	  <!--
     <dependencyManagement>
       <dependencies>
         <dependency>
@@ -493,6 +494,11 @@
   	</dependencyManagement>
     -->
 	<dependencies>
+		<!-- <dependency>
+			<groupId>org.glassfish.jersey.media</groupId>
+			<artifactId>jersey-media-json-jackson</artifactId>
+			<version>3.1.10</version>
+		</dependency> -->
 		<!-- https://mvnrepository.com/artifact/org.codehaus.mojo/build-helper-maven-plugin -->
 		<dependency>
 			<groupId>org.codehaus.mojo</groupId>
@@ -517,7 +523,7 @@
 		</dependency>
 		<!-- CIYAM AT (automated transactions) -->
 		<dependency>
-			<groupId>org.ciyam</groupId>
+			<groupId>com.github.iceburst</groupId>
 			<artifactId>AT</artifactId>
 			<version>${ciyam-at.version}</version>
 		</dependency>
@@ -532,12 +538,28 @@
 			<groupId>org.bitcoinj</groupId>
 			<artifactId>bitcoinj-core</artifactId>
 			<version>${bitcoinj.version}</version>
+			<exclusions>
+				<exclusion>
+					<groupId>com.google.protobuf</groupId>
+					<artifactId>protobuf-javalite</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>org.bouncycastle</groupId>
+					<artifactId>*</artifactId>
+				</exclusion>
+			</exclusions>
 		</dependency>
 		<!-- For Litecoin, etc. support, requires bitcoinj -->
 		<dependency>
-			<groupId>com.github.qortal</groupId>
+			<groupId>com.github.iceburst</groupId>
 			<artifactId>altcoinj</artifactId>
 			<version>${altcoinj.version}</version>
+			<exclusions>
+				<exclusion>
+					<groupId>org.bouncycastle</groupId>
+					<artifactId>*</artifactId>
+				</exclusion>
+			</exclusions>
 		</dependency>
 		<!-- Build Reticulum from Source -->
 		<dependency>
@@ -684,7 +706,7 @@
 			<groupId>org.eclipse.jetty</groupId>
 			<artifactId>jetty-server</artifactId>
 			<version>${jetty.version}</version>
-			<classifier>config</classifier>
+			<!-- <classifier>config</classifier> 25-Jan Removed as there is no config classifier -->
 		</dependency>
 		<dependency>
 			<groupId>org.eclipse.jetty</groupId>
@@ -707,10 +729,25 @@
 			<artifactId>jetty-client</artifactId>
 			<version>${jetty.version}</version>
 		</dependency>
+		<dependency>
+			<groupId>org.eclipse.jetty</groupId>
+			<artifactId>jetty-alpn-server</artifactId>
+			<version>${jetty.version}</version>
+		</dependency>
+		<dependency> <!-- Needed for HTTP/2 -->
+			<groupId>org.eclipse.jetty</groupId>
+			<artifactId>jetty-alpn-java-server</artifactId>
+			<version>${jetty.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.eclipse.jetty.http2</groupId>
+			<artifactId>http2-server</artifactId>
+			<version>${jetty.version}</version>
+		</dependency>
 		<!-- Websocket support -->
 		<dependency>
 			<groupId>org.eclipse.jetty.websocket</groupId>
-			<artifactId>javax-websocket-server-impl</artifactId>
+			<artifactId>websocket-jetty-server</artifactId>
 			<version>${jetty.version}</version>
 		</dependency>
 		<!-- Jersey -->
@@ -786,13 +823,23 @@
     <!--
 		<dependency>
 			<groupId>org.bouncycastle</groupId>
-			<artifactId>bcprov-jdk15to18</artifactId>
+			<artifactId>bcprov-jdk18on</artifactId>
 			<version>${bouncycastle.version}</version>
 		</dependency>
 		-->
 		<dependency>
 			<groupId>org.bouncycastle</groupId>
-			<artifactId>bctls-jdk15to18</artifactId>
+			<artifactId>bctls-jdk18on</artifactId>
+			<version>${bouncycastle.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.bouncycastle</groupId>
+			<artifactId>bcutil-jdk18on</artifactId>
+			<version>${bouncycastle.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.bouncycastle</groupId>
+			<artifactId>bcpkix-jdk18on</artifactId>
 			<version>${bouncycastle.version}</version>
 		</dependency><!-- https://mvnrepository.com/artifact/org.bouncycastle/bcprov-jdk15to18 -->
 		<dependency>
@@ -968,13 +1015,13 @@
     <dependency>
       <groupId>org.reflections</groupId>
       <artifactId>reflections</artifactId>
-    <version>0.10.2</version>
-</dependency>
+      <version>0.10.2</version>
+    </dependency>
 
-<dependency>
-<groupId>org.apache.tika</groupId>
-<artifactId>tika-core</artifactId>
-<version>3.1.0</version> 
-</dependency>
+		<dependency>
+			<groupId>org.apache.tika</groupId>
+			<artifactId>tika-core</artifactId>
+			<version>${tika-core.version}</version>
+		</dependency>
 	</dependencies>
 </project>

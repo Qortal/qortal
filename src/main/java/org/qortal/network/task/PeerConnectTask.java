@@ -3,6 +3,7 @@ package org.qortal.network.task;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.qortal.network.Network;
+import org.qortal.network.NetworkData;
 import org.qortal.network.Peer;
 import org.qortal.utils.DaemonThreadFactory;
 import org.qortal.utils.ExecuteProduceConsume.Task;
@@ -43,8 +44,17 @@ public class PeerConnectTask implements Task {
     private void connectPeerAsync(Peer peer) throws InterruptedException {
         // Perform peer connection in a separate thread to avoid blocking main task execution
         try {
-            Network.getInstance().connectPeer(peer);
-            LOGGER.trace("Successfully connected to peer {}", peer);
+            switch (peer.getPeerType()) {
+                case Peer.NETWORK:
+                    Network.getInstance().connectPeer(peer);
+                    LOGGER.trace("Called connectPeer {} on NETWORK", peer);
+                    break;
+                case Peer.NETWORKDATA:
+                    NetworkData.getInstance().connectPeer(peer);
+                    LOGGER.trace("Called connectPeer {} on QDN", peer);
+                    break;
+            }
+
         } catch (Exception e) {
             LOGGER.error("Error connecting to peer {}", peer, e);
         }

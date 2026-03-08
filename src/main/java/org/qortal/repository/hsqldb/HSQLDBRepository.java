@@ -20,6 +20,7 @@ import java.nio.file.Paths;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -28,7 +29,8 @@ public class HSQLDBRepository implements Repository {
 
 	private static final Logger LOGGER = LogManager.getLogger(HSQLDBRepository.class);
 
-	public static final Object CHECKPOINT_LOCK = new Object();
+	/** Read/write gate: normal queries take read lock; checkpoint/backup takes write lock. Fair to avoid starvation. */
+	public static final ReentrantReadWriteLock CHECKPOINT_GATE = new ReentrantReadWriteLock(true);
 
 	// "serialization failure"
 	private static final Integer DEADLOCK_ERROR_CODE = Integer.valueOf(-4861);
@@ -39,6 +41,8 @@ public class HSQLDBRepository implements Repository {
 	protected Long slowQueryThreshold = null;
 	protected List<String> sqlStatements;
 	protected long sessionId;
+	/** True from first execute until commit/rollback/close; used for rollback-on-close. */
+	private boolean inTransaction = false;
 	protected final Map<String, PreparedStatement> preparedStatementCache = new HashMap<>();
 	// We want the same object corresponding to the actual DB
 	protected final Object trimHeightsLock = RepositoryManager.getRepositoryFactory();
@@ -84,9 +88,12 @@ public class HSQLDBRepository implements Repository {
 			throw new DataException("Unable to fetch session ID from repository", e);
 		}
 
-		// synchronize to block new connections if checkpointing in progress 
-		synchronized (CHECKPOINT_LOCK) {
+		// Block new repository creation only when checkpoint/backup holds write lock
+		CHECKPOINT_GATE.readLock().lock();
+		try {
 			assertEmptyTransaction("connection creation");
+		} finally {
+			CHECKPOINT_GATE.readLock().unlock();
 		}
 	}
 
@@ -179,6 +186,11 @@ public class HSQLDBRepository implements Repository {
 		return this.connection;
 	}
 
+	/** Called by HSQLDBSaver and any path that executes SQL without going through checkedExecuteResultSet/executeCheckedBatchUpdate. */
+	/* package */ void markTransactionStarted() {
+		this.inTransaction = true;
+	}
+
 	@Override
 	public void saveChanges() throws DataException {
 		long beforeQuery = this.slowQueryThreshold == null ? 0 : System.currentTimeMillis();
@@ -198,6 +210,7 @@ public class HSQLDBRepository implements Repository {
 		} catch (SQLException e) {
 			throw new DataException("commit error", e);
 		} finally {
+			this.inTransaction = false;
 			this.savepoints.clear();
 
 			// Before clearing statements so we can log what led to assertion error
@@ -215,6 +228,7 @@ public class HSQLDBRepository implements Repository {
 		} catch (SQLException e) {
 			throw new DataException("rollback error", e);
 		} finally {
+			this.inTransaction = false;
 			this.savepoints.clear();
 
 			// Before clearing statements so we can log what led to assertion error
@@ -223,6 +237,94 @@ public class HSQLDBRepository implements Repository {
 			if (this.sqlStatements != null)
 				this.sqlStatements.clear();
 		}
+	}
+
+	@Override
+	public void saveChangesAndCheckpoint() throws DataException {
+		// First commit the transaction
+		saveChanges();
+		
+		// Now force a checkpoint with a reasonable wait for other sessions
+		CHECKPOINT_GATE.writeLock().lock();
+		try {
+			int maxAttempts = 10;
+			int waitMs = 100; // Wait 100ms between attempts
+			
+			for (int attempt = 0; attempt < maxAttempts; attempt++) {
+				// Check if other sessions have active transactions
+				String sql = "SELECT COUNT(*) FROM Information_schema.system_sessions " +
+							"WHERE transaction = TRUE AND session_id != ?";
+				
+				try (PreparedStatement pstmt = this.cachePreparedStatement(sql)) {
+					pstmt.setLong(1, this.sessionId);
+					
+					try (ResultSet rs = this.checkedExecuteResultSet(pstmt)) {
+						// checkedExecuteResultSet already advanced to first row
+						if (rs != null) {
+							int otherTransactionCount = rs.getInt(1);
+							
+							if (otherTransactionCount == 0) {
+								// Safe to checkpoint now
+								LOGGER.info("Performing critical checkpoint after commit (session: {})", this.sessionId);
+								try (Statement stmt = this.connection.createStatement()) {
+									stmt.execute("CHECKPOINT");
+								}
+								LOGGER.info("Critical checkpoint completed");
+								return; // Success
+							}
+							
+							// Other sessions still have transactions
+							if (attempt < maxAttempts - 1) {
+								LOGGER.debug("Waiting for {} other transaction(s) to complete before checkpoint (attempt {}/{})", 
+											otherTransactionCount, attempt + 1, maxAttempts);
+							}
+						}
+					}
+				}
+				
+				// Wait before retry (but not after last attempt)
+				if (attempt < maxAttempts - 1) {
+					CHECKPOINT_GATE.writeLock().unlock();
+					try {
+						Thread.sleep(waitMs);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						throw new DataException("Interrupted while waiting for checkpoint opportunity", e);
+					}
+					CHECKPOINT_GATE.writeLock().lock();
+				}
+			}
+			
+			// Timeout - still have active transactions, but we need durability
+			int activeCount = getActiveTransactionCount();
+			LOGGER.warn("Forcing checkpoint despite {} active transaction(s) - critical data durability required", activeCount);
+			
+			try (Statement stmt = this.connection.createStatement()) {
+				stmt.execute("CHECKPOINT");
+			}
+			LOGGER.info("Forced checkpoint completed");
+			
+		} catch (SQLException e) {
+			throw new DataException("Unable to perform critical checkpoint", e);
+		} finally {
+			CHECKPOINT_GATE.writeLock().unlock();
+		}
+	}
+
+	private int getActiveTransactionCount() {
+		try {
+			String sql = "SELECT COUNT(*) FROM Information_schema.system_sessions WHERE transaction = TRUE";
+			try (PreparedStatement pstmt = this.cachePreparedStatement(sql);
+				 ResultSet rs = this.checkedExecuteResultSet(pstmt)) {
+				// checkedExecuteResultSet already advanced to first row
+				if (rs != null) {
+					return rs.getInt(1);
+				}
+			}
+		} catch (SQLException e) {
+			LOGGER.warn("Unable to get active transaction count", e);
+		}
+		return -1;
 	}
 
 	@Override
@@ -271,6 +373,37 @@ public class HSQLDBRepository implements Repository {
 		}
 
 		try {
+			// Always leave connection clean: rollback any uncommitted work before returning to pool
+			if (this.inTransaction) {
+				// Log loudly with full context - this indicates a bug in the code
+				String errorMsg = String.format(
+					"CRITICAL BUG: Repository closed with uncommitted transaction! Session: %d",
+					this.sessionId);
+				
+				Exception stackTrace = new Exception("Uncommitted work at close - stack trace for debugging");
+				LOGGER.error(errorMsg, stackTrace);
+				
+				// Log what SQL was executed to help identify the source
+				if (this.sqlStatements != null && !this.sqlStatements.isEmpty()) {
+					LOGGER.error("Uncommitted SQL statements (last 10):\n{}", 
+						String.join("\n", this.sqlStatements.subList(
+							Math.max(0, this.sqlStatements.size() - 10), 
+							this.sqlStatements.size())));
+				}
+				
+				// Always rollback for connection pool safety
+				try {
+					this.connection.rollback();
+					LOGGER.warn("Rolled back uncommitted transaction for connection pool safety (session: {})", this.sessionId);
+				} catch (SQLException e) {
+					throw new DataException("Error rolling back on close", e);
+				}
+				this.inTransaction = false;
+				
+				// Note: We do NOT throw here to keep the node running
+				// The error is logged loudly for monitoring and fixing in the next release
+			}
+
 			assertEmptyTransaction("connection close");
 
 			// Assume we are not going to be GC'd for a while
@@ -290,8 +423,9 @@ public class HSQLDBRepository implements Repository {
 	}
 
 	private void maybeCheckpoint() throws DataException {
-		// To serialize checkpointing and to block new sessions when checkpointing in progress
-		synchronized (CHECKPOINT_LOCK) {
+		// Exclusive gate: block new queries/sessions while checkpoint runs
+		CHECKPOINT_GATE.writeLock().lock();
+		try {
 			Boolean quickCheckpointRequest = RepositoryManager.getRequestedCheckpoint();
 			if (quickCheckpointRequest == null)
 				return;
@@ -316,9 +450,13 @@ public class HSQLDBRepository implements Repository {
 
 					int transactionCount = resultSet.getInt(1);
 
-					if (transactionCount > 0)
+					if (transactionCount > 0) {
 						// We can't safely perform CHECKPOINT due to ongoing SQL transactions
+						// Log this so we know why checkpoint was skipped (helps debugging)
+						LOGGER.trace("Skipping requested checkpoint - {} active transaction(s) found", transactionCount);
+						// Keep the checkpoint request so it can be tried again later
 						return;
+					}
 				}
 
 				LOGGER.info("Performing repository CHECKPOINT...");
@@ -336,8 +474,10 @@ public class HSQLDBRepository implements Repository {
 				LOGGER.info("Repository CHECKPOINT completed!");
 				RepositoryManager.setRequestedCheckpoint(null);
 			} catch (SQLException e) {
-				throw new DataException("Unable to check repository session status", e);
+				throw new DataException("Unable to perform checkpoint", e);
 			}
+		} finally {
+			CHECKPOINT_GATE.writeLock().unlock();
 		}
 	}
 
@@ -379,15 +519,11 @@ public class HSQLDBRepository implements Repository {
 
 	@Override
 	public void backup(boolean quick, String name, Long timeout) throws DataException, TimeoutException {
-		synchronized (CHECKPOINT_LOCK) {
+		// Wait for other transactions to drain without holding write lock, so they can commit/rollback
+		this.blockUntilNoOtherTransactions(timeout);
 
-			// We can only perform a CHECKPOINT if no other HSQLDB session is mid-transaction,
-			// otherwise the CHECKPOINT blocks for COMMITs and other threads can't open HSQLDB sessions
-			// due to HSQLDB blocking until CHECKPOINT finishes - i.e. deadlock.
-			// Since we don't want to give up too easily, it's best to wait until the other transaction
-			// count reaches zero, and then continue.
-			this.blockUntilNoOtherTransactions(timeout);
-
+		CHECKPOINT_GATE.writeLock().lock();
+		try {
 			if (!quick)
 				// First perform a CHECKPOINT
 				try (Statement stmt = this.connection.createStatement()) {
@@ -440,21 +576,18 @@ public class HSQLDBRepository implements Repository {
 			} catch (SQLException e) {
 				throw new DataException("Unable to backup repository");
 			}
-
+		} finally {
+			CHECKPOINT_GATE.writeLock().unlock();
 		}
 	}
 
 	@Override
 	public void performPeriodicMaintenance(Long timeout) throws DataException, TimeoutException {
-		synchronized (CHECKPOINT_LOCK) {
+		// Wait for other transactions to drain without holding write lock, so they can commit/rollback
+		this.blockUntilNoOtherTransactions(timeout);
 
-			// We can only perform a CHECKPOINT if no other HSQLDB session is mid-transaction,
-			// otherwise the CHECKPOINT blocks for COMMITs and other threads can't open HSQLDB sessions
-			// due to HSQLDB blocking until CHECKPOINT finishes - i.e. deadlock.
-			// Since we don't want to give up too easily, it's best to wait until the other transaction
-			// count reaches zero, and then continue.
-			this.blockUntilNoOtherTransactions(timeout);
-
+		CHECKPOINT_GATE.writeLock().lock();
+		try {
 			// Defrag DB - takes a while!
 			try (Statement stmt = this.connection.createStatement()) {
 				LOGGER.info("performing maintenance - this will take a while");
@@ -464,6 +597,8 @@ public class HSQLDBRepository implements Repository {
 			} catch (SQLException e) {
 				throw new DataException("Unable to defrag repository");
 			}
+		} finally {
+			CHECKPOINT_GATE.writeLock().unlock();
 		}
 	}
 
@@ -669,10 +804,14 @@ public class HSQLDBRepository implements Repository {
 	private ResultSet checkedExecuteResultSet(PreparedStatement preparedStatement, Object... objects) throws SQLException {
 		bindStatementParams(preparedStatement, objects);
 
-		// synchronize to block new executions if checkpointing in progress
-		synchronized (CHECKPOINT_LOCK) {
+		// Note: Read operations (SELECT) don't need transaction tracking
+		// Only write operations (INSERT/UPDATE/DELETE) set inTransaction = true
+		CHECKPOINT_GATE.readLock().lock();
+		try {
 			if (!preparedStatement.execute())
 				throw new SQLException("Fetching from database produced no results");
+		} finally {
+			CHECKPOINT_GATE.readLock().unlock();
 		}
 
 		ResultSet resultSet = preparedStatement.getResultSet();
@@ -716,9 +855,11 @@ public class HSQLDBRepository implements Repository {
 			preparedStatement.addBatch();
 		}
 
+		this.inTransaction = true;
 		long beforeQuery = this.slowQueryThreshold == null ? 0 : System.currentTimeMillis();
 
 		int[] updateCounts = null;
+		CHECKPOINT_GATE.readLock().lock();
 		try {
 			updateCounts = preparedStatement.executeBatch();
 		} catch (SQLException e) {
@@ -727,6 +868,8 @@ public class HSQLDBRepository implements Repository {
 				examineException(e);
 
 			throw e;
+		} finally {
+			CHECKPOINT_GATE.readLock().unlock();
 		}
 
 		if (this.slowQueryThreshold != null) {

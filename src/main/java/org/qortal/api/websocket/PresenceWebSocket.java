@@ -1,8 +1,9 @@
 package org.qortal.api.websocket;
 
 import org.eclipse.jetty.websocket.api.Session;
+import org.eclipse.jetty.websocket.api.WriteCallback;
 import org.eclipse.jetty.websocket.api.annotations.*;
-import org.eclipse.jetty.websocket.servlet.WebSocketServletFactory;
+import org.eclipse.jetty.websocket.server.JettyWebSocketServletFactory;
 import org.qortal.controller.Controller;
 import org.qortal.controller.Synchronizer;
 import org.qortal.crypto.Crypto;
@@ -69,20 +70,20 @@ public class PresenceWebSocket extends ApiWebSocket implements Listener {
 		}
 	}
 
-	/** Outer map key is PresenceType (enum), inner map key is public key in base58, inner map value is timestamp */
 	private static final Map<PresenceType, Map<String, Long>> currentEntries = Collections.synchronizedMap(new EnumMap<>(PresenceType.class));
-
-	/** (Optional) PresenceType used for filtering by that Session. */
 	private static final Map<Session, PresenceType> sessionPresenceTypes = Collections.synchronizedMap(new HashMap<>());
 
+	/**
+	 * Updated for Jetty 10.
+	 */
 	@Override
-	public void configure(WebSocketServletFactory factory) {
-		factory.register(PresenceWebSocket.class);
+	protected void configure(JettyWebSocketServletFactory factory) {
+		// Register this servlet instance for websocket upgrades
+		factory.addMapping("/", (req, res) -> this);
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
 			populateCurrentInfo(repository);
 		} catch (DataException e) {
-			// How to fail properly?
 			return;
 		}
 
@@ -98,11 +99,9 @@ public class PresenceWebSocket extends ApiWebSocket implements Listener {
 		removeOldEntries();
 
 		if (event instanceof Synchronizer.NewChainTipEvent)
-			// We only wanted a chance to cull old entries
 			return;
 
 		TransactionData transactionData = ((Controller.NewTransactionEvent) event).getTransactionData();
-
 		if (transactionData.getType() != TransactionType.PRESENCE)
 			return;
 
@@ -120,10 +119,8 @@ public class PresenceWebSocket extends ApiWebSocket implements Listener {
 
 		List<PresenceInfo> presenceInfo = Collections.singletonList(new PresenceInfo(presenceType, pubKey58, computedTimestamp));
 
-		// Notify sessions
 		for (Session session : getSessions()) {
 			PresenceType sessionPresenceType = sessionPresenceTypes.get(session);
-
 			if (sessionPresenceType == null || sessionPresenceType == presenceType)
 				sendPresenceInfo(session, presenceInfo);
 		}
@@ -137,7 +134,6 @@ public class PresenceWebSocket extends ApiWebSocket implements Listener {
 
 		// We only support ONE presenceType
 		String presenceTypeName = presenceTypes == null || presenceTypes.isEmpty() ? null : presenceTypes.get(0);
-
 		PresenceType presenceType = presenceTypeName == null ? null : PresenceType.fromString(presenceTypeName);
 
 		// Make sure that if caller does give a presenceType, that it is a valid/known one.
@@ -151,10 +147,9 @@ public class PresenceWebSocket extends ApiWebSocket implements Listener {
 			sessionPresenceTypes.put(session, presenceType);
 
 		List<PresenceInfo> presenceInfo;
-
 		synchronized (currentEntries) {
 			presenceInfo = currentEntries.entrySet().stream()
-					.filter(entry -> presenceType == null ? true : entry.getKey() == presenceType)
+					.filter(entry -> presenceType == null || entry.getKey() == presenceType)
 					.flatMap(entry -> entry.getValue().entrySet().stream().map(innerEntry -> new PresenceInfo(entry.getKey(), innerEntry.getKey(), innerEntry.getValue())))
 					.collect(Collectors.toList());
 		}
@@ -172,7 +167,6 @@ public class PresenceWebSocket extends ApiWebSocket implements Listener {
 	public void onWebSocketClose(Session session, int statusCode, String reason) {
 		// clean up
 		sessionPresenceTypes.remove(session);
-
 		super.onWebSocketClose(session, statusCode, reason);
 	}
 
@@ -183,22 +177,25 @@ public class PresenceWebSocket extends ApiWebSocket implements Listener {
 
 	@OnWebSocketMessage
 	public void onWebSocketMessage(Session session, String message) {
-		/* ignored */
+		if (Objects.equals(message, "ping") && session.isOpen()) {
+			session.getRemote().sendString("pong", WriteCallback.NOOP);
+		}
 	}
 
 	private boolean sendPresenceInfo(Session session, List<PresenceInfo> presenceInfo) {
-		try {
-			StringWriter stringWriter = new StringWriter();
-			marshall(stringWriter, presenceInfo);
+		if (session.isOpen()) {
+			try {
+				StringWriter stringWriter = new StringWriter();
+				marshall(stringWriter, presenceInfo);
+				String output = stringWriter.toString();
 
-			String output = stringWriter.toString();
-			session.getRemote().sendStringByFuture(output);
-		} catch (IOException e) {
-			// No output this time?
-			return false;
+				session.getRemote().sendString(output, WriteCallback.NOOP);
+				return true;
+			} catch (IOException e) {
+				return false;
+			}
 		}
-
-		return true;
+		return false;
 	}
 
 	private static void populateCurrentInfo(Repository repository) throws DataException {
@@ -208,13 +205,11 @@ public class PresenceWebSocket extends ApiWebSocket implements Listener {
 
 		for (TransactionData transactionData : presenceTransactionsData) {
 			PresenceTransactionData presenceData = (PresenceTransactionData) transactionData;
-
 			PresenceType presenceType = presenceData.getPresenceType();
 
 			// Put/replace for this publickey making sure we keep newest timestamp
 			String pubKey58 = Base58.encode(presenceData.getCreatorPublicKey());
 			long ourTimestamp = presenceData.getTimestamp();
-
 			mergePresence(presenceType, pubKey58, ourTimestamp);
 		}
 	}
@@ -226,11 +221,9 @@ public class PresenceWebSocket extends ApiWebSocket implements Listener {
 
 	private static void removeOldEntries() {
 		long now = NTP.getTime();
-
 		currentEntries.entrySet().forEach(entry -> {
 			long expiryThreshold = now - entry.getKey().getLifetime();
 			entry.getValue().entrySet().removeIf(pubkeyTimestamp -> pubkeyTimestamp.getValue() < expiryThreshold);
 		});
 	}
-
 }

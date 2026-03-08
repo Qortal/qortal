@@ -17,5 +17,7 @@ public interface PeerAddress {
     // IPPeer "address" components
     default String getHost() { return null; }
     default int getPort() { return -1; }
+
+    static PeerAddress fromString(String addressString) { return null;}
 }
 

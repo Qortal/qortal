@@ -287,19 +287,19 @@ public class TransactionImporter extends Thread {
         LOGGER.debug("Importing incoming transactions queue (size {})...", sigValidTransactions.size());
 
         int processedCount = 0;
-        try (final Repository repository = RepositoryManager.getRepository()) {
+        try {
+            try (final Repository repository = RepositoryManager.getRepository()) {
 
-            // Use a single copy of the unconfirmed transactions list for each cycle, to speed up constant lookups
-            // when counting unconfirmed transactions by creator.
-            List<TransactionData> unconfirmedTransactions = repository.getTransactionRepository().getUnconfirmedTransactions();
-            unconfirmedTransactions.removeIf(t -> t.getType() == Transaction.TransactionType.CHAT);
-            unconfirmedTransactionsCache = unconfirmedTransactions;
+                // Use a single copy of the unconfirmed transactions list for each cycle, to speed up constant lookups
+                // when counting unconfirmed transactions by creator.
+                List<TransactionData> unconfirmedTransactions = repository.getTransactionRepository().getUnconfirmedTransactions();
+                unconfirmedTransactions.removeIf(t -> t.getType() == Transaction.TransactionType.CHAT);
+                unconfirmedTransactionsCache = unconfirmedTransactions;
 
-            // A list of signatures were imported in this round
-            List<byte[]> newlyImportedSignatures = new ArrayList<>();
+                // A list of signatures were imported in this round
+                List<byte[]> newlyImportedSignatures = new ArrayList<>();
 
-            // Import transactions with valid signatures
-            try {
+                // Import transactions with valid signatures
                 for (int i = 0; i < sigValidTransactions.size(); ++i) {
                     if (isStopping) {
                         return;
@@ -373,15 +373,18 @@ public class TransactionImporter extends Thread {
                     Message newTransactionSignatureMessage = new TransactionSignaturesMessage(newlyImportedSignatures);
                     Network.getInstance().broadcast(broadcastPeer -> newTransactionSignatureMessage);
                 }
-            } finally {
-                LOGGER.debug("Finished importing {} incoming transaction{}", processedCount, (processedCount == 1 ? "" : "s"));
-                blockchainLock.unlock();
 
-                // Clear the unconfirmed transaction cache so new data can be populated in the next cycle
-                unconfirmedTransactionsCache = null;
+                LOGGER.debug("Finished importing {} incoming transaction{}", processedCount, (processedCount == 1 ? "" : "s"));
+
+            } catch (DataException e) {
+                LOGGER.error("Repository issue while importing incoming transactions", e);
             }
-        } catch (DataException e) {
-            LOGGER.error("Repository issue while importing incoming transactions", e);
+        } finally {
+            // Always release the blockchain lock, even if an exception occurred
+            blockchainLock.unlock();
+
+            // Clear the unconfirmed transaction cache so new data can be populated in the next cycle
+            unconfirmedTransactionsCache = null;
         }
     }
 

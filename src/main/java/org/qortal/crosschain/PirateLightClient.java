@@ -8,6 +8,7 @@ import com.google.common.hash.HashCode;
 import com.google.protobuf.ByteString;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.StatusRuntimeException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.json.simple.JSONArray;
@@ -30,6 +31,8 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 
 	private static final int RESPONSE_TIME_READINGS = 5;
 	private static final long MAX_AVG_RESPONSE_TIME = 500L; // ms
+	private static final int MAX_INBOUND_MESSAGE_BYTES = 16 * 1024 * 1024;
+	private static final int MAX_INBOUND_METADATA_BYTES = 8 * 1024;
 
 	public static class Server implements ChainableServer{
 		String hostname;
@@ -648,14 +651,26 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	private Optional<ChainableServerConnection> makeConnection(ChainableServer server, String requestedBy) {
 		LOGGER.info(() -> String.format("Connecting to %s", server));
 
+		ManagedChannel tempChannel = null;
 		try {
-			this.channel = ManagedChannelBuilder.forAddress(server.getHostName(), server.getPort()).build();
+			ManagedChannelBuilder<?> channelBuilder = ManagedChannelBuilder.forAddress(server.getHostName(), server.getPort());
+			channelBuilder.maxInboundMessageSize(MAX_INBOUND_MESSAGE_BYTES);
+			channelBuilder.maxInboundMetadataSize(MAX_INBOUND_METADATA_BYTES);
+			if (server.getConnectionType() == ChainableServer.ConnectionType.SSL) {
+				channelBuilder.useTransportSecurity();
+			} else {
+				channelBuilder.usePlaintext();
+			}
+			tempChannel = channelBuilder.build();
 
-			CompactTxStreamerGrpc.CompactTxStreamerBlockingStub stub = CompactTxStreamerGrpc.newBlockingStub(this.channel);
-			LightdInfo lightdInfo = stub.getLightdInfo(Empty.newBuilder().build());
+			CompactTxStreamerGrpc.CompactTxStreamerBlockingStub stub = CompactTxStreamerGrpc.newBlockingStub(tempChannel);
+			LightdInfo lightdInfo = stub.withDeadlineAfter(10, TimeUnit.SECONDS).getLightdInfo(Empty.newBuilder().build());
 
-			if (lightdInfo == null || lightdInfo.getBlockHeight() <= 0)
+			if (lightdInfo == null || lightdInfo.getBlockHeight() <= 0) {
+				// Close channel before returning on validation failure
+				shutdownChannel(tempChannel);
 				return Optional.of( this.recorder.recordConnection(server, requestedBy,true, false, "lightd info issues") );
+			}
 
 			// TODO: find a way to verify that the server is using the expected chain
 
@@ -665,12 +680,33 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 //				if (this.expectedGenesisHash != null && !((String) featuresJson.get("genesis_hash")).equals(this.expectedGenesisHash))
 //					continue;
 
+			// Connection successful - assign to instance variable
+			synchronized (this.serverLock) {
+				this.channel = tempChannel;
+				this.currentServer = server;
+			}
+
 			LOGGER.info(() -> String.format("Connected to %s", server));
-			this.currentServer = server;
 			return Optional.of( this.recorder.recordConnection(server, requestedBy,true, true, EMPTY) );
 		} catch (Exception e) {
+			// Close channel if connection failed
+			if (tempChannel != null) {
+				shutdownChannel(tempChannel);
+			}
 			// Didn't work, try another server...
-			return Optional.of( this.recorder.recordConnection( server, requestedBy, true, false, CrossChainUtils.getNotes(e)));
+			String notes = CrossChainUtils.getNotes(e);
+			if (e instanceof StatusRuntimeException) {
+				StatusRuntimeException statusException = (StatusRuntimeException) e;
+				Throwable cause = statusException.getCause();
+				String causeText = cause == null ? "none" : cause.getClass().getSimpleName() + ": " + cause.getMessage();
+				LOGGER.warn("Pirate gRPC failure details for {} -> code: {}, description: {}, cause: {}",
+						server,
+						statusException.getStatus().getCode(),
+						statusException.getStatus().getDescription(),
+						causeText);
+			}
+			LOGGER.warn("Unable to connect to Pirate Light server {}: {}", server, notes);
+			return Optional.of( this.recorder.recordConnection( server, requestedBy, true, false, notes));
 		}
 	}
 	/**
@@ -725,6 +761,45 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	private Optional<ChainableServerConnection> closeServer(String requestedBy, String notes) {
 		synchronized (this.serverLock) {
 			return this.closeServer(this.currentServer, notes, requestedBy);
+		}
+	}
+
+	/**
+	 * Shuts down a gRPC channel properly, ensuring all resources are released.
+	 * This prevents resource leaks when channels are created but connection fails.
+	 */
+	private void shutdownChannel(ManagedChannel channel) {
+		if (channel == null) {
+			return;
+		}
+
+		if (!channel.isShutdown()) {
+			try {
+				channel.shutdown();
+				if (!channel.awaitTermination(5, TimeUnit.SECONDS)) {
+					LOGGER.debug("Channel did not terminate gracefully, forcing shutdown");
+				}
+			} catch (InterruptedException e) {
+				LOGGER.debug("Interrupted while waiting for channel termination");
+				Thread.currentThread().interrupt();
+			} catch (Exception e) {
+				LOGGER.debug("Exception during graceful channel shutdown: {}", e.getMessage());
+			}
+		}
+
+		// Forceful shutdown if still not terminated
+		if (!channel.isTerminated()) {
+			try {
+				channel.shutdownNow();
+				if (!channel.awaitTermination(5, TimeUnit.SECONDS)) {
+					LOGGER.debug("Channel did not terminate forcefully");
+				}
+			} catch (InterruptedException e) {
+				LOGGER.debug("Interrupted while waiting for forceful channel termination");
+				Thread.currentThread().interrupt();
+			} catch (Exception e) {
+				LOGGER.debug("Exception during forceful channel shutdown: {}", e.getMessage());
+			}
 		}
 	}
 

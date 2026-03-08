@@ -304,7 +304,7 @@ public class CryptoTests extends Common {
 
 	@Test
 	public void testAESFileEncryption() throws NoSuchAlgorithmException, IOException, IllegalBlockSizeException,
-			InvalidKeyException, BadPaddingException, InvalidAlgorithmParameterException, NoSuchPaddingException {
+            InvalidKeyException, BadPaddingException, InvalidAlgorithmParameterException, NoSuchPaddingException, InterruptedException {
 
 		// Create temporary directory and file paths
 		java.nio.file.Path tempDir = Files.createTempDirectory("qortal-tests");
@@ -320,6 +320,7 @@ public class CryptoTests extends Common {
 		// Write it to the input file
 		FileOutputStream outputStream = new FileOutputStream(inputFilePath);
 		outputStream.write(randomBytes);
+		outputStream.close();
 
 		// Make sure only the input file exists
 		assertTrue(Files.exists(Paths.get(inputFilePath)));

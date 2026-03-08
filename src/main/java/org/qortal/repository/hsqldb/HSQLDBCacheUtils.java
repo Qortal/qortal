@@ -325,6 +325,7 @@ public class HSQLDBCacheUtils {
                 copy.size = data.size;
                 copy.created = data.created;
                 copy.updated = data.updated;
+                copy.latestSignature = data.latestSignature;
 
                 listCopy2.add(copy);
             }
@@ -350,6 +351,7 @@ public class HSQLDBCacheUtils {
                 copy.size = data.size;
                 copy.created = data.created;
                 copy.updated = data.updated;
+                copy.latestSignature = data.latestSignature;
 
                 finalCopy.add(copy);
             }
@@ -768,7 +770,7 @@ public class HSQLDBCacheUtils {
         StringBuilder sql = new StringBuilder(512);
 
         sql.append("SELECT name, service, identifier, size, status, created_when, updated_when, ");
-        sql.append("title, description, category, tag1, tag2, tag3, tag4, tag5 ");
+        sql.append("title, description, category, tag1, tag2, tag3, tag4, tag5, latest_signature ");
         sql.append("FROM ArbitraryResourcesCache ");
         sql.append("LEFT JOIN ArbitraryMetadataCache USING (service, name, identifier) WHERE name IS NOT NULL");
 
@@ -801,6 +803,8 @@ public class HSQLDBCacheUtils {
             String tag4 = resultSet.getString(14);
             String tag5 = resultSet.getString(15);
 
+            byte[] latestSignatureResult = resultSet.getBytes(16);
+
             if (Objects.equals(identifierResult, "default")) {
                 // Map "default" back to null. This is optional but probably less confusing than returning "default".
                 identifierResult = null;
@@ -813,6 +817,7 @@ public class HSQLDBCacheUtils {
             arbitraryResourceData.size = sizeResult;
             arbitraryResourceData.created = created;
             arbitraryResourceData.updated = (updated == 0) ? null : updated;
+            arbitraryResourceData.latestSignature = latestSignatureResult;
 
             arbitraryResourceData.setStatus(ArbitraryResourceStatus.Status.valueOf(status));
 

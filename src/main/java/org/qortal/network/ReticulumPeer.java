@@ -10,6 +10,7 @@ import static java.util.Objects.nonNull;
 import java.nio.channels.SelectionKey;
 import java.time.Instant;
 import java.util.*;
+import java.io.IOException;
 
 //import io.reticulum.Reticulum;
 import io.reticulum.link.Link;
@@ -34,7 +35,7 @@ import static io.reticulum.identity.IdentityKnownDestination.recall;
 import io.reticulum.buffer.Buffer;
 import io.reticulum.buffer.BufferedRWPair;
 import org.qortal.network.RNSCommon.PeerAspect;
-import org.qortal.network.RNSCommon.PeerType;
+import org.qortal.network.RNSCommon.PeerMetaType;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 
 import lombok.Getter;
@@ -42,6 +43,8 @@ import org.qortal.controller.Controller;
 import org.qortal.data.block.BlockSummaryData;
 import org.qortal.data.block.CommonBlockData;
 import org.qortal.data.network.PeerData;
+import org.qortal.network.helper.PeerCapabilities;
+import org.qortal.network.helper.PeerDownloadSpeedTracker;
 import org.qortal.network.message.Message;
 import org.qortal.network.message.MessageType;
 import org.qortal.network.message.PingMessage;
@@ -89,11 +92,11 @@ public class ReticulumPeer implements Peer {
     //static final String defaultConfigPath = new String(".reticulum");
     //static final String defaultConfigPath = RNSCommon.defaultRNSConfigPath;
 
-    private PeerType peerType = PeerType.RETICULUM;
+    private PeerMetaType peerMetaType = PeerMetaType.RETICULUM;
     private byte[] destinationHash;   // remote destination hash
     Destination peerDestination;      // OUT destination created for this
     PeerAspect peerAspect;       // based on Destination
-    //PeerType peerKind = PeerType.RETICULUM;
+    //PeerMetaType peerKind = PeerMetaType.RETICULUM;
     private Identity serverIdentity;
     @Setter(AccessLevel.PACKAGE) private Instant creationTimestamp;
     @Setter(AccessLevel.PACKAGE) private Instant lastAccessTimestamp;
@@ -119,25 +122,42 @@ public class ReticulumPeer implements Peer {
 
     // for qortal networking
     private static final int RESPONSE_TIMEOUT = 3000; // [ms]
+    ///**
+    // * Maximum time to wait for a message to be added to sendQueue (ms)
+    // */
+    //private static final int QUEUE_TIMEOUT = 1000; // ms
+
     /**
-     * Maximum time to wait for a message to be added to sendQueue (ms)
-     */
-    private static final int QUEUE_TIMEOUT = 1000; // ms
+      * Timeout for blockchain synchronization operations (ms)
+      * Shorter timeout to avoid blocking transaction processing during sync.
+      */
+    public static final int SYNC_RESPONSE_TIMEOUT = 4_000; // ms
+
     /**
      * Interval between PING messages to a peer. (ms)
      * <p>
      * Link Timeout is 3min. So under every 1min is good to keep Reticulum Links ACTIVE.
      */
     private static final int PING_INTERVAL = 55_000; // ms
+
+    /**
+     * Maximum time to wait for a peer to respond with blocks (ms)
+     */
+    public static final int FETCH_BLOCKS_TIMEOUT = 10000;
+
     //private static final long LINK_PING_INTERVAL = 55 * 1000L; // ms
     private byte[] messageMagic;  // set in message creating classes
     private Long lastPing = null;      // last (packet) ping roundtrip time [ms]
     private Long lastPingSent = null;  // time last (packet) ping was sent, or null if not started.
     @Setter(AccessLevel.PACKAGE) private Instant lastPingResponseReceived = null; // time last (packet) ping succeeded
     private Map<Integer, BlockingQueue<Message>> replyQueues;
+    private UUID peerConnectionId = UUID.randomUUID();
     private LinkedBlockingQueue<Message> pendingMessages;
     private boolean syncInProgress = false;
+    private final Object peerInfoLock = new Object();
+    //private String peersNodeId;
     private PeerData peerData;
+    private PeerCapabilities peerCapabilities;
     private long linkEstablishedTime = -1L; // equivalent of (tcpip) Peer 'handshakeComplete'
     // Versioning
     public static final Pattern VERSION_PATTERN = Pattern.compile(Controller.VERSION_PREFIX
@@ -170,6 +190,10 @@ public class ReticulumPeer implements Peer {
      */
     private Long peersConnectionTimestamp = null;
     /**
+     * Timestamp of when (socket was accepted, or) connected.
+     */
+    private Long connectionTimestamp = null;
+    /**
      * peer info
      */
     private String peersNodeId;
@@ -189,6 +213,18 @@ public class ReticulumPeer implements Peer {
     private final Map<MessageType, ReticulumPeer.MessageStats> sentMessageStats = new ConcurrentHashMap<>();
 
     /**
+     * Track last response of QDN assets to find nodes that have useful/maximum data
+     */
+    private Long lastValidUse = null;  // Note: not sure if we need this
+
+    /**
+     * Tracks download speeds for chunks received from this peer.
+     * Used to track when data was last received for peer selection optimization.
+     */
+    private PeerDownloadSpeedTracker downloadSpeedTracker = new PeerDownloadSpeedTracker();
+    private Long connectedTimestamp = null;
+
+    /**
      * Constructor for initiator peers
      */
     @PeerCtor("destination-hash")
@@ -205,7 +241,12 @@ public class ReticulumPeer implements Peer {
         this.pendingMessages = new LinkedBlockingQueue<>();
         this.peerAddress = new ReticulumPeerAddress(dhash);
         this.peerData = new PeerData(peerAddress,NTP.getTime(),"ReticulumPeer");
-        this.peerData.setPeerType(this.peerType);
+        this.peerData.setPeerMetaType(this.peerMetaType);
+
+        Long ntpTime = NTP.getTime();
+        long timestamp = (ntpTime != null) ? ntpTime : System.currentTimeMillis();
+        this.connectionTimestamp = timestamp;
+        this.lastValidUse = timestamp;
     }
 
     /**
@@ -234,7 +275,12 @@ public class ReticulumPeer implements Peer {
 
         this.peerAddress = new ReticulumPeerAddress(this.destinationHash);
         this.peerData = new PeerData(this.peerAddress, NTP.getTime(),"ReticulumPeer");
-        this.peerData.setPeerType(this.peerType);
+        this.peerData.setPeerMetaType(this.peerMetaType);
+
+        Long ntpTime = NTP.getTime();
+        long timestamp = (ntpTime != null) ? ntpTime : System.currentTimeMillis();
+        this.connectionTimestamp = timestamp;
+        this.lastValidUse = timestamp;
     }
 
     /** 
@@ -285,6 +331,39 @@ public class ReticulumPeer implements Peer {
     public int getRandomStreamId() {
         // Note: stream id must be between 0..16383
         return ThreadLocalRandom.current().nextInt(1, 16383);
+    }
+
+    public Object getPeerCapability(String capName) {
+        return peerCapabilities == null ? null : peerCapabilities.getCapability(capName);
+    }
+
+    //// TODO (?): a way to determine stuck buffer (change 'outBuffer' for Reticulum). Ref. IPPeer post version 6.1
+    //public boolean hasStuckWrite(long timeoutMs
+    //    // Only consider it stuck if there's actually data waiting to be written
+    //    if (this.outputBuffer == null || !this.outputBuffer.hasRemaining()) {
+    //        return false;
+    //    }
+
+    //    long elapsed = System.currentTimeMillis() - this.lastWriteProgressTime;
+    //    return elapsed > timeoutMs;
+    //}
+    //
+    //public String getStuckWriteInfo() {
+    //    if (this.outputBuffer == null) {
+    //        return null;
+    //    }
+    //    return String.format("type=%s, id=%d, remaining=%d bytes, stalled for %dms",
+    //            this.outputMessageType,
+    //            this.outputMessageId,
+    //            this.outputBuffer.remaining(),
+    //            System.currentTimeMillis() - this.lastWriteProgressTime);
+    //}
+    public void QDNUse() {
+        this.lastValidUse = NTP.getTime();
+    }
+
+    public long getLastQDNUse() {
+        return this.lastValidUse;
     }
 
     public void shutdownChannel() {
@@ -884,6 +963,7 @@ public class ReticulumPeer implements Peer {
                 log.debug("sendMessageWithTimeout - skipping: peerLink is null)");
                 return false;
             }
+            // TODO: Review and rewrite using sendQueue (see IPPeer)
             // send the message
             log.trace("Sending {} message with ID {} to peer {}", message.getType().name(), message.getId(), this);
             var peerBuffer = getOrInitPeerBuffer();
@@ -911,38 +991,56 @@ public class ReticulumPeer implements Peer {
         }
     }
 
-    public boolean sendMessageWithTimeoutNow(Message message, int timeout) {
-        if (nonNull(this.peerLink)) {
-            if (this.peerLink.getStatus() != ACTIVE) {
-                log.debug("sendMessageWithTimeoutNow - skipping: link not ready (status: {})", this.peerLink.getStatus());
-                return false;
-            }
-        } else {
-            log.debug("sendMessageWithTimeoutNow - skipping: peerLink is null)");
-            return false;
-        }
-        try {
-            // Queue message, to be picked up by ChannelWriteTask and then peer.writeChannel()
-            log.debug("Queuing {} message with ID {} to peer {}",
-                    message.getType().name(), message.getId(), this);
-
-            // Check message properly constructed
-            message.checkValidOutgoing();
-
-            // Possible race condition:
-            // We set OP_WRITE, EPC creates ChannelWriteTask which calls Peer.writeChannel, writeChannel's poll() finds no message to send
-            // Avoided by poll-with-timeout in writeChannel() above.
-            return this.sendQueue.tryTransfer(message, timeout, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            // Send failure
-            return false;
-        } catch (MessageException e) {
-            log.error(e.getMessage(), e);
-            return false;
-        }
+    /**
+     * Get the current size of the send queue.
+     *
+     * @return number of messages currently queued for sending
+     */
+    public int getSendQueueSize() {
+        return this.sendQueue.size();
     }
 
-    public Task getMessageTask() {
+    /**
+     * Get the capacity of the send queue.
+     *
+     * @return maximum number of messages that can be queued
+     */
+    public int getSendQueueCapacity() {
+        return this.sendQueue.remainingCapacity() + this.sendQueue.size();
+    }
+
+    //public boolean sendMessageWithTimeoutNow(Message message, int timeout) {
+    //    if (nonNull(this.peerLink)) {
+    //        if (this.peerLink.getStatus() != ACTIVE) {
+    //            log.debug("sendMessageWithTimeoutNow - skipping: link not ready (status: {})", this.peerLink.getStatus());
+    //            return false;
+    //        }
+    //    } else {
+    //        log.debug("sendMessageWithTimeoutNow - skipping: peerLink is null)");
+    //        return false;
+    //    }
+    //    try {
+    //        // Queue message, to be picked up by ChannelWriteTask and then peer.writeChannel()
+    //        log.debug("Queuing {} message with ID {} to peer {}",
+    //                message.getType().name(), message.getId(), this);
+    //
+    //        // Check message properly constructed
+    //        message.checkValidOutgoing();
+    //
+    //        // Possible race condition:
+    //        // We set OP_WRITE, EPC creates ChannelWriteTask which calls Peer.writeChannel, writeChannel's poll() finds no message to send
+    //        // Avoided by poll-with-timeout in writeChannel() above.
+    //        return this.sendQueue.tryTransfer(message, timeout, TimeUnit.MILLISECONDS);
+    //    } catch (InterruptedException e) {
+    //        // Send failure
+    //        return false;
+    //    } catch (MessageException e) {
+    //        log.error(e.getMessage(), e);
+    //        return false;
+    //    }
+    //}
+
+    public Task getMessageTask(int network) {
         /*
          * If our peerLink is not in ACTIVE node and there is a message yet to be
          * processed then don't produce another message task.
@@ -958,9 +1056,12 @@ public class ReticulumPeer implements Peer {
             return null;
         }
 
+        log.trace("[{}] Produced {} message task from peer {}", this.peerConnectionId,
+                nextMessage.getType().name(), this);
+
         // Return a task to process message in queue
         //return new ReticulumMessageTask(this, nextMessage);
-        return new MessageTask(this, nextMessage);
+        return new MessageTask(this, nextMessage, network);
     }
 
     /**
@@ -1006,6 +1107,16 @@ public class ReticulumPeer implements Peer {
         // ReticulumPeer state is not governed by the network.
         // Regardless we need to satisfy the Peer interface.
         return true;
+    }
+
+    /**
+     * Returns the download speed tracker for this peer.
+     * Used to track round-trip times for chunk downloads.
+     *
+     * @return the PeerDownloadSpeedTracker instance for download speed tracking
+     */
+    public PeerDownloadSpeedTracker getDownloadSpeedTracker() {
+        return downloadSpeedTracker;
     }
 
     public void startPings() {
@@ -1176,6 +1287,16 @@ public class ReticulumPeer implements Peer {
             this.peersVersion = version;
         //}
     }
+    public PeerCapabilities getPeersCapabilities() {
+        return this.peerCapabilities;
+    }
+
+    public void setPeersCapabilities(PeerCapabilities capabilities) {
+        synchronized (this.peerInfoLock) {
+            this.peerCapabilities = capabilities;
+        }
+    }
+
     public String getPeersNodeId() {
         //this.peersNodeId = RNS.getInstance().getServerIdentity().getHexHash();
         if (nonNull(this.peerLink)) {
@@ -1187,7 +1308,7 @@ public class ReticulumPeer implements Peer {
     public boolean isStopping() { return false; }
 
     public UUID getPeerConnectionId() {
-        return null;
+        return this.peerConnectionId;
     }
 
     public Long getPeersConnectionTimestamp() {
@@ -1195,8 +1316,8 @@ public class ReticulumPeer implements Peer {
             return this.peersConnectionTimestamp;
         //}
     }
-
-    public void setPeersConnectionTimestamp(long peersConnectionTimestamp) {
+    
+    public void setPeersConnectionTimestamp(Long peersConnectionTimestamp) {
         //synchronized (this.peerInfoLock) {
             this.peersConnectionTimestamp = peersConnectionTimestamp;
         //}
@@ -1257,6 +1378,77 @@ public class ReticulumPeer implements Peer {
         this.isPeerAvailable = b;
     }
 
+    /**
+     * Send a pre-serialized message to this peer.
+     *
+     * <p>This optimized method accepts pre-serialized message bytes, avoiding the
+     * need to call toBytes() again in writeChannel(). This is critical for the
+     * two-stage pipeline architecture where messages are pre-loaded from disk
+     * and serialized in parallel disk I/O threads.
+     *
+     * <p>Benefits:
+     * <ul>
+     *   <li>Eliminates redundant serialization (50-100ms saved per message)</li>
+     *   <li>Prevents redundant disk reads in relay scenarios</li>
+     *   <li>Enables true non-blocking network send path</li>
+     * </ul>
+     *
+     * @param messageId the message ID for tracking
+     * @param messageType the type of message
+     * @param serializedBytes complete pre-serialized message bytes
+     * @param timeout timeout in milliseconds (currently unused but kept for API consistency)
+     * @return true if message was queued successfully, false if queue is full
+     * @throws IOException if socket is closed or invalid
+     *
+     * @since v5.0.9
+     * @author Ice
+     * @author siddi
+     */
+    public boolean sendPreSerializedMessage(int messageId, MessageType messageType, byte[] serializedBytes, int timeout) throws IOException {
+        // TODO: implement for Reticulum (compare IPPeer implementation)
+        //...
+        return false;
+    }
+
+    /**
+     * Internal wrapper class for pre-serialized messages.
+     *
+     * <p>This lightweight Message subclass holds pre-serialized bytes and returns
+     * them directly from toBytes(), avoiding any disk I/O or serialization work.
+     *
+     * <p>This is used by the two-stage pipeline architecture where messages are
+     * pre-loaded and serialized in parallel disk I/O threads, then passed to
+     * sender threads for immediate network transmission.
+     *
+     * @since v5.0.9
+     * @author Ice
+     */
+    private static class PreSerializedMessageWrapper extends Message {
+        private final byte[] preSerializedBytes;
+
+        /**
+         * Constructs a wrapper for pre-serialized message bytes.
+         *
+         * @param messageId the message ID
+         * @param messageType the message type
+         * @param preSerializedBytes complete pre-serialized message bytes
+         */
+        PreSerializedMessageWrapper(int messageId, MessageType messageType, byte[] preSerializedBytes) {
+            super(messageId, messageType);
+            this.preSerializedBytes = preSerializedBytes;
+        }
+
+        /**
+         * Returns the pre-serialized bytes instantly without any disk I/O.
+         *
+         * @return the pre-serialized message bytes
+         */
+        @Override
+        public byte[] toBytes() throws MessageException {
+            // Return pre-serialized bytes instantly - zero disk I/O!
+            return preSerializedBytes;
+        }
+    }
     // end legacy Peer compatibility
 
 }

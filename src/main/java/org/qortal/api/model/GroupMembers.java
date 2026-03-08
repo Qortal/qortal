@@ -21,6 +21,8 @@ public class GroupMembers {
 		public String member;
 		public Long joined;
 		public Boolean isAdmin;
+		/** Primary registered name for this member address. Omitted if not set. */
+		public String primaryName;
 
 		// For JAX-RS
 		protected MemberInfo() {
@@ -30,6 +32,10 @@ public class GroupMembers {
 			this.member = member;
 			this.joined = joined;
 			this.isAdmin = isAdmin ? true : null; // null so field is not displayed by API
+		}
+
+		public void setPrimaryName(String primaryName) {
+			this.primaryName = primaryName;
 		}
 	}
 

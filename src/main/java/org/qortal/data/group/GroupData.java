@@ -43,6 +43,9 @@ public class GroupData {
 	// We abuse GroupData for API purposes by adding this unrelated field. Not always present.
 	private Boolean isAdmin;
 
+	/** Owner's primary registered name. API-only, not always present. */
+	private String ownerPrimaryName;
+
 	// Constructors
 
 	// necessary for JAX-RS serialization
@@ -170,6 +173,14 @@ public class GroupData {
 
 	public void setIsAdmin(boolean isAdmin) {
 		this.isAdmin = isAdmin;
+	}
+
+	public String getOwnerPrimaryName() {
+		return this.ownerPrimaryName;
+	}
+
+	public void setOwnerPrimaryName(String ownerPrimaryName) {
+		this.ownerPrimaryName = ownerPrimaryName;
 	}
 
 }

@@ -33,6 +33,18 @@ public class ArbitraryTransactionDataHashWrapper {
         return data;
     }
 
+    public int getService() {
+        return service;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public String getIdentifier() {
+        return identifier;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;

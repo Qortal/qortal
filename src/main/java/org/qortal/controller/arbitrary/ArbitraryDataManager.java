@@ -1,8 +1,24 @@
 package org.qortal.controller.arbitrary;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Random;
+import java.util.Set;
+import java.util.stream.Collectors;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.qortal.api.resource.TransactionsResource.ConfirmationStatus;
 import org.qortal.arbitrary.ArbitraryDataFile;
 import org.qortal.arbitrary.ArbitraryDataResource;
 import org.qortal.arbitrary.metadata.ArbitraryDataTransactionMetadata;
@@ -12,7 +28,7 @@ import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.event.DataMonitorEvent;
 import org.qortal.event.EventBus;
-import org.qortal.network.Network;
+import org.qortal.network.NetworkData;
 import org.qortal.network.Peer;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
@@ -25,13 +41,6 @@ import org.qortal.utils.Base58;
 import org.qortal.utils.ListUtils;
 import org.qortal.utils.NTP;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.*;
-import java.util.stream.Collectors;
-
 public class ArbitraryDataManager extends Thread {
 
 	private static final Logger LOGGER = LogManager.getLogger(ArbitraryDataManager.class);
@@ -42,10 +51,10 @@ public class ArbitraryDataManager extends Thread {
 	private int powDifficulty = 14; // Must not be final, as unit tests need to reduce this value
 
 	/** Request timeout when transferring arbitrary data */
-	public static final long ARBITRARY_REQUEST_TIMEOUT = 24 * 1000L; // ms
+	public static final long ARBITRARY_REQUEST_TIMEOUT = 12 * 1000L; // ms
 
 	/** Maximum time to hold information about an in-progress relay */
-	public static final long ARBITRARY_RELAY_TIMEOUT = 120 * 1000L; // ms
+	public static final long ARBITRARY_RELAY_TIMEOUT = 10 * 60 * 1000L; // 10 minutes (was 2 minutes)
 
 	/** Maximum time to hold direct peer connection information */
 	public static final long ARBITRARY_DIRECT_CONNECTION_INFO_TIMEOUT = 2 * 60 * 1000L; // ms
@@ -61,6 +70,9 @@ public class ArbitraryDataManager extends Thread {
 
 	private long lastDataFetchTime = 0L;
 	private static long DATA_FETCH_INTERVAL = 1 * 60 * 1000L;
+
+	private long lastCacheCleanupTime = 0L;
+	private static long CACHE_CLEANUP_INTERVAL = 1 * 60 * 1000L; // Clean up once per minute
 
 	private static ArbitraryDataManager instance;
 	private final Object peerDataLock = new Object();
@@ -118,7 +130,8 @@ public class ArbitraryDataManager extends Thread {
 				}
 
 				// Needs a mutable copy of the unmodifiableList
-				List<Peer> peers = new ArrayList<>(Network.getInstance().getImmutableHandshakedPeers());
+				List<Peer> peers = NetworkData.getInstance().getImmutableHandshakedPeers().stream()
+                        .collect(Collectors.toList());
 
 				// Disregard peers that have "misbehaved" recently
 				peers.removeIf(Controller.hasMisbehaved);
@@ -128,17 +141,19 @@ public class ArbitraryDataManager extends Thread {
 					continue;
 				}
 
-				// Fetch metadata
-				if (NTP.getTime() - lastMetadataFetchTime >= METADATA_FETCH_INTERVAL) {
-					this.fetchAllMetadata();
-					lastMetadataFetchTime = NTP.getTime();
-				}
+			// Fetch metadata
+			if (NTP.getTime() - lastMetadataFetchTime >= METADATA_FETCH_INTERVAL) {
+				this.fetchAllMetadata();
+				lastMetadataFetchTime = NTP.getTime();
+			}
 
-				// Check if we need to fetch any data
-				if (NTP.getTime() - lastDataFetchTime < DATA_FETCH_INTERVAL) {
-					// Nothing to do yet
-					continue;
-				}
+
+
+			// Check if we need to fetch any data
+			if (NTP.getTime() - lastDataFetchTime < DATA_FETCH_INTERVAL) {
+				// Nothing to do yet
+				continue;
+			}
 
 				// In case the data directory has been deleted...
 				this.createDataDirectory();
@@ -645,9 +660,7 @@ public class ArbitraryDataManager extends Thread {
 		this.arbitraryDataCachedResources.put(key, timestamp);
 	}
 
-	public void invalidateCache(ArbitraryTransactionData arbitraryTransactionData) {
-		String signature58 = Base58.encode(arbitraryTransactionData.getSignature());
-
+	public void invalidateCache(ArbitraryTransactionData arbitraryTransactionData, boolean hasAllFiles) {
 		if (arbitraryTransactionData.getName() != null && arbitraryTransactionData.getService() != null) {
 			String resourceId = arbitraryTransactionData.getName().toLowerCase();
 			Service service = arbitraryTransactionData.getService();
@@ -668,8 +681,12 @@ public class ArbitraryDataManager extends Thread {
 				buildManager.arbitraryDataFailedBuilds.remove(key);
 			}
 
-			// Remove from the signature requests list now that we have all files for this signature
-			ArbitraryDataFileListManager.getInstance().removeFromSignatureRequests(signature58);
+			if( hasAllFiles ) {
+				String signature58 = Base58.encode(arbitraryTransactionData.getSignature());
+
+				// Remove from the signature requests list now that we have all files for this signature
+				ArbitraryDataFileListManager.getInstance().removeFromSignatureRequests(signature58);
+			}
 
 			// Delete cached files themselves
 			try {

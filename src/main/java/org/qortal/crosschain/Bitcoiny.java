@@ -1,6 +1,5 @@
 package org.qortal.crosschain;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.hash.HashCode;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -8,6 +7,8 @@ import org.bitcoinj.core.*;
 import org.bitcoinj.crypto.ChildNumber;
 import org.bitcoinj.crypto.DeterministicHierarchy;
 import org.bitcoinj.crypto.DeterministicKey;
+import org.bitcoinj.params.AbstractBitcoinNetParams;
+import org.bitcoinj.script.Script;
 import org.bitcoinj.script.Script.ScriptType;
 import org.bitcoinj.script.ScriptBuilder;
 import org.bitcoinj.wallet.DeterministicKeyChain;
@@ -32,7 +33,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /** Bitcoin-like (Bitcoin, Litecoin, etc.) support */
-public abstract class Bitcoiny implements ForeignBlockchain {
+public abstract class Bitcoiny extends AbstractBitcoinNetParams implements ForeignBlockchain {
 
 	protected static final Logger LOGGER = LogManager.getLogger(Bitcoiny.class);
 
@@ -81,6 +82,7 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 	// Constructors and instance
 
 	protected Bitcoiny(BitcoinyBlockchainProvider blockchainProvider, Context bitcoinjContext, String currencyCode, Coin feePerKb) {
+		this.genesisBlock = this.getGenesisBlock();
 		this.blockchainProvider = blockchainProvider;
 		this.bitcoinjContext = bitcoinjContext;
 		this.currencyCode = currencyCode;
@@ -90,6 +92,15 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 	}
 
 	// Getters & setters
+	@Override
+	public String getPaymentProtocolId() {
+		return this.id;
+	}
+
+	@Override
+	public Block getGenesisBlock() {
+		return this.genesisBlock;
+	}
 
 	public BitcoinyBlockchainProvider getBlockchainProvider() {
 		return this.blockchainProvider;
@@ -241,6 +252,13 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 			unspentTransactionOutputs.add( getTransactionOutput(unspentOutput));
 		}
 
+		long missingCount = unspentTransactionOutputs.stream().filter(Optional::isEmpty).count();
+		if (missingCount > 0) {
+			throw new ForeignBlockchainException(String.format(
+					"Failed to resolve %d/%d unspent outputs for %s",
+					missingCount, unspentOutputs.size(), base58Address));
+		}
+
 		return unspentTransactionOutputs.stream().filter(Optional::isPresent)
 				.map(Optional::get)
 				.collect(Collectors.toList());
@@ -284,16 +302,14 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 	 */
 	private Optional<UTXO> buildUTXO(boolean coinbase, UnspentOutput unspentOutput)  {
 		try {
-			List<TransactionOutput> transactionOutputs = getOutputs(unspentOutput.hash);
-
-			TransactionOutput transactionOutput = transactionOutputs.get(unspentOutput.index);
+			Script scriptPubKey = this.getScriptPubKey(unspentOutput);
 
 			UTXO utxo = new UTXO(Sha256Hash.wrap(unspentOutput.hash), unspentOutput.index,
 					Coin.valueOf(unspentOutput.value), unspentOutput.height, coinbase,
-					transactionOutput.getScriptPubKey());
+					scriptPubKey);
 
 			return Optional.of(utxo);
-		} catch (ForeignBlockchainException e) {
+		} catch (Exception e) {
 			LOGGER.warn(e.getMessage());
 			return Optional.empty();
 		}
@@ -310,13 +326,79 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 	 */
 	private Optional<TransactionOutput> getTransactionOutput(UnspentOutput unspentOutput)  {
 		try {
-			List<TransactionOutput> transactionOutputs = this.getOutputs(unspentOutput.hash);
+			List<TransactionOutput> outputs = this.getOutputs(unspentOutput.hash);
+			if (unspentOutput.index < 0 || unspentOutput.index >= outputs.size()) {
+				LOGGER.error("Output index {} out of range for transaction {} ({} outputs)",
+						unspentOutput.index, HashCode.fromBytes(unspentOutput.hash), outputs.size());
+				return Optional.empty();
+			}
 
-			TransactionOutput transactionOutput = transactionOutputs.get(unspentOutput.index);
+			TransactionOutput transactionOutput = outputs.get(unspentOutput.index);
+
+			// Sanity-check provider UTXO metadata against raw tx decode so we fail early on inconsistencies.
+			if (transactionOutput.getValue().value != unspentOutput.value) {
+				LOGGER.error("UTXO value mismatch for {}:{} (provider={}, rawTx={})",
+						HashCode.fromBytes(unspentOutput.hash), unspentOutput.index,
+						unspentOutput.value, transactionOutput.getValue().value);
+				return Optional.empty();
+			}
+
+			if (unspentOutput.script != null) {
+				byte[] outputScript = transactionOutput.getScriptPubKey().getProgram();
+				if (!Arrays.equals(unspentOutput.script, outputScript)) {
+					LOGGER.error("UTXO script mismatch for {}:{}",
+							HashCode.fromBytes(unspentOutput.hash), unspentOutput.index);
+					return Optional.empty();
+				}
+			}
+
 			return Optional.of(transactionOutput);
-		} catch (ForeignBlockchainException e) {
+		} catch (Exception e) {
 			LOGGER.error(e.getMessage(), e);
 			return Optional.empty();
+		}
+	}
+
+	/**
+	 * Returns scriptPubKey for an unspent output.
+	 * <p>
+	 * Uses script data directly if available. Otherwise tries raw tx deserialization, and if that fails,
+	 * falls back to provider transaction metadata (e.g. Electrum verbose transaction output script).
+	 */
+	private Script getScriptPubKey(UnspentOutput unspentOutput) throws ForeignBlockchainException {
+		if (unspentOutput.script != null)
+			return new Script(unspentOutput.script);
+
+		try {
+			List<TransactionOutput> transactionOutputs = this.getOutputs(unspentOutput.hash);
+			if (unspentOutput.index < 0 || unspentOutput.index >= transactionOutputs.size()) {
+				throw new ForeignBlockchainException(String.format("Output index %d out of range for transaction %s",
+						unspentOutput.index, HashCode.fromBytes(unspentOutput.hash)));
+			}
+
+			return transactionOutputs.get(unspentOutput.index).getScriptPubKey();
+		} catch (ForeignBlockchainException | RuntimeException e) {
+			String txHash = HashCode.fromBytes(unspentOutput.hash).toString();
+			LOGGER.debug("Raw transaction decode failed for {}. Falling back to provider metadata: {}", txHash, e.getMessage());
+
+			BitcoinyTransaction transaction = this.blockchainProvider.getTransaction(txHash);
+			if (transaction.outputs == null || unspentOutput.index < 0 || unspentOutput.index >= transaction.outputs.size()) {
+				throw new ForeignBlockchainException(String.format("Output index %d out of range for transaction %s",
+						unspentOutput.index, txHash));
+			}
+
+			String scriptPubKeyHex = transaction.outputs.get(unspentOutput.index).scriptPubKey;
+			if (scriptPubKeyHex == null || scriptPubKeyHex.isEmpty()) {
+				throw new ForeignBlockchainException(String.format("Missing scriptPubKey for output %d of transaction %s",
+						unspentOutput.index, txHash));
+			}
+
+			try {
+				return new Script(HashCode.fromString(scriptPubKeyHex).asBytes());
+			} catch (IllegalArgumentException e2) {
+				throw new ForeignBlockchainException(String.format("Invalid scriptPubKey for output %d of transaction %s: %s",
+						unspentOutput.index, txHash, e2.getMessage()));
+			}
 		}
 	}
 
@@ -328,11 +410,24 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 	 */
 	// TODO: don't return bitcoinj-based objects like TransactionOutput, use BitcoinyTransaction.Output instead
 	public List<TransactionOutput> getOutputs(byte[] txHash) throws ForeignBlockchainException {
-		byte[] rawTransactionBytes = this.blockchainProvider.getRawTransaction(txHash);
+		Exception lastException = null;
 
-		Context.propagate(bitcoinjContext);
-		Transaction transaction = new Transaction(this.params, rawTransactionBytes);
-		return transaction.getOutputs();
+		for (int retry = 0; retry <= RETRIES; retry++) {
+			try {
+				byte[] rawTransactionBytes = this.blockchainProvider.getRawTransaction(txHash);
+
+				Context.propagate(bitcoinjContext);
+				Transaction transaction = new Transaction(this.params, rawTransactionBytes);
+				return transaction.getOutputs();
+			} catch (ForeignBlockchainException | RuntimeException e) {
+				lastException = e;
+			}
+		}
+
+		String message = String.format("Unable to deserialize raw transaction %s: %s",
+				HashCode.fromBytes(txHash),
+				lastException == null ? "unknown error" : lastException.getMessage());
+		throw new ForeignBlockchainException(message);
 	}
 
 	/**
@@ -530,21 +625,14 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 		Set<String> walletAddresses = this.getWalletAddressesWithExecutor(key58, EXECUTOR);
 
 		try {
-			List<Supplier<Optional<List<TransactionOutput>>>> suppliers = new ArrayList<>();
+			List<Supplier<Optional<Long>>> suppliers = new ArrayList<>();
 
 			for (String address : walletAddresses) {
-				suppliers.add(() -> getTransactionOutputsFromAddress(address));
+				suppliers.add(() -> getUnspentValueFromAddress(address));
 			}
 
-			// Parallel fetch of unspent outputs per address
-			List<TransactionOutput> unspentOutputs = getTransactionOutputsFromSuppliers(suppliers, EXECUTOR, RETRIES);
-
-			// Sum up the available unspent outputs
-			for (TransactionOutput unspentOutput : unspentOutputs) {
-				if (unspentOutput.isAvailableForSpending()) {
-					balance += unspentOutput.getValue().value;
-				}
-			}
+			// Parallel fetch of unspent values per address
+			balance += getUnspentValueFromSuppliers(suppliers, EXECUTOR, RETRIES);
 		} catch (Exception e) {
 			LOGGER.error("Unexpected error in getWalletBalance: {}", e.getMessage(), e);
 		}
@@ -552,37 +640,24 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 		return balance;
 	}
 
-	/**
-	 * Get Transaction Outputs From Suppliers
-	 *
-	 * @param suppliers the suppliers
-	 * @param executor the executor
-	 * @param retries the number of retries to allow in case of failure
-	 *
-	 * @return the transaction outputs supplied
-	 *
-	 * @throws ForeignBlockchainException
-	 * @throws ExecutionException
-	 * @throws InterruptedException
-	 */
-	private static List<TransactionOutput> getTransactionOutputsFromSuppliers(
-			List<Supplier<Optional<List<TransactionOutput>>>> suppliers,
+	private static long getUnspentValueFromSuppliers(
+			List<Supplier<Optional<Long>>> suppliers,
 			ExecutorService executor,
 			int retries) throws ForeignBlockchainException, ExecutionException, InterruptedException {
 
-		List<TransactionOutput> unspentOutputs = new ArrayList<>();
+		long totalValue = 0L;
 
 		// for recursion if necessary
-		List<Supplier<Optional<List<TransactionOutput>>>> suppliersToRetry = new ArrayList<>(suppliers.size());
+		List<Supplier<Optional<Long>>> suppliersToRetry = new ArrayList<>(suppliers.size());
 
-		Map<Integer, Supplier<Optional<List<TransactionOutput>>>> supplierMap = new HashMap<>(suppliers.size());
-		Map<Integer, Future<Optional<List<TransactionOutput>>>> futureMap = new HashMap<>(suppliers.size());
+		Map<Integer, Supplier<Optional<Long>>> supplierMap = new HashMap<>(suppliers.size());
+		Map<Integer, Future<Optional<Long>>> futureMap = new HashMap<>(suppliers.size());
 
 		int index = 0;
 
-		for (Supplier<Optional<List<TransactionOutput>>> supplier : suppliers) {
+		for (Supplier<Optional<Long>> supplier : suppliers) {
 
-			Future<Optional<List<TransactionOutput>>> future = executor.submit(() -> supplier.get());
+			Future<Optional<Long>> future = executor.submit(() -> supplier.get());
 
 			supplierMap.put(index, supplier);
 			futureMap.put(index, future);
@@ -593,13 +668,13 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 		final int count = index;
 
 		for( index = 0; index < count; index++) {
-			Future<Optional<List<TransactionOutput>>> future = futureMap.get(index);
+			Future<Optional<Long>> future = futureMap.get(index);
 
 			try {
-				Optional<List<TransactionOutput>> transactionOutputs = future.get(TIMEOUT, TimeUnit.SECONDS);
+				Optional<Long> value = future.get(TIMEOUT, TimeUnit.SECONDS);
 
-				if (transactionOutputs.isPresent()) {
-					unspentOutputs.addAll(transactionOutputs.get());
+				if (value.isPresent()) {
+					totalValue += value.get();
 				} else {
 					suppliersToRetry.add(supplierMap.get(index));
 				}
@@ -608,37 +683,32 @@ public abstract class Bitcoiny implements ForeignBlockchain {
 			}
 		}
 
-		// ensure nothing additional is processed
-		for( Future<Optional<List<TransactionOutput>>> future: futureMap.values()) {
-			future.cancel(false);
+		for( Future<Optional<Long>> future: futureMap.values()) {
+			future.cancel(true);
 		}
 
-		// if there are suppliers that failed, retry if allowed
 		if( !suppliersToRetry.isEmpty() ) {
 
 			if( retries > 0 ) {
-				unspentOutputs.addAll(getTransactionOutputsFromSuppliers(suppliersToRetry, executor, retries - 1));
+				totalValue += getUnspentValueFromSuppliers(suppliersToRetry, executor, retries - 1);
 			}
 			else {
 				throw new ForeignBlockchainException("can't get all address infos");
 			}
 		}
 
-		return unspentOutputs;
+		return totalValue;
 	}
 
-	/**
-	 * Get Transaction Outputs From Address
-	 *
-	 * @param address the address
-	 *
-	 * @return the transaction outputs
-	 */
-	private Optional<List<TransactionOutput>> getTransactionOutputsFromAddress(String address) {
+	private Optional<Long> getUnspentValueFromAddress(String address) {
 		try {
-			return Optional.of(this.getUnspentOutputs(address, true));
+			long value = this.blockchainProvider.getUnspentOutputs(address, true)
+					.stream()
+					.mapToLong(unspentOutput -> unspentOutput.value)
+					.sum();
+			return Optional.of(value);
 		} catch (Exception e) {
-			LOGGER.warn("Failed to fetch outputs for address {}", address);
+			LOGGER.warn("Failed to fetch unspent value for address {}: {}", address, e.getMessage());
 			return Optional.empty();
 		}
 	}
@@ -775,7 +845,7 @@ public List<SimpleTransaction> getWalletTransactions(String key58) throws Foreig
 		}
 
 		for( Future<Optional<BitcoinyTransaction>> future: futureMap.values()) {
-			future.cancel(false);
+			future.cancel(true);
 		}
 
 		if( !suppliersToRetry.isEmpty() ) {
@@ -952,7 +1022,7 @@ public List<SimpleTransaction> getWalletTransactions(String key58) throws Foreig
 			}
 
 			for( Future<Optional<AddressInfo>> future: futureMap.values()) {
-				future.cancel(false);
+				future.cancel(true);
 			}
 
 			if( !suppliersToRetry.isEmpty() ) {
@@ -999,9 +1069,19 @@ public List<SimpleTransaction> getWalletTransactions(String key58) throws Foreig
 		}
 	}
 
-	private static  List<Integer> toIntegerList(ImmutableList<ChildNumber> path) {
+	/**
+	 * Convert BitcoinJ key path type to a simple integer list.
+	 *
+	 * Accepts both older and newer bitcoinj path implementations.
+	 */
+	private static List<Integer> toIntegerList(Iterable<ChildNumber> path) {
+		List<Integer> integers = new ArrayList<>();
 
-		return path.stream().map(ChildNumber::num).collect(Collectors.toList());
+		for (ChildNumber childNumber : path) {
+			integers.add(childNumber.num());
+		}
+
+		return integers;
 	}
 
 	public Set<String> getWalletAddresses(String key58) throws ForeignBlockchainException {
@@ -1208,7 +1288,7 @@ public List<SimpleTransaction> getWalletTransactions(String key58) throws Foreig
 			}
 
 			for( Future<Boolean> future: futureMap.values()) {
-				future.cancel(false);
+				future.cancel(true);
 			}
 		} catch (Exception e) {
 			throw new ForeignBlockchainException(e.getMessage());
@@ -1247,9 +1327,12 @@ public List<SimpleTransaction> getWalletTransactions(String key58) throws Foreig
 				this.blockchainCache.addKeyWithHistory(dKey);
 				return true;
 			}
-		}
-		catch (ForeignBlockchainException e) {
-			LOGGER.warn(e.getMessage());
+		} catch (ForeignBlockchainException e) {
+			if ("Interrupted while waiting for ElectrumX connection".equals(e.getMessage())) {
+				LOGGER.debug(e.getMessage());
+			} else {
+				LOGGER.warn(e.getMessage());
+			}
 		}
 
 		return false;
@@ -1635,7 +1718,7 @@ public List<SimpleTransaction> getWalletTransactions(String key58) throws Foreig
 		}
 
 		for( Future<Optional<UTXO>> future: futureMap.values()) {
-			future.cancel(false);
+			future.cancel(true);
 		}
 
 		if( !suppliersToRetry.isEmpty() ) {
@@ -1652,9 +1735,8 @@ public List<SimpleTransaction> getWalletTransactions(String key58) throws Foreig
 	}
 
 	private Long summingUnspentOutputs(String walletAddress) throws ForeignBlockchainException {
-		return this.getUnspentOutputs(walletAddress, true).stream()
-				.map(TransactionOutput::getValue)
-				.mapToLong(Coin::longValue)
+		return this.blockchainProvider.getUnspentOutputs(walletAddress, true).stream()
+				.mapToLong(unspentOutput -> unspentOutput.value)
 				.sum();
 	}
 

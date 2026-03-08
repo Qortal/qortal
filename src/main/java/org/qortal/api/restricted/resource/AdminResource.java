@@ -21,6 +21,7 @@ import org.qortal.account.Account;
 import org.qortal.account.PrivateKeyAccount;
 import org.qortal.api.*;
 import org.qortal.api.model.ActivitySummary;
+import org.qortal.api.model.CertificateSanInfo;
 import org.qortal.api.model.NodeInfo;
 import org.qortal.api.model.NodeStatus;
 import org.qortal.block.BlockChain;
@@ -32,30 +33,40 @@ import org.qortal.controller.Synchronizer.SynchronizationResult;
 import org.qortal.controller.repository.BlockArchiveRebuilder;
 import org.qortal.data.account.MintingAccountData;
 import org.qortal.data.account.RewardShareData;
-import org.qortal.data.system.DbConnectionInfo;
 import org.qortal.network.Network;
 import org.qortal.network.Peer;
 import org.qortal.network.PeerAddress;
 import org.qortal.network.PeerAddressFactory;
 import org.qortal.repository.ReindexManager;
 import org.qortal.repository.DataException;
+import org.qortal.repository.ReindexManager;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
 import org.qortal.settings.Settings;
 import org.qortal.data.system.SystemInfo;
 import org.qortal.utils.Base58;
 import org.qortal.utils.NTP;
+import org.qortal.utils.SslUtils;
+import org.bouncycastle.util.io.pem.PemObject;
+import org.bouncycastle.util.io.pem.PemWriter;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.StringWriter;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.security.KeyStore;
+import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -72,6 +83,177 @@ public class AdminResource {
 
 	@Context
 	HttpServletRequest request;
+
+	/** Alias of the server key entry in the SSL keystore (must match SslUtils). */
+	private static final String SSL_KEYSTORE_ALIAS = "server";
+
+	@POST
+	@Path("/http/createca")
+	@Operation(
+			summary = "Create a new local root CA",
+			description = "Generates and saves a new root CA certificate and key, then restarts the API service to apply the new certificate.",
+			responses = {
+					@ApiResponse(
+							description = "CA created successfully",
+							content = @Content(mediaType = MediaType.TEXT_PLAIN, schema = @Schema(type = "string"))
+					)
+			}
+	)
+	@ApiErrors({ApiError.INVALID_DATA, ApiError.REPOSITORY_ISSUE})
+	@SecurityRequirement(name = "apiKey")
+	public String createCA(@HeaderParam(Security.API_KEY_HEADER) String apiKey) {
+		Security.checkApiCallAllowed(request);
+		try {
+			// Generate new SSL certificate
+			SslUtils.generateSsl();
+			
+			// Restart API service in a background thread to apply the new certificate
+			// This allows the current request to complete before the restart happens
+			new Thread(() -> {
+				try {
+					// Give the response time to be sent back to the client
+					Thread.sleep(500);
+					LOGGER.info("Restarting API service to apply new SSL certificate...");
+					ApiService apiService = ApiService.getInstance();
+					try {
+						apiService.restart();
+					} catch (Exception e) {
+						LOGGER.warn("First restart attempt failed ({}), retrying after 2s: {}", e.getMessage(), e);
+						Thread.sleep(2000);
+						apiService.start();
+					}
+					LOGGER.info("API service restarted successfully with new SSL certificate");
+				} catch (Exception e) {
+					LOGGER.error("Failed to restart API service after certificate generation. API may be down. Restart the node to recover: {}", e.getMessage(), e);
+				}
+			}, "SSL-Cert-Restart").start();
+			
+			return "CA and server certificate created successfully. API service will restart in a moment to apply the new certificate.";
+		} catch (Exception e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_DATA, e);
+		}
+	}
+
+	@GET
+	@Path("/http/getca")
+	@Operation(
+			summary = "Get the local root CA certificate",
+			description = "Returns the root CA certificate in PEM format.",
+			responses = {
+					@ApiResponse(
+							description = "The root CA certificate",
+							content = @Content(mediaType = MediaType.TEXT_PLAIN, schema = @Schema(type = "string"))
+					)
+			}
+	)
+	public String getCA() {
+		String keystorePathname = Settings.getInstance().getSslKeystorePathname();
+		String keystorePassword = Settings.getInstance().getSslKeystorePassword();
+		if (keystorePathname == null || keystorePassword == null) {
+			return "CA certificate not found.";
+		}
+		java.nio.file.Path keystorePath = Paths.get(keystorePathname);
+		if (!Files.isReadable(keystorePath)) {
+			return "CA certificate not found.";
+		}
+		try {
+			KeyStore keyStore = KeyStore.getInstance("PKCS12", "BC");
+			try (FileInputStream fis = new FileInputStream(keystorePath.toFile())) {
+				keyStore.load(fis, keystorePassword.toCharArray());
+			}
+			if (!keyStore.containsAlias(SSL_KEYSTORE_ALIAS)) {
+				return "CA certificate not found.";
+			}
+			Certificate[] chain = keyStore.getCertificateChain(SSL_KEYSTORE_ALIAS);
+			if (chain == null || chain.length < 2) {
+				return "CA certificate not found.";
+			}
+			// Root CA is the last certificate in the chain (same order as TLS server sends).
+			X509Certificate caCert = (X509Certificate) chain[chain.length - 1];
+			StringWriter sw = new StringWriter();
+			try (PemWriter pw = new PemWriter(sw)) {
+				pw.writeObject(new PemObject("CERTIFICATE", caCert.getEncoded()));
+			}
+			return sw.toString();
+		} catch (Exception e) {
+			LOGGER.debug("Could not read CA from keystore: {}", e.getMessage());
+			return "CA certificate not found.";
+		}
+	}
+
+	@GET
+	@Path("/http/san")
+	@Operation(
+			summary = "Get SSL certificate Subject Alternative Names",
+			description = "Returns the DNS names and IP addresses the current server certificate is valid for (SAN list).",
+			responses = {
+					@ApiResponse(
+							description = "SAN list (dns and ip arrays)",
+							content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = CertificateSanInfo.class))
+					)
+			}
+	)
+	public CertificateSanInfo getCertificateSan() {
+		List<String> dns = new ArrayList<>();
+		List<String> ip = new ArrayList<>();
+		String keystorePathname = Settings.getInstance().getSslKeystorePathname();
+		String keystorePassword = Settings.getInstance().getSslKeystorePassword();
+		if (keystorePathname == null || keystorePassword == null) {
+			return new CertificateSanInfo(dns, ip);
+		}
+		java.nio.file.Path keystorePath = Paths.get(keystorePathname);
+		if (!Files.isReadable(keystorePath)) {
+			return new CertificateSanInfo(dns, ip);
+		}
+		try {
+			KeyStore keyStore = KeyStore.getInstance("PKCS12", "BC");
+			try (FileInputStream fis = new FileInputStream(keystorePath.toFile())) {
+				keyStore.load(fis, keystorePassword.toCharArray());
+			}
+			if (!keyStore.containsAlias(SSL_KEYSTORE_ALIAS)) {
+				return new CertificateSanInfo(dns, ip);
+			}
+			Certificate[] chain = keyStore.getCertificateChain(SSL_KEYSTORE_ALIAS);
+			if (chain == null || chain.length < 1) {
+				return new CertificateSanInfo(dns, ip);
+			}
+			X509Certificate serverCert = (X509Certificate) chain[0];
+			Collection<?> sanCollection = serverCert.getSubjectAlternativeNames();
+			if (sanCollection != null) {
+				for (Object item : sanCollection) {
+					if (!(item instanceof List)) continue;
+					List<?> pair = (List<?>) item;
+					if (pair.size() < 2) continue;
+					Integer type = (Integer) pair.get(0);
+					Object value = pair.get(1);
+				if (type == null || value == null) continue;
+				if (type == 2) {
+					dns.add(value.toString());
+				} else if (type == 7) {
+					// Handle both byte[] (standard ASN.1 OCTET STRING) and String formats
+					try {
+						if (value instanceof byte[]) {
+							// Standard format: byte array representation of IP address
+							ip.add(InetAddress.getByAddress((byte[]) value).getHostAddress());
+						} else if (value instanceof String) {
+							// Alternative format: IP address already as string
+							String ipStr = (String) value;
+							if (!ipStr.isEmpty()) {
+								ip.add(ipStr);
+							}
+						}
+					} catch (Exception e) {
+						LOGGER.trace("Could not parse SAN IP: {}", e.getMessage());
+					}
+				}
+				}
+			}
+			return new CertificateSanInfo(dns, ip);
+		} catch (Exception e) {
+			LOGGER.debug("Could not read SAN from keystore: {}", e.getMessage());
+			return new CertificateSanInfo(dns, ip);
+		}
+	}
 
 	@GET
 	@Path("/unused")

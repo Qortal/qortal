@@ -191,7 +191,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 
 						// Check to see if we should be hosting data for this transaction at all
 						if (!storageManager.canStoreData(arbitraryTransactionData)) {
-							LOGGER.info("Deleting transaction {} because we can't host its data",
+							LOGGER.debug("Deleting transaction {} because we can't host its data",
 									Base58.encode(arbitraryTransactionData.getSignature()));
 							ArbitraryTransactionUtils.deleteCompleteFileAndChunks(arbitraryTransactionData);
 
@@ -214,7 +214,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 							// There is a more recent PUT transaction than the one we are currently processing.
 							// When a PUT is issued, it replaces any layers that would have been there before.
 							// Therefore any data relating to this older transaction is no longer needed.
-							LOGGER.info(String.format("Newer PUT found for %s %s since transaction %s. " +
+							LOGGER.debug(String.format("Newer PUT found for %s %s since transaction %s. " +
 											"Deleting all files associated with the earlier transaction.", arbitraryTransactionData.getService(),
 									arbitraryTransactionData.getName(), Base58.encode(arbitraryTransactionData.getSignature())));
 
@@ -467,7 +467,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 					}
 				}
 
-				LOGGER.info("Deleting random file {} because we have reached max storage capacity...", randomItem.toString());
+				LOGGER.debug("Deleting random file {} because we have reached max storage capacity...", randomItem.toString());
 				fireRandomItemDeletionNotification(randomItem, repository, "Deleting random file, because we have reached max storage capacity");
 				boolean success = randomItem.delete();
 				if (success) {
@@ -602,7 +602,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 		}
 
 		String baseDir = Settings.getInstance().getTempDataPath();
-		Path readerNameCachePath = Paths.get(baseDir, "reader", "NAME", name);
+		Path readerNameCachePath = Paths.get(baseDir, "reader", "NAME", StringUtils.sanitizeString(name));
 
 		// Loop through the contents and check each one
 		final File[] directories = readerNameCachePath.toFile().listFiles();
@@ -623,7 +623,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 			return;
 		}
 
-		Path readerNameServiceCachePath = Paths.get("reader", "NAME", name, service);
+		Path readerNameServiceCachePath = Paths.get("reader", "NAME", StringUtils.sanitizeString(name), service);
 		Long expiry = Settings.getInstance().getBuiltDataExpiryInterval();
 		this.cleanupTempDirectory(readerNameServiceCachePath.toString(), now, expiry);
 	}
@@ -647,7 +647,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 	}
 
 	private boolean safeDeleteDirectory(File directory, String reason) {
-		LOGGER.info("Deleting directory {} due to reason: {}", directory, reason);
+		LOGGER.debug("Deleting directory {} due to reason: {}", directory, reason);
 		try {
 			FilesystemUtils.safeDeleteDirectory(directory.toPath(), true);
 			return true;

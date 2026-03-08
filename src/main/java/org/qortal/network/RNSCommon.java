@@ -44,7 +44,7 @@ public class RNSCommon {
     /**
      * Qortal Peer Type
      */
-    public enum PeerType {
+    public enum PeerMetaType {
         IP,
         RETICULUM;
     }

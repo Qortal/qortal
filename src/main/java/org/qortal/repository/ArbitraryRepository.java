@@ -31,6 +31,8 @@ public interface ArbitraryRepository {
 
 	List<ArbitraryTransactionData> getLatestArbitraryTransactionsByName(String name) throws DataException;
 
+	public ArbitraryTransactionData getSingleTransactionBySignature(byte[] signature) throws DataException;
+
 	public ArbitraryTransactionData getInitialTransaction(String name, Service service, Method method, String identifier) throws DataException;
 
 	public ArbitraryTransactionData getLatestTransaction(String name, Service service, Method method, String identifier) throws DataException;
@@ -41,6 +43,8 @@ public interface ArbitraryRepository {
 	// Resource related
 
 	public ArbitraryResourceData getArbitraryResource(Service service, String name, String identifier) throws DataException;
+
+	public byte[] getLatestSignature(Service service, String name, String identifier) throws DataException;
 
 	public List<ArbitraryResourceData> getArbitraryResources(Integer limit, Integer offset, Boolean reverse) throws DataException;
 

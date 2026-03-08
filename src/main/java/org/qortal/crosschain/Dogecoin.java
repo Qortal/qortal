@@ -1,19 +1,19 @@
 package org.qortal.crosschain;
 
-import org.bitcoinj.core.Coin;
-import org.bitcoinj.core.Context;
-import org.bitcoinj.core.NetworkParameters;
-import org.libdohj.params.DogecoinMainNetParams;
-import org.libdohj.params.DogecoinTestNet3Params;
-import org.qortal.crosschain.ElectrumX.Server;
-import org.qortal.crosschain.ChainableServer.ConnectionType;
-import org.qortal.settings.Settings;
-
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
+
+import org.bitcoinj.core.Coin;
+import org.bitcoinj.core.Context;
+import org.bitcoinj.core.NetworkParameters;
+import org.libdohj.params.DogecoinMainNetParams;
+import org.libdohj.params.DogecoinTestNet3Params;
+import org.qortal.crosschain.ChainableServer.ConnectionType;
+import org.qortal.crosschain.ElectrumX.Server;
+import org.qortal.settings.Settings;
 
 public class Dogecoin extends Bitcoiny {
 
@@ -141,7 +141,7 @@ public class Dogecoin extends Bitcoiny {
 	}
 
 	public static synchronized Dogecoin getInstance() {
-		if (instance == null) {
+		if (instance == null && Settings.getInstance().isWalletEnabled("DOGE")) {
 			DogecoinNet dogecoinNet = Settings.getInstance().getDogecoinNet();
 
 			BitcoinyBlockchainProvider electrumX = new ElectrumX("Dogecoin-" + dogecoinNet.name(), dogecoinNet.getGenesisHash(), dogecoinNet.getServers(), DEFAULT_ELECTRUMX_PORTS);

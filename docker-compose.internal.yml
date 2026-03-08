@@ -1,0 +1,20 @@
+services:
+  qortal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${QORTAL_CONTAINER_NAME:-qortal-core}
+    restart: unless-stopped
+    expose:
+      - "${QORTAL_API_PORT:-12391}"
+      - "${QORTAL_P2P_PORT:-12392}"
+      - "${QORTAL_QDN_PORT:-12394}"
+    volumes:
+      - ./data/qortal:/qortal
+    networks:
+      - qortal_net
+
+networks:
+  qortal_net:
+    name: ${QORTAL_NETWORK_NAME:-qortal-net}
+    driver: bridge

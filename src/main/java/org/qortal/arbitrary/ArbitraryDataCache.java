@@ -126,20 +126,10 @@ public class ArbitraryDataCache {
 
     private byte[] fetchLatestTransactionSignature() {
         try (final Repository repository = RepositoryManager.getRepository()) {
-
-            // Find latest transaction for name and service, with any method
-            ArbitraryTransactionData latestTransaction = repository.getArbitraryRepository()
-                    .getLatestTransaction(this.resourceId, this.service, null, this.identifier);
-
-            if (latestTransaction != null) {
-                return latestTransaction.getSignature();
-            }
-
+            return repository.getArbitraryRepository().getLatestSignature(this.service, this.resourceId, this.identifier);
         } catch (DataException e) {
             return null;
         }
-
-        return null;
     }
 
     private byte[] fetchCachedSignature() {
