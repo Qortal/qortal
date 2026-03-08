@@ -19,6 +19,8 @@ import org.qortal.settings.Settings;
 
 import java.io.*;
 import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.*;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
@@ -45,6 +47,18 @@ public class SslUtils {
     static {
         Security.addProvider(new BouncyCastleProvider());
         Security.addProvider(new org.bouncycastle.jsse.provider.BouncyCastleJsseProvider());
+    }
+
+    /** Returns true if the string is a literal IP address (IPv4 or IPv6), so it must not be used as a DNS name in SAN. */
+    private static boolean isIpAddress(String s) {
+        if (s == null || s.isEmpty()) {
+            return false;
+        }
+        try {
+            return InetAddress.getByName(s).getHostAddress().equals(s);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public static void generateSsl() {
@@ -76,6 +90,7 @@ public class SslUtils {
 
             // Create keystore
             createKeystore();
+            cleanupFiles();
         } catch (Exception e) {
             throw new RuntimeException("Failed to generate SSL certificates", e);
         }
@@ -110,13 +125,21 @@ public class SslUtils {
         // DNS Entries
         altNames.add(new GeneralName(GeneralName.dNSName, "localhost"));
 
-        InetAddress localHost = InetAddress.getLocalHost();
-        String hostName = localHost.getHostName(); // Shortname
-        String canonicalHostName = localHost.getCanonicalHostName(); // FQDN
+        InetAddress localHost = null;
+        try {
+            localHost = InetAddress.getLocalHost();
+            String hostName = localHost.getHostName(); // Shortname
+            String canonicalHostName = localHost.getCanonicalHostName(); // FQDN
 
-        altNames.add(new GeneralName(GeneralName.dNSName, hostName));
-        if (!canonicalHostName.equalsIgnoreCase(hostName)) {
-            altNames.add(new GeneralName(GeneralName.dNSName, canonicalHostName));
+         
+            if (!isIpAddress(hostName)) {
+                altNames.add(new GeneralName(GeneralName.dNSName, hostName));
+            }
+            if (!canonicalHostName.equalsIgnoreCase(hostName) && !isIpAddress(canonicalHostName)) {
+                altNames.add(new GeneralName(GeneralName.dNSName, canonicalHostName));
+            }
+        } catch (Exception e) {
+            LOGGER.warn("Could not resolve local hostname for SSL certificate SAN, using localhost only: {}", e.getMessage());
         }
 
         // IP Entries
@@ -170,15 +193,17 @@ public class SslUtils {
         } catch (SocketException e) {
             LOGGER.warn("Failed to enumerate network interfaces for SSL certificate: {}", e.getMessage());
             // Fallback to old behavior if network enumeration fails
-            try {
-                String fallbackIp = localHost.getHostAddress();
-                if (!addedIps.contains(fallbackIp)) {
-                    altNames.add(new GeneralName(GeneralName.iPAddress, fallbackIp));
-                    addedIps.add(fallbackIp);
-                    LOGGER.info("Added fallback IP address to SSL certificate SAN: {}", fallbackIp);
+            if (localHost != null) {
+                try {
+                    String fallbackIp = localHost.getHostAddress();
+                    if (!addedIps.contains(fallbackIp)) {
+                        altNames.add(new GeneralName(GeneralName.iPAddress, fallbackIp));
+                        addedIps.add(fallbackIp);
+                        LOGGER.info("Added fallback IP address to SSL certificate SAN: {}", fallbackIp);
+                    }
+                } catch (Exception ex) {
+                    LOGGER.warn("Failed to get fallback IP address: {}", ex.getMessage());
                 }
-            } catch (Exception ex) {
-                LOGGER.warn("Failed to get fallback IP address: {}", ex.getMessage());
             }
         }
         
@@ -246,16 +271,31 @@ public class SslUtils {
             serverKey = kf.generatePrivate(keySpec);
         }
 
-        // Create keystore
-        KeyStore keyStore = KeyStore.getInstance("PKCS12", "BC");
+        // Create and save keystore using the default (SunJSSE) PKCS12 provider, not BC.
+        // When BouncyCastle is repackaged into an uber jar it becomes unsigned, and on Oracle
+        // Java SE the JCE refuses to use BC for key encryption ("JCE cannot authenticate the
+        // provider BC") during keyStore.store(). The default provider avoids that; the resulting
+        // PKCS12 file is standard and is read by Jetty (with BC) without issue.
+        KeyStore keyStore = KeyStore.getInstance("PKCS12");
         keyStore.load(null, null);
 
-        // Add server certificate and key
+        // Add server certificate and key (single key entry with chain — supported by default PKCS12).
         keyStore.setKeyEntry("server", serverKey, Settings.getInstance().getSslKeystorePassword().toCharArray(), new java.security.cert.Certificate[]{serverCert, caCert});
 
-        // Save keystore
+        // Save keystore (encryption performed by default provider; no BC authentication required).
         try (FileOutputStream fos = new FileOutputStream(Settings.getInstance().getSslKeystorePathname())) {
             keyStore.store(fos, Settings.getInstance().getSslKeystorePassword().toCharArray());
+        }
+    }
+
+    private static void cleanupFiles() {
+        try {
+        Files.delete(Path.of(CA_CERT_PATH));
+        Files.delete(Path.of(CA_KEY_PATH));
+        Files.delete(Path.of(SERVER_CERT_PATH));
+        Files.delete(Path.of(SERVER_KEY_PATH));
+        } catch (IOException e) {
+        LOGGER.warn("Could not remove certificate flat files: {}", e.getMessage());
         }
     }
 }
