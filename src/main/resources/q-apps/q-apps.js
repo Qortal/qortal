@@ -15,7 +15,7 @@ function getNameAfterService(url) {
 
     // Find the index of "WEBSITE" or "APP" and get the next part
     const serviceIndex = pathParts.findIndex(
-      (part) => part === "WEBSITE" || part === "APP"
+      (part) => part === "WEBSITE" || part === "APP",
     );
 
     if (serviceIndex !== -1 && pathParts[serviceIndex + 1]) {
@@ -50,7 +50,7 @@ function parseUrl(url) {
     // Extract the pathname and remove the prefix if it matches "render/APP" or "render/WEBSITE"
     const path = parsedUrl.pathname.replace(
       /^\/render\/(APP|WEBSITE)\/[^/]+/,
-      ""
+      "",
     );
 
     // Combine the path with remaining query params (if any)
@@ -69,7 +69,7 @@ function openNewTab(data) {
       requestedHandler: "UI",
       payload: data,
     },
-    "*"
+    "*",
   );
 }
 // sends navigation information to the client in order to manage back/forward navigation
@@ -84,7 +84,7 @@ function sendNavigationInfoToParent(isDOMContentLoaded) {
         isDOMContentLoaded: isDOMContentLoaded ? true : false,
       },
     },
-    "*"
+    "*",
   );
 }
 
@@ -126,6 +126,9 @@ const pendingMessageChannels = new Map();
 const MAX_CONCURRENT_REQUESTS = 30;
 let activeRequestCount = 0;
 const requestQueue = [];
+
+// Set to true to deduplicate identical in-flight qortalRequest calls
+const ENABLE_REQUEST_DEDUPLICATION = false;
 
 // Debug logging (set to true to enable)
 const DEBUG_REQUESTS = false;
@@ -246,7 +249,7 @@ function handleResponse(event, response) {
         data.name,
         data.identifier,
         data.path,
-        false
+        false,
       );
     }
   }
@@ -446,7 +449,7 @@ window.addEventListener(
                 data.name,
                 data.identifier,
                 data.path,
-                true
+                true,
               );
             });
         } else {
@@ -455,7 +458,7 @@ window.addEventListener(
             data.name,
             data.identifier,
             data.path,
-            true
+            true,
           );
         }
         return;
@@ -470,21 +473,21 @@ window.addEventListener(
           url = url.concat("&default=" + new Boolean(data.default).toString());
         if (data.includeStatus != null)
           url = url.concat(
-            "&includestatus=" + new Boolean(data.includeStatus).toString()
+            "&includestatus=" + new Boolean(data.includeStatus).toString(),
           );
         if (data.includeMetadata != null)
           url = url.concat(
-            "&includemetadata=" + new Boolean(data.includeMetadata).toString()
+            "&includemetadata=" + new Boolean(data.includeMetadata).toString(),
           );
         if (data.nameListFilter != null)
           url = url.concat("&namefilter=" + data.nameListFilter);
         if (data.followedOnly != null)
           url = url.concat(
-            "&followedonly=" + new Boolean(data.followedOnly).toString()
+            "&followedonly=" + new Boolean(data.followedOnly).toString(),
           );
         if (data.excludeBlocked != null)
           url = url.concat(
-            "&excludeblocked=" + new Boolean(data.excludeBlocked).toString()
+            "&excludeblocked=" + new Boolean(data.excludeBlocked).toString(),
           );
         if (data.limit != null) url = url.concat("&limit=" + data.limit);
         if (data.offset != null) url = url.concat("&offset=" + data.offset);
@@ -510,7 +513,7 @@ window.addEventListener(
           url = url.concat("&prefix=" + new Boolean(data.prefix).toString());
         if (data.exactMatchNames != null)
           url = url.concat(
-            "&exactmatchnames=" + new Boolean(data.exactMatchNames).toString()
+            "&exactmatchnames=" + new Boolean(data.exactMatchNames).toString(),
           );
         if (data.default != null)
           url = url.concat("&default=" + new Boolean(data.default).toString());
@@ -519,21 +522,21 @@ window.addEventListener(
           url = url.concat("&minlevel=" + data.minLevel);
         if (data.includeStatus != null)
           url = url.concat(
-            "&includestatus=" + new Boolean(data.includeStatus).toString()
+            "&includestatus=" + new Boolean(data.includeStatus).toString(),
           );
         if (data.includeMetadata != null)
           url = url.concat(
-            "&includemetadata=" + new Boolean(data.includeMetadata).toString()
+            "&includemetadata=" + new Boolean(data.includeMetadata).toString(),
           );
         if (data.nameListFilter != null)
           url = url.concat("&namefilter=" + data.nameListFilter);
         if (data.followedOnly != null)
           url = url.concat(
-            "&followedonly=" + new Boolean(data.followedOnly).toString()
+            "&followedonly=" + new Boolean(data.followedOnly).toString(),
           );
         if (data.excludeBlocked != null)
           url = url.concat(
-            "&excludeblocked=" + new Boolean(data.excludeBlocked).toString()
+            "&excludeblocked=" + new Boolean(data.excludeBlocked).toString(),
           );
         if (data.before != null) url = url.concat("&before=" + data.before);
         if (data.after != null) url = url.concat("&after=" + data.after);
@@ -593,7 +596,7 @@ window.addEventListener(
           url = url.concat("&txGroupId=" + data.txGroupId);
         if (data.involving != null)
           data.involving.forEach(
-            (x, i) => (url = url.concat("&involving=" + x))
+            (x, i) => (url = url.concat("&involving=" + x)),
           );
         if (data.reference != null)
           url = url.concat("&reference=" + data.reference);
@@ -601,7 +604,8 @@ window.addEventListener(
           url = url.concat("&chatreference=" + data.chatReference);
         if (data.hasChatReference != null)
           url = url.concat(
-            "&haschatreference=" + new Boolean(data.hasChatReference).toString()
+            "&haschatreference=" +
+              new Boolean(data.hasChatReference).toString(),
           );
         if (data.encoding != null)
           url = url.concat("&encoding=" + data.encoding);
@@ -651,7 +655,7 @@ window.addEventListener(
         url = url.concat("?");
         if (data.includeOnlineSignatures != null)
           url = url.concat(
-            "&includeOnlineSignatures=" + data.includeOnlineSignatures
+            "&includeOnlineSignatures=" + data.includeOnlineSignatures,
           );
         return httpGetAsyncWithEvent(event, url);
 
@@ -661,7 +665,7 @@ window.addEventListener(
         if (data.reverse != null) url = url.concat("&reverse=" + data.reverse);
         if (data.includeOnlineSignatures != null)
           url = url.concat(
-            "&includeOnlineSignatures=" + data.includeOnlineSignatures
+            "&includeOnlineSignatures=" + data.includeOnlineSignatures,
           );
         return httpGetAsyncWithEvent(event, url);
 
@@ -704,7 +708,7 @@ window.addEventListener(
         return;
     }
   },
-  false
+  false,
 );
 
 /**
@@ -784,8 +788,8 @@ const awaitTimeout = (timeout, reason) =>
   new Promise((resolve, reject) =>
     setTimeout(
       () => (reason === undefined ? resolve() : reject(reason)),
-      timeout
-    )
+      timeout,
+    ),
   );
 
 function getDefaultTimeout(action) {
@@ -904,7 +908,9 @@ const qortalRequestWithNoTimeout = (request, effectiveTimeoutMs) => {
   return new Promise((res, rej) => {
     const executeRequest = () => {
       activeRequestCount++;
-      executeQortalRequestImmediate(request, effectiveTimeoutMs).then(res).catch(rej);
+      executeQortalRequestImmediate(request, effectiveTimeoutMs)
+        .then(res)
+        .catch(rej);
     };
 
     // If under concurrent limit, execute immediately
@@ -946,12 +952,13 @@ function getRequestKey(request) {
  */
 const qortalRequest = (request) => {
   // Check if identical request is already pending
-  const requestKey = getRequestKey(request);
-
-  if (pendingQortalRequests.has(requestKey)) {
-    debugLog("Request deduplication hit for:", request.action);
-    // Return the existing promise instead of creating a new request
-    return pendingQortalRequests.get(requestKey);
+  if (ENABLE_REQUEST_DEDUPLICATION) {
+    const requestKey = getRequestKey(request);
+    if (pendingQortalRequests.has(requestKey)) {
+      debugLog("Request deduplication hit for:", request.action);
+      // Return the existing promise instead of creating a new request
+      return pendingQortalRequests.get(requestKey);
+    }
   }
 
   debugLog(
@@ -960,7 +967,8 @@ const qortalRequest = (request) => {
     "Queue size:",
     requestQueue.length,
     "Active:",
-    activeRequestCount
+    activeRequestCount,
+    request,
   );
 
   // Create new request promise
@@ -979,11 +987,15 @@ const qortalRequest = (request) => {
     })
     .finally(() => {
       // Remove from pending cache when done (success or failure)
-      pendingQortalRequests.delete(requestKey);
+      if (ENABLE_REQUEST_DEDUPLICATION) {
+        pendingQortalRequests.delete(getRequestKey(request));
+      }
     });
 
   // Store in pending cache
-  pendingQortalRequests.set(requestKey, requestPromise);
+  if (ENABLE_REQUEST_DEDUPLICATION) {
+    pendingQortalRequests.set(getRequestKey(request), requestPromise);
+  }
 
   return requestPromise;
 };
@@ -993,11 +1005,12 @@ const qortalRequest = (request) => {
  */
 const qortalRequestWithTimeout = (request, timeout) => {
   // Check if identical request is already pending
-  const requestKey = getRequestKey(request);
-
-  if (pendingQortalRequests.has(requestKey)) {
-    // Return the existing promise instead of creating a new request
-    return pendingQortalRequests.get(requestKey);
+  if (ENABLE_REQUEST_DEDUPLICATION) {
+    const requestKey = getRequestKey(request);
+    if (pendingQortalRequests.has(requestKey)) {
+      // Return the existing promise instead of creating a new request
+      return pendingQortalRequests.get(requestKey);
+    }
   }
 
   // Create new request promise
@@ -1006,11 +1019,15 @@ const qortalRequestWithTimeout = (request, timeout) => {
     awaitTimeout(timeout, "The request timed out"),
   ]).finally(() => {
     // Remove from pending cache when done (success or failure)
-    pendingQortalRequests.delete(requestKey);
+    if (ENABLE_REQUEST_DEDUPLICATION) {
+      pendingQortalRequests.delete(getRequestKey(request));
+    }
   });
 
   // Store in pending cache
-  pendingQortalRequests.set(requestKey, requestPromise);
+  if (ENABLE_REQUEST_DEDUPLICATION) {
+    pendingQortalRequests.set(getRequestKey(request), requestPromise);
+  }
 
   return requestPromise;
 };
@@ -1027,14 +1044,17 @@ function cleanupOrphanedChannels() {
   let cleanedCount = 0;
 
   for (const [requestId, data] of pendingMessageChannels.entries()) {
-    const maxAge = (data.effectiveTimeoutMs != null ? data.effectiveTimeoutMs : getDefaultTimeout(data.request.action)) + CLEANUP_BUFFER_MS;
+    const maxAge =
+      (data.effectiveTimeoutMs != null
+        ? data.effectiveTimeoutMs
+        : getDefaultTimeout(data.request.action)) + CLEANUP_BUFFER_MS;
     if (now - data.timestamp > maxAge) {
       console.warn(
         "Cleaning up orphaned MessageChannel for request:",
         data.request.action,
         "Age:",
         Math.round((now - data.timestamp) / 1000),
-        "seconds"
+        "seconds",
       );
       try {
         data.channel.port1.close();
@@ -1060,7 +1080,7 @@ function cleanupOrphanedChannels() {
       "Cleanup complete. Channels:",
       cleanedCount,
       "Cache entries:",
-      cacheCleanedCount
+      cacheCleanedCount,
     );
     debugLog(
       "Stats - Pending channels:",
@@ -1068,7 +1088,7 @@ function cleanupOrphanedChannels() {
       "Active requests:",
       activeRequestCount,
       "Queued:",
-      requestQueue.length
+      requestQueue.length,
     );
   }
 }
