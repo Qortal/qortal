@@ -114,6 +114,8 @@ public class CrossChainResource {
 		final boolean isExecutable = true;
 		List<CrossChainTradeData> crossChainTrades = new ArrayList<>();
 
+		final long t0 = System.currentTimeMillis();
+
 		try (final Repository repository = RepositoryManager.getRepository()) {
 			Map<ByteArray, Supplier<ACCT>> acctsByCodeHash = SupportedBlockchain.getFilteredAcctMap(foreignBlockchain);
 
@@ -123,8 +125,7 @@ public class CrossChainResource {
 
 				List<ATData> atsData = repository.getATRepository().getATsByFunctionality(codeHash, isExecutable, limit, offset, reverse);
 
-				for (ATData atData : atsData) {
-					CrossChainTradeData crossChainTradeData = acct.populateTradeData(repository, atData);
+				for (CrossChainTradeData crossChainTradeData : acct.populateTradeDataList(repository, atsData)) {
 					if (crossChainTradeData.mode == AcctMode.OFFERING) {
 						crossChainTrades.add(crossChainTradeData);
 					}
@@ -150,6 +151,7 @@ public class CrossChainResource {
 
 			crossChainTrades.stream().forEach(CrossChainResource::decorateTradeDataWithPresence);
 
+			LOGGER.debug("[getTradeOffers] total time {}ms, returning {} trades", System.currentTimeMillis() - t0, crossChainTrades.size());
 			return crossChainTrades;
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);

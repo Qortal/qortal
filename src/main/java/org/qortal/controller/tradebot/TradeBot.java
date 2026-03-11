@@ -843,6 +843,20 @@ public class TradeBot implements Listener {
 		List<CrossChainTradeData> updatedCrossChainTrades = new ArrayList<>(crossChainTrades);
 		int getMaxTradeOfferAttempts = Settings.getInstance().getMaxTradeOfferAttempts();
 
+		// Fetch all unconfirmed MESSAGE transactions once, outside the loop.
+		// This avoids an N×1,450ms DB call (one per uncached OFFERING AT).
+		List<TransactionData> unconfirmedMessageTxs;
+		try {
+			long tUnconf = System.currentTimeMillis();
+			unconfirmedMessageTxs = repository.getTransactionRepository().getUnconfirmedTransactions(
+					Arrays.asList(Transaction.TransactionType.MESSAGE), null, null, null, null);
+			LOGGER.debug("removeFailedTrades: fetched {} unconfirmed MESSAGE txs in {}ms",
+					unconfirmedMessageTxs.size(), System.currentTimeMillis() - tUnconf);
+		} catch (DataException e) {
+			LOGGER.warn("removeFailedTrades: unable to fetch unconfirmed transactions", e);
+			return crossChainTrades;
+		}
+
 		for (CrossChainTradeData crossChainTradeData : crossChainTrades) {
 			// We only care about trades in the OFFERING state
 			if (crossChainTradeData.mode != AcctMode.OFFERING) {
@@ -855,31 +869,22 @@ public class TradeBot implements Listener {
 			Long failedTimestamp = failedTrades.get(crossChainTradeData.qortalAtAddress);
 			if (failedTimestamp != null && now - failedTimestamp < 60 * 60 * 1000L) {
 				updatedCrossChainTrades.remove(crossChainTradeData);
-				//LOGGER.info("Removing cached failed trade AT {}", crossChainTradeData.qortalAtAddress);
 				continue;
 			}
 			Long validTimestamp = validTrades.get(crossChainTradeData.qortalAtAddress);
 			if (validTimestamp != null && now - validTimestamp < 60 * 60 * 1000L) {
-				//LOGGER.info("NOT removing cached valid trade AT {}", crossChainTradeData.qortalAtAddress);
 				continue;
 			}
 
-			try {
-				List<TransactionData> transactions = repository.getTransactionRepository().getUnconfirmedTransactions(Arrays.asList(Transaction.TransactionType.MESSAGE), null, null, null, null);
-
-				for (TransactionData transactionData : transactions) {
-					// Treat as failed if buy attempt was more than 60 mins ago (as it's still in the OFFERING state)
-					if (transactionData.getRecipient().equals(crossChainTradeData.qortalCreatorTradeAddress) && now - transactionData.getTimestamp() > 60*60*1000L) {
-						failedTrades.put(crossChainTradeData.qortalAtAddress, now);
-						updatedCrossChainTrades.remove(crossChainTradeData);
-					} else {
-						validTrades.put(crossChainTradeData.qortalAtAddress, now);
-					}
+			for (TransactionData transactionData : unconfirmedMessageTxs) {
+				// Treat as failed if buy attempt was more than 60 mins ago (as it's still in the OFFERING state)
+				if (transactionData.getRecipient().equals(crossChainTradeData.qortalCreatorTradeAddress) && now - transactionData.getTimestamp() > 60*60*1000L) {
+					failedTrades.put(crossChainTradeData.qortalAtAddress, now);
+					updatedCrossChainTrades.remove(crossChainTradeData);
+				} else {
+					validTrades.put(crossChainTradeData.qortalAtAddress, now);
 				}
-
-			} catch (DataException e) {
-				LOGGER.info("Unable to determine failed state of AT {}", crossChainTradeData.qortalAtAddress);
-            }
+			}
 		}
 
 		return updatedCrossChainTrades;

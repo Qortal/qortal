@@ -40,7 +40,7 @@ public class HSQLDBATRepository implements ATRepository {
 	public ATData fromATAddress(String atAddress) throws DataException {
 		String sql = "SELECT creator, created_when, version, asset_id, code_bytes, code_hash, "
 				+ "is_sleeping, sleep_until_height, is_finished, had_fatal_error, "
-				+ "is_frozen, frozen_balance, sleep_until_message_timestamp "
+				+ "is_frozen, frozen_balance, sleep_until_message_timestamp, final_height "
 				+ "FROM ATs "
 				+ "WHERE AT_address = ? LIMIT 1";
 
@@ -72,9 +72,15 @@ public class HSQLDBATRepository implements ATRepository {
 			if (sleepUntilMessageTimestamp == 0 && resultSet.wasNull())
 				sleepUntilMessageTimestamp = null;
 
-			return new ATData(atAddress, creatorPublicKey, created, version, assetId, codeBytes, codeHash,
+			Integer finalHeight = resultSet.getInt(14);
+			if (finalHeight == 0 && resultSet.wasNull())
+				finalHeight = null;
+
+			ATData atData = new ATData(atAddress, creatorPublicKey, created, version, assetId, codeBytes, codeHash,
 					isSleeping, sleepUntilHeight, isFinished, hadFatalError, isFrozen, frozenBalance,
 					sleepUntilMessageTimestamp);
+			atData.setFinalHeight(finalHeight);
+			return atData;
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch AT from repository", e);
 		}
@@ -84,7 +90,7 @@ public class HSQLDBATRepository implements ATRepository {
 	public List<ATData> fromATAddresses(List<String> atAddresses) throws DataException {
 		String sql = "SELECT creator, created_when, version, asset_id, code_bytes, code_hash, "
 				+ "is_sleeping, sleep_until_height, is_finished, had_fatal_error, "
-				+ "is_frozen, frozen_balance, sleep_until_message_timestamp, AT_address "
+				+ "is_frozen, frozen_balance, sleep_until_message_timestamp, AT_address, final_height "
 				+ "FROM ATs "
 				+ "WHERE AT_address IN ("
 				+ String.join(", ", Collections.nCopies(atAddresses.size(), "?"))
@@ -126,9 +132,15 @@ public class HSQLDBATRepository implements ATRepository {
 
 				String atAddress = resultSet.getString(14);
 
-				list.add(new ATData(atAddress, creatorPublicKey, created, version, assetId, codeBytes, codeHash,
+				Integer finalHeight = resultSet.getInt(15);
+				if (finalHeight == 0 && resultSet.wasNull())
+					finalHeight = null;
+
+				ATData atData = new ATData(atAddress, creatorPublicKey, created, version, assetId, codeBytes, codeHash,
 						isSleeping, sleepUntilHeight, isFinished, hadFatalError, isFrozen, frozenBalance,
-						sleepUntilMessageTimestamp));
+						sleepUntilMessageTimestamp);
+				atData.setFinalHeight(finalHeight);
+				list.add(atData);
 			} while ( resultSet.next());
 
 			return list;
@@ -222,7 +234,7 @@ public class HSQLDBATRepository implements ATRepository {
 
 		sql.append("SELECT AT_address, creator, created_when, version, asset_id, code_bytes, ")
 				.append("is_sleeping, sleep_until_height, is_finished, had_fatal_error, ")
-				.append("is_frozen, frozen_balance, sleep_until_message_timestamp ")
+				.append("is_frozen, frozen_balance, sleep_until_message_timestamp, final_height ")
 				.append("FROM ATs ")
 				.append("WHERE code_hash = ? ");
 		bindParams.add(codeHash);
@@ -270,10 +282,14 @@ public class HSQLDBATRepository implements ATRepository {
 				if (sleepUntilMessageTimestamp == 0 && resultSet.wasNull())
 					sleepUntilMessageTimestamp = null;
 
+				Integer finalHeight = resultSet.getInt(14);
+				if (finalHeight == 0 && resultSet.wasNull())
+					finalHeight = null;
+
 				ATData atData = new ATData(atAddress, creatorPublicKey, created, version, assetId, codeBytes, codeHash,
 						isSleeping, sleepUntilHeight, isFinished, hadFatalError, isFrozen, frozenBalance,
 						sleepUntilMessageTimestamp);
-
+				atData.setFinalHeight(finalHeight);
 				matchingATs.add(atData);
 			} while (resultSet.next());
 
@@ -290,7 +306,7 @@ public class HSQLDBATRepository implements ATRepository {
 
 		sql.append("SELECT AT_address, creator, created_when, version, asset_id, code_bytes, ")
 				.append("is_sleeping, sleep_until_height, is_finished, had_fatal_error, ")
-				.append("is_frozen, frozen_balance, code_hash, sleep_until_message_timestamp ")
+				.append("is_frozen, frozen_balance, code_hash, sleep_until_message_timestamp, final_height ")
 				.append("FROM ");
 
 		// (VALUES (?), (?), ...) AS ATCodeHashes (code_hash)
@@ -346,9 +362,13 @@ public class HSQLDBATRepository implements ATRepository {
 				byte[] codeHash = resultSet.getBytes(13);
 				Long sleepUntilMessageTimestamp = resultSet.getLong(14);
 
+				Integer finalHeight = resultSet.getInt(15);
+				if (finalHeight == 0 && resultSet.wasNull())
+					finalHeight = null;
+
 				ATData atData = new ATData(atAddress, creatorPublicKey, created, version, assetId, codeBytes, codeHash,
 						isSleeping, sleepUntilHeight, isFinished, hadFatalError, isFrozen, frozenBalance, sleepUntilMessageTimestamp);
-
+				atData.setFinalHeight(finalHeight);
 				matchingATs.add(atData);
 			} while (resultSet.next());
 
@@ -384,7 +404,8 @@ public class HSQLDBATRepository implements ATRepository {
 				.bind("version", atData.getVersion()).bind("asset_id", atData.getAssetId())
 				.bind("code_bytes", atData.getCodeBytes()).bind("code_hash", atData.getCodeHash())
 				.bind("is_sleeping", atData.getIsSleeping()).bind("sleep_until_height", atData.getSleepUntilHeight())
-				.bind("is_finished", atData.getIsFinished()).bind("had_fatal_error", atData.getHadFatalError()).bind("is_frozen", atData.getIsFrozen())
+				.bind("is_finished", atData.getIsFinished()).bind("final_height", atData.getFinalHeight())
+				.bind("had_fatal_error", atData.getHadFatalError()).bind("is_frozen", atData.getIsFrozen())
 				.bind("frozen_balance", atData.getFrozenBalance()).bind("sleep_until_message_timestamp", atData.getSleepUntilMessageTimestamp());
 
 		try {
@@ -466,52 +487,48 @@ public class HSQLDBATRepository implements ATRepository {
 
 	@Override
 	public List<ATStateData> getLatestATStates(List<String> atAddresses) throws DataException{
-		String sql = "SELECT height, state_data, state_hash, fees, is_initial, sleep_until_message_timestamp, AT_address "
+		if (atAddresses.isEmpty())
+			return new ArrayList<>(0);
+
+		// Issue one query per AT address, reusing the same PreparedStatement (HSQLDB caches by SQL string).
+		// HSQLDB cannot use the ATStates PK efficiently inside a VALUES+LATERAL subquery — the planner
+		// treats the correlated subquery as a full scan regardless of indexes. Per-address queries with
+		// ORDER BY AT_address DESC, height DESC LIMIT 1 let HSQLDB walk the PK in reverse, giving an
+		// O(1) index seek per AT instead of a full scan.
+		// All queries run on the same session so they see the same consistent read snapshot — no stale data.
+		final String sql = "SELECT height, state_data, state_hash, fees, is_initial, sleep_until_message_timestamp "
 				+ "FROM ATStates "
 				+ "JOIN ATStatesData USING (AT_address, height) "
-				+ "WHERE ATStates.AT_address IN ("
-				+ String.join(", ", Collections.nCopies(atAddresses.size(), "?"))
-				+ ")";
+				+ "WHERE ATStates.AT_address = ? "
+				+ "ORDER BY ATStates.AT_address DESC, ATStates.height DESC "
+				+ "LIMIT 1";
 
-		List<ATStateData> stateDataList;
+		List<ATStateData> results = new ArrayList<>(atAddresses.size());
 
-		try (ResultSet resultSet = this.repository.checkedExecute(sql, atAddresses.toArray(new String[atAddresses.size()]))) {
-			if (resultSet == null)
-				return new ArrayList<>(0);
+		try {
+			for (String atAddress : atAddresses) {
+				try (ResultSet resultSet = this.repository.checkedExecute(sql, atAddress)) {
+					if (resultSet == null)
+						continue;
 
-			stateDataList = new ArrayList<>();
+					int height = resultSet.getInt(1);
+					byte[] stateData = resultSet.getBytes(2); // Actually BLOB
+					byte[] stateHash = resultSet.getBytes(3);
+					long fees = resultSet.getLong(4);
+					boolean isInitial = resultSet.getBoolean(5);
 
-			do {
-				int height = resultSet.getInt(1);
-				byte[] stateData = resultSet.getBytes(2); // Actually BLOB
-				byte[] stateHash = resultSet.getBytes(3);
-				long fees = resultSet.getLong(4);
-				boolean isInitial = resultSet.getBoolean(5);
+					Long sleepUntilMessageTimestamp = resultSet.getLong(6);
+					if (sleepUntilMessageTimestamp == 0 && resultSet.wasNull())
+						sleepUntilMessageTimestamp = null;
 
-				Long sleepUntilMessageTimestamp = resultSet.getLong(6);
-				if (sleepUntilMessageTimestamp == 0 && resultSet.wasNull())
-					sleepUntilMessageTimestamp = null;
-
-				String atAddress = resultSet.getString(7);
-				stateDataList.add(new ATStateData(atAddress, height, stateData, stateHash, fees, isInitial, sleepUntilMessageTimestamp));
-			} while( resultSet.next());
+					results.add(new ATStateData(atAddress, height, stateData, stateHash, fees, isInitial, sleepUntilMessageTimestamp));
+				}
+			}
 		} catch (SQLException e) {
-			throw new DataException("Unable to fetch latest AT state from repository", e);
+			throw new DataException("Unable to fetch latest AT states from repository", e);
 		}
 
-		Map<String, List<ATStateData>> stateDataByAtAddress
-			= stateDataList.stream()
-				.collect(Collectors.groupingBy(ATStateData::getATAddress));
-
-		List<ATStateData> latestForEachAtAddress
-			= stateDataByAtAddress.values().stream()
-				.map(list -> list.stream()
-						.max(Comparator.comparing(ATStateData::getHeight))
-						.orElse(null))
-				.filter(obj -> obj != null)
-				.collect(Collectors.toList());
-
-		return latestForEachAtAddress;
+		return results;
 	}
 
 	@Override
@@ -529,7 +546,9 @@ public class HSQLDBATRepository implements ATRepository {
 					+ "JOIN ATStatesData USING (AT_address, height) "
 					+ "WHERE ATStates.AT_address = ATs.AT_address ");
 
-		if (minimumFinalHeight != null) {
+		// For non-finished ATs we still need to filter inside the LATERAL since final_height isn't set.
+		// For finished ATs the outer WHERE on ATs.final_height handles the filter more efficiently.
+		if (minimumFinalHeight != null && (isFinished == null || !isFinished)) {
 			sql.append("AND ATStates.height >= ? ");
 			bindParams.add(minimumFinalHeight);
 		}
@@ -538,11 +557,6 @@ public class HSQLDBATRepository implements ATRepository {
 		// Both must be the same direction (DESC) also
 		sql.append("ORDER BY ATStates.height DESC LIMIT 1) AS FinalATStates ");
 
-		// Optional JOIN with ATTRANSACTIONS for buyerAddress
-		if (buyerPublicKey != null && buyerPublicKey.length > 0) {
-			sql.append("JOIN ATTRANSACTIONS tx ON tx.at_address = ATs.AT_address ");
-		}
-	
 		sql.append("WHERE ATs.code_hash = ? ");
 		bindParams.add(codeHash);
 
@@ -551,7 +565,25 @@ public class HSQLDBATRepository implements ATRepository {
 			bindParams.add(isFinished);
 		}
 
-		if (dataByteOffset != null && expectedValue != null) {
+		// When querying finished ATs with a minimum height, use ATs.final_height directly.
+		// This allows the planner to filter the AT candidate set before running the LATERAL,
+		// instead of running the LATERAL for all finished ATs and discarding most.
+		// Falls back to FinalATStates.height for ATs without final_height (pre-migration rows).
+		if (minimumFinalHeight != null && isFinished != null && isFinished) {
+			sql.append("AND (ATs.final_height >= ? OR (ATs.final_height IS NULL AND FinalATStates.height >= ?)) ");
+			bindParams.add(minimumFinalHeight);
+			bindParams.add(minimumFinalHeight);
+		}
+
+		// For finished ATs, apply the mode filter in SQL via SUBSTRING — the candidate set is already
+		// small (bounded by minimumFinalHeight + ATFinalHeightIndex), so the BLOB scan is cheap.
+		// For non-finished ATs there is no height bound, so a SUBSTRING scan over every active AT's
+		// BLOB is catastrophically slow (O(N) BLOB reads). Instead we skip the SQL filter here and
+		// apply it in Java below after the LATERAL has fetched the state data rows.
+		final boolean applySubstringInSql = dataByteOffset != null && expectedValue != null
+				&& (isFinished == null || isFinished);
+
+		if (applySubstringInSql) {
 			sql.append("AND SUBSTRING(state_data FROM ? FOR 8) = ? ");
 
 			// We convert our long on Java-side to control endian
@@ -562,9 +594,13 @@ public class HSQLDBATRepository implements ATRepository {
 			bindParams.add(rawExpectedValue);
 		}
 
-		if (buyerPublicKey != null && buyerPublicKey.length > 0 ) {
-			// the buyer must be the recipient of the transaction and not the creator of the AT
-			sql.append("AND tx.recipient = ? AND ATs.creator != ? ");
+		if (buyerPublicKey != null && buyerPublicKey.length > 0) {
+			// Restrict to ATs that have paid this buyer using a subquery so the planner
+			// can narrow the AT candidate set before running the LATERAL, rather than
+			// joining ATTRANSACTIONS after the LATERAL has already run for every AT.
+			// Uses ATTransactionsRecipientATAddressIndex (recipient, at_address) for an index-only scan.
+			sql.append("AND ATs.AT_address IN (SELECT at_address FROM ATTransactions WHERE recipient = ?) ");
+			sql.append("AND ATs.creator != ? ");
 
 			bindParams.add(Crypto.toAddress(buyerPublicKey));
 			bindParams.add(buyerPublicKey);
@@ -604,11 +640,31 @@ public class HSQLDBATRepository implements ATRepository {
 
 				atStates.add(atStateData);
 			} while (resultSet.next());
-
-			return atStates;
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch matching AT states from repository", e);
 		}
+
+		// When SUBSTRING was skipped in SQL (non-finished ATs), apply the mode filter here in Java.
+		// This avoids a full BLOB scan on every active AT inside the HSQLDB query planner,
+		// and is safe because state_data is already fetched into memory.
+		if (!applySubstringInSql && dataByteOffset != null && expectedValue != null) {
+			final byte[] rawExpectedValue = Longs.toByteArray(expectedValue);
+			final int offset0 = dataByteOffset; // 0-based byte offset into state_data
+
+			atStates.removeIf(atState -> {
+				byte[] sd = atState.getStateData();
+				if (sd == null || sd.length < offset0 + 8)
+					return true; // missing data — exclude
+
+				for (int i = 0; i < 8; i++) {
+					if (sd[offset0 + i] != rawExpectedValue[i])
+						return true; // mismatch — exclude
+				}
+				return false; // passes filter — keep
+			});
+		}
+
+		return atStates;
 	}
 
 	@Override

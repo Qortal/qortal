@@ -19,6 +19,7 @@ public class ATData {
 	private boolean isSleeping;
 	private Integer sleepUntilHeight;
 	private boolean isFinished;
+	private Integer finalHeight;
 	private boolean hadFatalError;
 	private boolean isFrozen;
 	@XmlJavaTypeAdapter(value = org.qortal.api.AmountTypeAdapter.class)
@@ -110,6 +111,14 @@ public class ATData {
 
 	public void setIsFinished(boolean isFinished) {
 		this.isFinished = isFinished;
+	}
+
+	public Integer getFinalHeight() {
+		return this.finalHeight;
+	}
+
+	public void setFinalHeight(Integer finalHeight) {
+		this.finalHeight = finalHeight;
 	}
 
 	public boolean getHadFatalError() {

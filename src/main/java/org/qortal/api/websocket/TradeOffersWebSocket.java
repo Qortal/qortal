@@ -12,6 +12,9 @@ import org.qortal.controller.tradebot.TradeBot;
 import org.qortal.crosschain.ACCT;
 import org.qortal.crosschain.AcctMode;
 import org.qortal.crosschain.SupportedBlockchain;
+import org.qortal.asset.Asset;
+import org.qortal.data.account.AccountBalanceData;
+import org.qortal.data.at.ATData;
 import org.qortal.data.at.ATStateData;
 import org.qortal.data.block.BlockData;
 import org.qortal.data.crosschain.CrossChainTradeData;
@@ -30,6 +33,7 @@ import java.util.*;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import java.util.OptionalLong;
 
 @WebSocket
 @SuppressWarnings("serial")
@@ -66,7 +70,10 @@ public class TradeOffersWebSocket extends ApiWebSocket implements Listener {
 			populateCurrentSummaries(repository);
 			populateHistoricSummaries(repository);
 		} catch (DataException e) {
-			// How to fail properly?
+			LOGGER.error("Failed to populate trade offer summaries at startup", e);
+			return;
+		} catch (Exception e) {
+			LOGGER.error("Unexpected error populating trade offer summaries at startup", e);
 			return;
 		}
 
@@ -295,8 +302,9 @@ public class TradeOffersWebSocket extends ApiWebSocket implements Listener {
 				if (historicAtStates == null)
 					throw new DataException("Couldn't fetch historic trades from repository");
 
-				for (ATStateData historicAtState : historicAtStates) {
-					CrossChainOfferSummary historicOfferSummary = produceSummary(repository, acct, historicAtState, null, null);
+				List<CrossChainOfferSummary> historicSummaries = produceSummaries(repository, acct, historicAtStates, null);
+
+				for (CrossChainOfferSummary historicOfferSummary : historicSummaries) {
 					if (!isHistoric.test(historicOfferSummary))
 						continue;
 
@@ -330,8 +338,36 @@ public class TradeOffersWebSocket extends ApiWebSocket implements Listener {
 		List<CrossChainTradeData> crossChainTrades = new ArrayList<>();
 		List<ATStateData> atStatesByTrade = new ArrayList<>();
 
+		if (atStates.isEmpty())
+			return offerSummaries;
+
+		List<String> atAddresses = atStates.stream().map(ATStateData::getATAddress).collect(Collectors.toList());
+
+		// Batch-fetch AT metadata (creatorPublicKey, creation timestamp) in chunks to avoid
+		// oversized IN(...) clauses on very large lists.
+		final int CHUNK_SIZE = 500;
+		Map<String, ATData> atDataByAddress = new HashMap<>(atAddresses.size());
+		for (int i = 0; i < atAddresses.size(); i += CHUNK_SIZE) {
+			List<String> chunk = atAddresses.subList(i, Math.min(i + CHUNK_SIZE, atAddresses.size()));
+			repository.getATRepository().fromATAddresses(chunk)
+					.forEach(atData -> atDataByAddress.put(atData.getATAddress(), atData));
+		}
+
+		// Batch-fetch QORT balances in chunks so populateTradeData doesn't hit the DB per AT.
+		Map<String, Long> balanceByAddress = new HashMap<>(atAddresses.size());
+		for (int i = 0; i < atAddresses.size(); i += CHUNK_SIZE) {
+			List<String> chunk = atAddresses.subList(i, Math.min(i + CHUNK_SIZE, atAddresses.size()));
+			repository.getAccountRepository().getBalances(chunk, Asset.QORT)
+					.forEach(b -> balanceByAddress.put(b.getAddress(), b.getBalance()));
+		}
+
 		for (ATStateData atState : atStates) {
-			CrossChainTradeData crossChainTradeData = acct.populateTradeData(repository, atState);
+			ATData atData = atDataByAddress.get(atState.getATAddress());
+			if (atData == null)
+				continue;
+
+			long balance = balanceByAddress.getOrDefault(atState.getATAddress(), 0L);
+			CrossChainTradeData crossChainTradeData = acct.populateTradeData(repository, atData.getCreatorPublicKey(), atData.getCreation(), atState, OptionalLong.of(balance));
 			if (crossChainTradeData == null)
 				continue;
 

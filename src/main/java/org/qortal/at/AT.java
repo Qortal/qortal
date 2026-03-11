@@ -155,6 +155,8 @@ public class AT {
 		this.atData.setIsSleeping(state.isSleeping());
 		this.atData.setSleepUntilHeight(state.getSleepUntilHeight());
 		this.atData.setIsFinished(state.isFinished());
+		if (state.isFinished() && this.atData.getFinalHeight() == null)
+			this.atData.setFinalHeight(blockHeight);
 		this.atData.setHadFatalError(state.hadFatalError());
 		this.atData.setIsFrozen(state.isFrozen());
 		this.atData.setFrozenBalance(state.getFrozenBalance());
@@ -186,6 +188,8 @@ public class AT {
 		this.atData.setIsSleeping(state.isSleeping());
 		this.atData.setSleepUntilHeight(state.getSleepUntilHeight());
 		this.atData.setIsFinished(state.isFinished());
+		if (!state.isFinished())
+			this.atData.setFinalHeight(null);
 		this.atData.setHadFatalError(state.hadFatalError());
 		this.atData.setIsFrozen(state.isFrozen());
 		this.atData.setFrozenBalance(state.getFrozenBalance());

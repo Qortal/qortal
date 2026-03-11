@@ -1069,14 +1069,54 @@ public class HSQLDBDatabaseUpdates {
 
 					break;
 
-				default:
-					// nothing to do
-					return false;
-			}
-		}
+			case 52:
+				// Improve performance of AT state lookups used by cross-chain trade queries.
+				// ATStatesData PK is (height, AT_address) but the LATERAL subquery looks up by (AT_address, height DESC).
+				// Adding this index allows the per-AT latest-state lookup to be a single index seek instead of a scan.
+				LOGGER.info("Adding index to ATStatesData table for cross-chain trade query performance...");
+				stmt.execute("CREATE INDEX IF NOT EXISTS ATStatesDataATAddressHeightIndex ON ATStatesData (AT_address, height DESC)");
 
-		// database was updated
-		LOGGER.info(() -> String.format("HSQLDB repository updated to version %d", databaseVersion + 1));
-		return true;
+				// ATTransactions already has an index on (recipient) but adding (at_address) makes the
+				// buyer-filter subquery an index-only scan with no row reads.
+				LOGGER.info("Adding composite index to ATTransactions table for cross-chain trade query performance...");
+				stmt.execute("CREATE INDEX IF NOT EXISTS ATTransactionsRecipientATAddressIndex ON ATTransactions (recipient, at_address)");
+
+				// Add final_height to ATs table so we can filter finished ATs by when they finished
+				// without touching ATStates. This avoids running the LATERAL for all finished ATs
+				// when querying for trades in a time window (e.g. last 24 hours).
+				LOGGER.info("Adding final_height column to ATs table...");
+				stmt.execute("ALTER TABLE ATs ADD final_height INTEGER");
+
+				// Backfill final_height for all existing finished ATs using the max height from ATStates.
+				// For pruned/trimmed nodes, only the latest ATStates row per AT is kept, so MAX(height)
+				// is the correct final height.
+				LOGGER.info("Backfilling final_height for existing finished ATs - this may take a while...");
+				stmt.execute("UPDATE ATs SET final_height = ("
+						+ "SELECT MAX(height) FROM ATStates WHERE ATStates.AT_address = ATs.AT_address"
+						+ ") WHERE is_finished = TRUE");
+				stmt.execute("CHECKPOINT");
+
+			// Index to allow fast filtering of finished ATs by final_height alongside code_hash
+			LOGGER.info("Adding index on ATs (code_hash, is_finished, final_height)...");
+			stmt.execute("CREATE INDEX IF NOT EXISTS ATFinalHeightIndex ON ATs (code_hash, is_finished, final_height)");
+
+			// The LATERAL subquery inside getLatestATStates queries ATStates by AT_address
+			// and sorts by height DESC. ATStates only has a (height) index and a PK on
+			// (AT_address, height) ASC. HSQLDB cannot use the ASC PK efficiently for DESC
+			// ordering in LATERAL, causing a full per-AT scan.
+			// This index allows each inner LATERAL lookup to be a single index seek.
+			LOGGER.info("Adding index to ATStates table for cross-chain trade query performance...");
+			stmt.execute("CREATE INDEX IF NOT EXISTS ATStatesATAddressHeightIndex ON ATStates (AT_address, height DESC)");
+			break;
+
+		default:
+				// nothing to do
+				return false;
+		}
 	}
+
+	// database was updated
+	LOGGER.info(() -> String.format("HSQLDB repository updated to version %d", databaseVersion + 1));
+	return true;
+}
 }
