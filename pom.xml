@@ -20,6 +20,7 @@
 		<commons-compress.version>1.27.1</commons-compress.version>
 		<commons-lang3.version>3.17.0</commons-lang3.version>
 		<dagger.version>1.2.2</dagger.version>
+		<dorkbox-systemtray.version>4.4</dorkbox-systemtray.version>
 		<extendedset.version>0.12.3</extendedset.version>
 		<git-commit-id-plugin.version>4.9.10</git-commit-id-plugin.version>
 		<grpc.version>1.68.3</grpc.version>
@@ -631,6 +632,19 @@
 			<groupId>org.slf4j</groupId>
 			<artifactId>slf4j-api</artifactId>
 			<version>${slf4j.version}</version>
+		</dependency>
+		<!-- Linux tray fallback when AWT SystemTray is unavailable -->
+		<dependency>
+			<groupId>com.dorkbox</groupId>
+			<artifactId>SystemTray</artifactId>
+			<version>${dorkbox-systemtray.version}</version>
+			<exclusions>
+				<!-- Keep project-wide slf4j-api version -->
+				<exclusion>
+					<groupId>org.slf4j</groupId>
+					<artifactId>slf4j-api</artifactId>
+				</exclusion>
+			</exclusions>
 		</dependency>
 		<!-- Servlet related -->
 		<dependency>
