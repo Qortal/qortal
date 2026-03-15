@@ -223,31 +223,16 @@ public class HSQLDBCacheUtils {
         stream = filterTerm(title, data -> data.metadata != null ? data.metadata.getTitle() : null, prefixOnly, stream);
         stream = filterTerm(description, data -> data.metadata != null ? data.metadata.getDescription() : null, prefixOnly, stream);
 
-        // New: Filter by keywords if provided
+        // Filter by keywords if provided
         if (keywords.isPresent() && !keywords.get().isEmpty()) {
             List<String> searchKeywords = keywords.get().stream()
                 .map(String::toLowerCase)
                 .collect(Collectors.toList());
 
             stream = stream.filter(candidate -> {
-                
                 if (candidate.metadata != null && candidate.metadata.getDescription() != null) {
                     String descriptionLower = candidate.metadata.getDescription().toLowerCase();
                     return searchKeywords.stream().anyMatch(descriptionLower::contains);
-                }
-                return false;
-            });
-        }
-
-        if (keywords.isPresent() && !keywords.get().isEmpty()) {
-            List<String> searchKeywords = keywords.get().stream()
-                .map(String::toLowerCase)
-                .collect(Collectors.toList());
-
-            stream = stream.filter(candidate -> {
-                if (candidate.metadata != null && candidate.metadata.getDescription() != null) {
-            String descriptionLower = candidate.metadata.getDescription().toLowerCase();
-            return searchKeywords.stream().anyMatch(descriptionLower::contains);
                 }
                 return false;
             });
@@ -308,60 +293,28 @@ public class HSQLDBCacheUtils {
         // truncate to limit
         if( limit.isPresent() && limit.get() > 0 ) stream = stream.limit(limit.get());
 
-        List<ArbitraryResourceData> listCopy1 = stream.collect(Collectors.toList());
+        boolean stripMetadata = includeMetadata.isEmpty() || !includeMetadata.get();
+        boolean stripStatus = includeStatus.isEmpty() || !includeStatus.get();
 
-        List<ArbitraryResourceData> listCopy2 = new ArrayList<>(listCopy1.size());
-
-        // remove metadata from the first copy
-        if( includeMetadata.isEmpty() || !includeMetadata.get() ) {
-            for( ArbitraryResourceData data : listCopy1 ) {
-                ArbitraryResourceData copy = new ArbitraryResourceData();
-                copy.name = data.name;
-                copy.service = data.service;
-                copy.identifier = data.identifier;
-                copy.status = data.status;
-                copy.metadata = null;
-
-                copy.size = data.size;
-                copy.created = data.created;
-                copy.updated = data.updated;
-                copy.latestSignature = data.latestSignature;
-
-                listCopy2.add(copy);
-            }
-        }
-        // put the list copy 1 into the second copy
-        else {
-            listCopy2.addAll(listCopy1);
+        // If neither metadata nor status needs stripping, collect and return directly
+        if (!stripMetadata && !stripStatus) {
+            return stream.collect(Collectors.toList());
         }
 
-        // remove status from final copy
-        if( includeStatus.isEmpty() || !includeStatus.get() ) {
-
-            List<ArbitraryResourceData> finalCopy = new ArrayList<>(listCopy2.size());
-
-            for( ArbitraryResourceData data : listCopy2 ) {
-                ArbitraryResourceData copy = new ArbitraryResourceData();
-                copy.name = data.name;
-                copy.service = data.service;
-                copy.identifier = data.identifier;
-                copy.status = null;
-                copy.metadata = data.metadata;
-
-                copy.size = data.size;
-                copy.created = data.created;
-                copy.updated = data.updated;
-                copy.latestSignature = data.latestSignature;
-
-                finalCopy.add(copy);
-            }
-
-            return finalCopy;
-        }
-        // keep status included by returning the second copy
-        else {
-            return listCopy2;
-        }
+        // Single pass: strip metadata and/or status as needed
+        return stream.map(data -> {
+            ArbitraryResourceData copy = new ArbitraryResourceData();
+            copy.name = data.name;
+            copy.service = data.service;
+            copy.identifier = data.identifier;
+            copy.size = data.size;
+            copy.created = data.created;
+            copy.updated = data.updated;
+            copy.latestSignature = data.latestSignature;
+            copy.metadata = stripMetadata ? null : data.metadata;
+            copy.status = stripStatus ? null : data.status;
+            return copy;
+        }).collect(Collectors.toList());
     }
 
     /**
@@ -740,19 +693,16 @@ public class HSQLDBCacheUtils {
         sql.append("FROM NAMES ");
         sql.append("INNER JOIN ACCOUNTS on owner = account ");
 
-        Statement statement = repository.getConnection().createStatement();
+        try (Statement statement = repository.getConnection().createStatement();
+             ResultSet resultSet = statement.executeQuery(sql.toString())) {
 
-        ResultSet resultSet = statement.executeQuery(sql.toString());
+            if (resultSet == null || !resultSet.next())
+                return;
 
-        if (resultSet == null)
-            return;
-
-        if (!resultSet.next())
-            return;
-
-        do {
-            levelByName.put(resultSet.getString(1), resultSet.getInt(2));
-        } while(resultSet.next());
+            do {
+                levelByName.put(resultSet.getString(1), resultSet.getInt(2));
+            } while(resultSet.next());
+        }
     }
 
     /**
@@ -774,10 +724,8 @@ public class HSQLDBCacheUtils {
         sql.append("FROM ArbitraryResourcesCache ");
         sql.append("LEFT JOIN ArbitraryMetadataCache USING (service, name, identifier) WHERE name IS NOT NULL");
 
-        List<ArbitraryResourceData> arbitraryResources = new ArrayList<>();
-        Statement statement = repository.getConnection().createStatement();
-
-        ResultSet resultSet = statement.executeQuery(sql.toString());
+        try (Statement statement = repository.getConnection().createStatement();
+             ResultSet resultSet = statement.executeQuery(sql.toString())) {
 
         if (resultSet == null)
             return resources;
@@ -841,6 +789,8 @@ public class HSQLDBCacheUtils {
             resources.add( arbitraryResourceData );
         } while (resultSet.next());
 
+        } // try-with-resources closes Statement and ResultSet
+
         return resources;
     }
 
@@ -857,10 +807,8 @@ public class HSQLDBCacheUtils {
 
         LOGGER.info( "Getting account balances ...");
 
-        try {
-            Statement statement = repository.getConnection().createStatement();
-
-            ResultSet resultSet = statement.executeQuery(sql.toString());
+        try (Statement statement = repository.getConnection().createStatement();
+             ResultSet resultSet = statement.executeQuery(sql.toString())) {
 
             if (resultSet == null || !resultSet.next())
                 return new ArrayList<>(0);

@@ -25,6 +25,7 @@ import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
 import org.qortal.settings.Settings;
 import org.qortal.utils.Base58;
+import org.qortal.utils.ByteArray;
 import org.qortal.utils.Groups;
 import org.qortal.utils.NTP;
 import org.qortal.utils.NamedThreadFactory;
@@ -573,6 +574,12 @@ public class OnlineAccountsManager {
             byte[] timestampBytes = Longs.toByteArray(onlineAccountsTimestamp);
             List<OnlineAccountData> ourOnlineAccounts = new ArrayList<>();
 
+            // Pre-build O(1) lookup set of existing public keys, avoiding O(n) stream scan per minting account
+            Set<OnlineAccountData> onlineAccounts = this.currentOnlineAccounts.computeIfAbsent(onlineAccountsTimestamp, k -> ConcurrentHashMap.newKeySet());
+            Set<ByteArray> existingPublicKeys = onlineAccounts.stream()
+                    .map(a -> ByteArray.wrap(a.getPublicKey()))
+                    .collect(Collectors.toCollection(HashSet::new));
+
             int remaining = mintingAccounts.size();
             for (MintingAccountData mintingAccountData : mintingAccounts) {
                 remaining--;
@@ -580,8 +587,7 @@ public class OnlineAccountsManager {
                 byte[] publicKey = Crypto.toPublicKey(privateKey);
 
                 // We don't want to compute the online account nonce and signature again if it already exists
-                Set<OnlineAccountData> onlineAccounts = this.currentOnlineAccounts.computeIfAbsent(onlineAccountsTimestamp, k -> ConcurrentHashMap.newKeySet());
-                boolean alreadyExists = onlineAccounts.stream().anyMatch(a -> Arrays.equals(a.getPublicKey(), publicKey));
+                boolean alreadyExists = existingPublicKeys.contains(ByteArray.wrap(publicKey));
                 if (alreadyExists) {
                     this.hasOurOnlineAccounts = true;
 
@@ -640,8 +646,12 @@ public class OnlineAccountsManager {
 
             if (!hasInfoChanged) {
                 if (!ourOnlineAccounts.isEmpty()) {
+                    // Use HashSet for O(1) lookup instead of O(n*m) nested stream scan
+                    Set<ByteArray> ourPublicKeys = ourOnlineAccounts.stream()
+                            .map(a -> ByteArray.wrap(a.getPublicKey()))
+                            .collect(Collectors.toCollection(HashSet::new));
                     long matchingCount = this.currentOnlineAccounts.getOrDefault(onlineAccountsTimestamp, Collections.emptySet()).stream()
-                            .filter(a -> ourOnlineAccounts.stream().anyMatch(our -> Arrays.equals(our.getPublicKey(), a.getPublicKey())))
+                            .filter(a -> ourPublicKeys.contains(ByteArray.wrap(a.getPublicKey())))
                             .count();
                     LOGGER.info("No online-account cache update for timestamp {} despite {} locally verified account(s); matching pubkey entries currently in cache: {}",
                             onlineAccountsTimestamp, ourOnlineAccounts.size(), matchingCount);

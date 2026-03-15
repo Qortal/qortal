@@ -18,9 +18,11 @@ import org.qortal.settings.Settings;
 import org.qortal.transaction.Transaction;
 import org.qortal.transform.TransformationException;
 import org.qortal.utils.Base58;
+import org.qortal.utils.ByteArray;
 import org.qortal.utils.NTP;
 
 import java.util.*;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -63,6 +65,9 @@ public class TransactionImporter extends Thread {
 
     /** Map of incoming transaction that are in the import queue. Key is transaction data, value is whether signature has been validated. */
     private final Map<TransactionData, Boolean> incomingTransactions = Collections.synchronizedMap(new HashMap<>());
+
+    /** Index of signatures currently in incomingTransactions for O(1) contains-check instead of O(n) linear scan. */
+    private final Set<ByteArray> incomingSignatureIndex = ConcurrentHashMap.newKeySet();
 
     /** Map of recent invalid unconfirmed transactions. Key is base58 transaction signature, value is do-not-request expiry timestamp. */
     private final Map<String, Long> invalidUnconfirmedTransactions = Collections.synchronizedMap(new HashMap<>());
@@ -139,13 +144,13 @@ public class TransactionImporter extends Thread {
     // Incoming transactions queue
 
     private boolean incomingTransactionQueueContains(byte[] signature) {
-        synchronized (incomingTransactions) {
-            return incomingTransactions.keySet().stream().anyMatch(t -> Arrays.equals(t.getSignature(), signature));
-        }
+        return incomingSignatureIndex.contains(ByteArray.wrap(signature));
     }
 
     private void removeIncomingTransaction(byte[] signature) {
+        ByteArray wrappedSig = ByteArray.wrap(signature);
         incomingTransactions.keySet().removeIf(t -> Arrays.equals(t.getSignature(), signature));
+        incomingSignatureIndex.remove(wrappedSig);
     }
 
     /**
@@ -436,8 +441,10 @@ public class TransactionImporter extends Thread {
 
         if (this.incomingTransactions.size() < MAX_INCOMING_TRANSACTIONS) {
             synchronized (this.incomingTransactions) {
-                if (!incomingTransactionQueueContains(transactionData.getSignature())) {
+                ByteArray wrappedSig = ByteArray.wrap(transactionData.getSignature());
+                if (!incomingSignatureIndex.contains(wrappedSig)) {
                     this.incomingTransactions.put(transactionData, Boolean.FALSE);
+                    this.incomingSignatureIndex.add(wrappedSig);
                 }
             }
         }
