@@ -20,6 +20,8 @@ import java.nio.file.Paths;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -31,6 +33,14 @@ public class HSQLDBRepository implements Repository {
 
 	/** Read/write gate: normal queries take read lock; checkpoint/backup takes write lock. Fair to avoid starvation. */
 	public static final ReentrantReadWriteLock CHECKPOINT_GATE = new ReentrantReadWriteLock(true);
+	/** Start allowing forceful checkpoint lock attempts after this many non-forceful attempts. */
+	private static final int CHECKPOINT_FORCEFUL_AFTER_ATTEMPTS = 131072;
+	/** After threshold, do one forceful attempt every N attempts. */
+	private static final int CHECKPOINT_FORCEFUL_INTERVAL_ATTEMPTS = 65536;
+	/** Minimum delay between INFO-level pending-checkpoint summaries. */
+	private static final long CHECKPOINT_PENDING_SUMMARY_INTERVAL_MS = 180_000L;
+	private static final AtomicInteger CHECKPOINT_ATTEMPTS_SINCE_REQUEST = new AtomicInteger();
+	private static final AtomicLong CHECKPOINT_LAST_PENDING_SUMMARY_MS = new AtomicLong(0L);
 
 	// "serialization failure"
 	private static final Integer DEADLOCK_ERROR_CODE = Integer.valueOf(-4861);
@@ -423,12 +433,48 @@ public class HSQLDBRepository implements Repository {
 	}
 
 	private void maybeCheckpoint() throws DataException {
-		// Exclusive gate: block new queries/sessions while checkpoint runs
-		CHECKPOINT_GATE.writeLock().lock();
-		try {
-			Boolean quickCheckpointRequest = RepositoryManager.getRequestedCheckpoint();
-			if (quickCheckpointRequest == null)
+		// Fast-path: no checkpoint requested, skip lock entirely
+		if (RepositoryManager.getRequestedCheckpoint() == null) {
+			CHECKPOINT_ATTEMPTS_SINCE_REQUEST.set(0);
+			CHECKPOINT_LAST_PENDING_SUMMARY_MS.set(0L);
+			return;
+		}
+
+		int attemptNumber = CHECKPOINT_ATTEMPTS_SINCE_REQUEST.incrementAndGet();
+		int attemptsBeforeForceful;
+		if (attemptNumber < CHECKPOINT_FORCEFUL_AFTER_ATTEMPTS) {
+			attemptsBeforeForceful = CHECKPOINT_FORCEFUL_AFTER_ATTEMPTS - attemptNumber;
+		} else {
+			int attemptsSinceThreshold = attemptNumber - CHECKPOINT_FORCEFUL_AFTER_ATTEMPTS;
+			int modulo = attemptsSinceThreshold % CHECKPOINT_FORCEFUL_INTERVAL_ATTEMPTS;
+			attemptsBeforeForceful = modulo == 0 ? 0 : CHECKPOINT_FORCEFUL_INTERVAL_ATTEMPTS - modulo;
+		}
+
+		long now = System.currentTimeMillis();
+		boolean forcefulAttempt = attemptNumber >= CHECKPOINT_FORCEFUL_AFTER_ATTEMPTS && attemptsBeforeForceful == 0;
+
+		if (forcefulAttempt) {
+			CHECKPOINT_GATE.writeLock().lock();
+		} else {
+			// Use non-blocking tryLock for most attempts to avoid queuing a writer that blocks readers
+			// under fair lock ordering (which causes a "lock wave" of reader starvation).
+			if (!CHECKPOINT_GATE.writeLock().tryLock()) {
+				if (shouldLogCheckpointPendingSummary(now)) {
+					LOGGER.info("Checkpoint pending summary: attemptsSinceRequest={}, attemptsBeforeForceful={}, reason=checkpoint_gate_busy",
+							attemptNumber, attemptsBeforeForceful);
+				}
 				return;
+			}
+		}
+
+		try {
+			// Re-check under lock in case another thread cleared the request while we were waiting
+			Boolean quickCheckpointRequest = RepositoryManager.getRequestedCheckpoint();
+			if (quickCheckpointRequest == null) {
+				CHECKPOINT_ATTEMPTS_SINCE_REQUEST.set(0);
+				CHECKPOINT_LAST_PENDING_SUMMARY_MS.set(0L);
+				return;
+			}
 
 			// We can only perform a CHECKPOINT if no other HSQLDB session is mid-transaction,
 			// otherwise the CHECKPOINT blocks for COMMITs and other threads can't open HSQLDB sessions
@@ -437,47 +483,62 @@ public class HSQLDBRepository implements Repository {
 					+ "FROM Information_schema.system_sessions "
 					+ "WHERE transaction = TRUE";
 
-			try {
-				PreparedStatement pstmt = this.cachePreparedStatement(sql);
+				try {
+					PreparedStatement pstmt = this.cachePreparedStatement(sql);
 
-				if (!pstmt.execute())
-					throw new DataException("Unable to check repository session status");
+					if (!pstmt.execute())
+						throw new DataException("Unable to check repository session status");
 
-				try (ResultSet resultSet = pstmt.getResultSet()) {
-					if (resultSet == null || !resultSet.next())
-						// Failed to even find HSQLDB session info!
-						throw new DataException("No results when checking repository session status");
+					try (ResultSet resultSet = pstmt.getResultSet()) {
+						if (resultSet == null || !resultSet.next())
+							// Failed to even find HSQLDB session info!
+							throw new DataException("No results when checking repository session status");
 
-					int transactionCount = resultSet.getInt(1);
+						int transactionCount = resultSet.getInt(1);
 
-					if (transactionCount > 0) {
-						// We can't safely perform CHECKPOINT due to ongoing SQL transactions
-						// Log this so we know why checkpoint was skipped (helps debugging)
-						LOGGER.trace("Skipping requested checkpoint - {} active transaction(s) found", transactionCount);
-						// Keep the checkpoint request so it can be tried again later
-						return;
+						if (transactionCount > 0) {
+							// We can't safely perform CHECKPOINT due to ongoing SQL transactions
+							if (shouldLogCheckpointPendingSummary(now)) {
+								LOGGER.info("Checkpoint pending summary: attemptsSinceRequest={}, attemptsBeforeForceful={}, reason=active_transactions, activeTransactions={}",
+										attemptNumber, attemptsBeforeForceful, transactionCount);
+							}
+							// Keep the checkpoint request so it can be tried again later
+							return;
+						}
 					}
+
+					LOGGER.info("Performing repository CHECKPOINT on attempt {}...", attemptNumber);
+
+					if (Settings.getInstance().getShowCheckpointNotification())
+						SysTray.getInstance().showMessage(Translator.INSTANCE.translate("SysTray", "DB_CHECKPOINT"),
+								Translator.INSTANCE.translate("SysTray", "PERFORMING_DB_CHECKPOINT"),
+								MessageType.INFO);
+
+					try (Statement stmt = this.connection.createStatement()) {
+						stmt.execute(Boolean.TRUE.equals(quickCheckpointRequest) ? "CHECKPOINT" : "CHECKPOINT DEFRAG");
+					}
+
+					// Completed!
+					LOGGER.info("Repository CHECKPOINT completed on attempt {}!", attemptNumber);
+					RepositoryManager.setRequestedCheckpoint(null);
+					CHECKPOINT_ATTEMPTS_SINCE_REQUEST.set(0);
+					CHECKPOINT_LAST_PENDING_SUMMARY_MS.set(0L);
+				} catch (SQLException e) {
+					throw new DataException("Unable to perform checkpoint", e);
 				}
-
-				LOGGER.info("Performing repository CHECKPOINT...");
-
-				if (Settings.getInstance().getShowCheckpointNotification())
-					SysTray.getInstance().showMessage(Translator.INSTANCE.translate("SysTray", "DB_CHECKPOINT"),
-							Translator.INSTANCE.translate("SysTray", "PERFORMING_DB_CHECKPOINT"),
-							MessageType.INFO);
-
-				try (Statement stmt = this.connection.createStatement()) {
-					stmt.execute(Boolean.TRUE.equals(quickCheckpointRequest) ? "CHECKPOINT" : "CHECKPOINT DEFRAG");
-				}
-
-				// Completed!
-				LOGGER.info("Repository CHECKPOINT completed!");
-				RepositoryManager.setRequestedCheckpoint(null);
-			} catch (SQLException e) {
-				throw new DataException("Unable to perform checkpoint", e);
-			}
 		} finally {
 			CHECKPOINT_GATE.writeLock().unlock();
+		}
+	}
+
+	private static boolean shouldLogCheckpointPendingSummary(long now) {
+		while (true) {
+			long last = CHECKPOINT_LAST_PENDING_SUMMARY_MS.get();
+			if (now - last < CHECKPOINT_PENDING_SUMMARY_INTERVAL_MS)
+				return false;
+
+			if (CHECKPOINT_LAST_PENDING_SUMMARY_MS.compareAndSet(last, now))
+				return true;
 		}
 	}
 

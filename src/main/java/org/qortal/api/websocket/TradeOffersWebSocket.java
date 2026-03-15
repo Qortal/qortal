@@ -327,15 +327,31 @@ public class TradeOffersWebSocket extends ApiWebSocket implements Listener {
 
 	private static List<CrossChainOfferSummary> produceSummaries(Repository repository, ACCT acct, List<ATStateData> atStates, Long timestamp) throws DataException {
 		List<CrossChainOfferSummary> offerSummaries = new ArrayList<>();
+		List<CrossChainTradeData> crossChainTrades = new ArrayList<>();
+		List<ATStateData> atStatesByTrade = new ArrayList<>();
+
 		for (ATStateData atState : atStates) {
 			CrossChainTradeData crossChainTradeData = acct.populateTradeData(repository, atState);
-
-			// Ignore trade if it has failed
-			if (TradeBot.getInstance().isFailedTrade(repository, crossChainTradeData)) {
+			if (crossChainTradeData == null)
 				continue;
-			}
-			offerSummaries.add(produceSummary(repository, acct, atState, crossChainTradeData, timestamp));
+
+			crossChainTrades.add(crossChainTradeData);
+			atStatesByTrade.add(atState);
 		}
+
+		// Batch failed-trade filtering to avoid re-running unconfirmed MESSAGE queries per trade.
+		Set<String> nonFailedTradeAddresses = TradeBot.getInstance().removeFailedTrades(repository, crossChainTrades).stream()
+				.map(crossChainTradeData -> crossChainTradeData.qortalAtAddress)
+				.collect(Collectors.toSet());
+
+		for (int i = 0; i < crossChainTrades.size(); ++i) {
+			CrossChainTradeData crossChainTradeData = crossChainTrades.get(i);
+			if (!nonFailedTradeAddresses.contains(crossChainTradeData.qortalAtAddress))
+				continue;
+
+			offerSummaries.add(produceSummary(repository, acct, atStatesByTrade.get(i), crossChainTradeData, timestamp));
+		}
+
 		return offerSummaries;
 	}
 }

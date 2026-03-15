@@ -17,14 +17,32 @@ import org.qortal.transform.TransformationException;
 import org.qortal.transform.transaction.ChatTransactionTransformer;
 import org.qortal.transform.transaction.TransactionTransformer;
 import org.qortal.utils.ListUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.qortal.utils.NTP;
 
-import java.util.Arrays;
+import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.List;
-import java.util.function.Predicate;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ChatTransaction extends Transaction {
+
+	private static final Logger LOGGER = LogManager.getLogger(ChatTransaction.class);
+
+	/**
+	 * Per-creator cache of recent unconfirmed CHAT transaction timestamps.
+	 * Key: creator public key (wrapped in ByteBuffer for use as map key).
+	 * Value: deque of tx timestamps (ms), kept in insertion order.
+	 * Entries older than recentChatMessagesMaxAge are pruned on each access.
+	 * Populated lazily from the DB on first use, then maintained incrementally.
+	 */
+	private static final ConcurrentHashMap<ByteBuffer, ArrayDeque<Long>> recentChatTimestamps = new ConcurrentHashMap<>();
+
+	/** Whether the cache has been warmed up from the DB at least once. */
+	private static volatile boolean cacheWarmed = false;
 
 	// Properties
 	private ChatTransactionData chatTransactionData;
@@ -183,8 +201,12 @@ public class ChatTransaction extends Transaction {
 			return ValidationResult.MISSING_CREATOR;
 
 		// Reject if unconfirmed pile already has X recent CHAT transactions from same creator
-		if (countRecentChatTransactionsByCreator(creator) >= Settings.getInstance().getMaxRecentChatMessagesPerAccount())
+		int recentCount = countRecentChatTransactionsByCreator(creator);
+		if (recentCount >= Settings.getInstance().getMaxRecentChatMessagesPerAccount()) {
+			LOGGER.info("Chat rate limit exceeded for {}: {} recent txs (limit {})",
+					creator.getAddress(), recentCount, Settings.getInstance().getMaxRecentChatMessagesPerAccount());
 			return ValidationResult.TOO_MANY_UNCONFIRMED;
+		}
 
 		// If we exist in the repository then we've been imported as unconfirmed,
 		// but we don't want to make it into a block, so return fake non-OK result.
@@ -237,22 +259,89 @@ public class ChatTransaction extends Transaction {
 	}
 
 	private int countRecentChatTransactionsByCreator(PublicKeyAccount creator) throws DataException {
-		List<TransactionData> unconfirmedTransactions = repository.getTransactionRepository().getUnconfirmedTransactions();
-		final Long now = NTP.getTime();
-		long recentThreshold = Settings.getInstance().getRecentChatMessagesMaxAge();
+		long now = NTP.getTime() != null ? NTP.getTime() : System.currentTimeMillis();
+		long maxAge = Settings.getInstance().getRecentChatMessagesMaxAge();
+		long cutoff = now - maxAge;
 
-		// We only care about chat transactions, and only those that are considered 'recent'
-		Predicate<TransactionData> hasSameCreatorAndIsRecentChat = transactionData -> {
-			if (transactionData.getType() != TransactionType.CHAT)
-				return false;
+		if (!cacheWarmed) {
+			warmCache(cutoff);
+		}
 
-			if (transactionData.getTimestamp() < now - recentThreshold)
-				return false;
+		ByteBuffer key = ByteBuffer.wrap(creator.getPublicKey());
+		ArrayDeque<Long> timestamps = recentChatTimestamps.get(key);
+		if (timestamps == null)
+			return 0;
 
-			return Arrays.equals(creator.getPublicKey(), transactionData.getCreatorPublicKey());
-		};
+		synchronized (timestamps) {
+			pruneOldEntries(timestamps, cutoff);
+			int creatorCount = timestamps.size();
+			int totalCount = recentChatTimestamps.values().stream().mapToInt(ArrayDeque::size).sum();
+			int accountCount = recentChatTimestamps.size();
+			LOGGER.info("Chat rate-limit cache: creator has {} recent txs | cache total: {} txs across {} accounts",
+					creatorCount, totalCount, accountCount);
+			return creatorCount;
+		}
+	}
 
-		return (int) unconfirmedTransactions.stream().filter(hasSameCreatorAndIsRecentChat).count();
+	/**
+	 * Warm the in-memory cache from the DB. Called once on first use.
+	 * Populates recentChatTimestamps with all unconfirmed CHAT tx timestamps
+	 * that are within the recent window.
+	 */
+	private void warmCache(long cutoff) throws DataException {
+		synchronized (ChatTransaction.class) {
+			if (cacheWarmed)
+				return;
+
+			long fetchStart = System.currentTimeMillis();
+			List<TransactionData> unconfirmedTransactions = repository.getTransactionRepository().getUnconfirmedTransactions();
+			long fetchElapsed = System.currentTimeMillis() - fetchStart;
+			LOGGER.info("Warming recent chat timestamps cache: getUnconfirmedTransactions() returned {} rows in {}ms",
+					unconfirmedTransactions.size(), fetchElapsed);
+
+			for (TransactionData txData : unconfirmedTransactions) {
+				if (txData.getType() != TransactionType.CHAT)
+					continue;
+				if (txData.getTimestamp() < cutoff)
+					continue;
+
+				ByteBuffer key = ByteBuffer.wrap(txData.getCreatorPublicKey());
+				recentChatTimestamps
+						.computeIfAbsent(key, k -> new ArrayDeque<>())
+						.add(txData.getTimestamp());
+			}
+
+			cacheWarmed = true;
+			LOGGER.info("Recent chat timestamps cache warmed with {} creator entries", recentChatTimestamps.size());
+		}
+	}
+
+	/** Record a newly imported CHAT tx timestamp in the in-memory cache. */
+	public static void recordImportedChatTimestamp(byte[] creatorPublicKey, long timestamp) {
+		ByteBuffer key = ByteBuffer.wrap(creatorPublicKey);
+		ArrayDeque<Long> timestamps = recentChatTimestamps.computeIfAbsent(key, k -> new ArrayDeque<>());
+		synchronized (timestamps) {
+			timestamps.addLast(timestamp);
+		}
+	}
+
+	/** Remove a CHAT tx timestamp from the in-memory cache (called on expiry). */
+	public static void removeExpiredChatTimestamp(byte[] creatorPublicKey, long timestamp) {
+		ByteBuffer key = ByteBuffer.wrap(creatorPublicKey);
+		ArrayDeque<Long> timestamps = recentChatTimestamps.get(key);
+		if (timestamps == null)
+			return;
+
+		synchronized (timestamps) {
+			timestamps.remove(timestamp);
+		}
+	}
+
+	/** Prune entries older than the cutoff from the front of the deque (timestamps are in insertion/chronological order). */
+	private static void pruneOldEntries(Deque<Long> timestamps, long cutoff) {
+		while (!timestamps.isEmpty() && timestamps.peekFirst() < cutoff) {
+			timestamps.pollFirst();
+		}
 	}
 
 
@@ -264,6 +353,8 @@ public class ChatTransaction extends Transaction {
 	@Override
 	protected void onImportAsUnconfirmed() throws DataException {
 		this.getCreator().ensureAccount();
+		// Record this tx's timestamp in the in-memory rate-limit cache
+		recordImportedChatTimestamp(this.chatTransactionData.getCreatorPublicKey(), this.chatTransactionData.getTimestamp());
 	}
 
 	@Override

@@ -350,6 +350,16 @@ public interface TransactionRepository {
 	public List<TransactionData> getUnconfirmedTransactions(EnumSet<TransactionType> excludedTxTypes, Integer limit) throws DataException;
 
 	/**
+	 * Returns list of unconfirmed transactions created before the given timestamp.
+	 * Used to efficiently pre-filter expiry candidates without loading the full pool.
+	 *
+	 * @param timestamp only return transactions with created_when &lt; this value
+	 * @return list of transactions, or empty if none.
+	 * @throws DataException
+	 */
+	public List<TransactionData> getUnconfirmedTransactionsCreatedBefore(long timestamp) throws DataException;
+
+	/**
 	 * Remove transaction from unconfirmed transactions pile.
 	 * 
 	 * @param signature

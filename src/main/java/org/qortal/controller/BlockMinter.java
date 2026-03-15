@@ -279,6 +279,7 @@ public class BlockMinter extends Thread {
 							LOGGER.debug("Couldn't acquire blockchain lock even after waiting 30 seconds");
 							continue;
 						}
+						final long lockHeldStartMillis = System.currentTimeMillis();
 
 						boolean newBlockMinted = false;
 						Block newBlock = null;
@@ -446,6 +447,10 @@ public class BlockMinter extends Thread {
 								newBlocks.clear();
 							}
 						} finally {
+							final long lockHeldMillis = System.currentTimeMillis() - lockHeldStartMillis;
+							if (lockHeldMillis >= 2000L) {
+								LOGGER.info("BlockMinter held blockchain lock for {} ms", lockHeldMillis);
+							}
 							blockchainLock.unlock();
 						}
 
