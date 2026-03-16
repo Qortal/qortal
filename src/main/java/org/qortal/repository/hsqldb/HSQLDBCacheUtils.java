@@ -727,69 +727,65 @@ public class HSQLDBCacheUtils {
         try (Statement statement = repository.getConnection().createStatement();
              ResultSet resultSet = statement.executeQuery(sql.toString())) {
 
-        if (resultSet == null)
-            return resources;
+            if (resultSet == null || !resultSet.next())
+                return resources;
 
-        if (!resultSet.next())
-            return resources;
+            do {
+                String nameResult = resultSet.getString(1);
+                int serviceResult = resultSet.getInt(2);
+                String identifierResult = resultSet.getString(3);
+                Integer sizeResult = resultSet.getInt(4);
+                Integer status = resultSet.getInt(5);
+                Long created = resultSet.getLong(6);
+                Long updated = resultSet.getLong(7);
 
-        do {
-            String nameResult = resultSet.getString(1);
-            int serviceResult = resultSet.getInt(2);
-            String identifierResult = resultSet.getString(3);
-            Integer sizeResult = resultSet.getInt(4);
-            Integer status = resultSet.getInt(5);
-            Long created = resultSet.getLong(6);
-            Long updated = resultSet.getLong(7);
+                String titleResult = resultSet.getString(8);
+                String descriptionResult = resultSet.getString(9);
+                String category = resultSet.getString(10);
+                String tag1 = resultSet.getString(11);
+                String tag2 = resultSet.getString(12);
+                String tag3 = resultSet.getString(13);
+                String tag4 = resultSet.getString(14);
+                String tag5 = resultSet.getString(15);
 
-            String titleResult = resultSet.getString(8);
-            String descriptionResult = resultSet.getString(9);
-            String category = resultSet.getString(10);
-            String tag1 = resultSet.getString(11);
-            String tag2 = resultSet.getString(12);
-            String tag3 = resultSet.getString(13);
-            String tag4 = resultSet.getString(14);
-            String tag5 = resultSet.getString(15);
+                byte[] latestSignatureResult = resultSet.getBytes(16);
 
-            byte[] latestSignatureResult = resultSet.getBytes(16);
+                if (Objects.equals(identifierResult, "default")) {
+                    // Map "default" back to null. This is optional but probably less confusing than returning "default".
+                    identifierResult = null;
+                }
 
-            if (Objects.equals(identifierResult, "default")) {
-                // Map "default" back to null. This is optional but probably less confusing than returning "default".
-                identifierResult = null;
-            }
+                ArbitraryResourceData arbitraryResourceData = new ArbitraryResourceData();
+                arbitraryResourceData.name = nameResult;
+                arbitraryResourceData.service = Service.valueOf(serviceResult);
+                arbitraryResourceData.identifier = identifierResult;
+                arbitraryResourceData.size = sizeResult;
+                arbitraryResourceData.created = created;
+                arbitraryResourceData.updated = (updated == 0) ? null : updated;
+                arbitraryResourceData.latestSignature = latestSignatureResult;
 
-            ArbitraryResourceData arbitraryResourceData = new ArbitraryResourceData();
-            arbitraryResourceData.name = nameResult;
-            arbitraryResourceData.service = Service.valueOf(serviceResult);
-            arbitraryResourceData.identifier = identifierResult;
-            arbitraryResourceData.size = sizeResult;
-            arbitraryResourceData.created = created;
-            arbitraryResourceData.updated = (updated == 0) ? null : updated;
-            arbitraryResourceData.latestSignature = latestSignatureResult;
+                arbitraryResourceData.setStatus(ArbitraryResourceStatus.Status.valueOf(status));
 
-            arbitraryResourceData.setStatus(ArbitraryResourceStatus.Status.valueOf(status));
+                ArbitraryResourceMetadata metadata = new ArbitraryResourceMetadata();
+                metadata.setTitle(titleResult);
+                metadata.setDescription(descriptionResult);
+                metadata.setCategory(Category.uncategorizedValueOf(category));
 
-            ArbitraryResourceMetadata metadata = new ArbitraryResourceMetadata();
-            metadata.setTitle(titleResult);
-            metadata.setDescription(descriptionResult);
-            metadata.setCategory(Category.uncategorizedValueOf(category));
+                List<String> tags = new ArrayList<>();
+                if (tag1 != null) tags.add(tag1);
+                if (tag2 != null) tags.add(tag2);
+                if (tag3 != null) tags.add(tag3);
+                if (tag4 != null) tags.add(tag4);
+                if (tag5 != null) tags.add(tag5);
+                metadata.setTags(!tags.isEmpty() ? tags : null);
 
-            List<String> tags = new ArrayList<>();
-            if (tag1 != null) tags.add(tag1);
-            if (tag2 != null) tags.add(tag2);
-            if (tag3 != null) tags.add(tag3);
-            if (tag4 != null) tags.add(tag4);
-            if (tag5 != null) tags.add(tag5);
-            metadata.setTags(!tags.isEmpty() ? tags : null);
+                if (metadata.hasMetadata()) {
+                    arbitraryResourceData.metadata = metadata;
+                }
 
-            if (metadata.hasMetadata()) {
-                arbitraryResourceData.metadata = metadata;
-            }
-
-            resources.add( arbitraryResourceData );
-        } while (resultSet.next());
-
-        } // try-with-resources closes Statement and ResultSet
+                resources.add(arbitraryResourceData);
+            } while (resultSet.next());
+        }
 
         return resources;
     }
