@@ -74,7 +74,9 @@ import java.util.concurrent.atomic.AtomicLong;
 //import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Function;
 import java.time.Instant;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 //import java.net.InetAddress;
 //import java.net.UnknownHostException;
 
@@ -135,7 +137,10 @@ public class RNS {
     private final List<ReticulumPeer> incomingPeers = Collections.synchronizedList(new ArrayList<>());
     private List<ReticulumPeer> immutableIncomingPeers = Collections.emptyList();
 
-    private final ExecuteProduceConsume rnsEPC;
+    /** Produces Connect tasks for the baseDestination and submits to worker pool. */
+    private Thread rnsBaseThread;
+    //private final ExecuteProduceConsume rnsEPC;
+    private ExecutorService rnsWorkerPool;
     private static final long NETWORK_EPC_KEEPALIVE = 5L; // 1 second
     //private int totalThreadCount = 0;
     private final int reticulumMaxNetworkThreadPoolSize = Settings.getInstance().getReticulumMaxNetworkThreadPoolSize();
@@ -175,18 +180,23 @@ public class RNS {
         }
         log.info("reticulum instance created");
         log.debug("reticulum instance created: {}", reticulum);
-        //        Settings.getInstance().getMaxRNSNetworkThreadPoolSize(),   // statically set to 5 below
+        //        Settings.getInstance().getMaxRNSNetworkThreadPoolSize(),
         var rnsThreadPriority = Settings.getInstance().getNetworkThreadPriority(); // default: 7
-        //// if possible one higher than NetworkThreadPriority
-        //if (rnsThreadPriority < 10) {
-        //    rnsThreadPriority++;
-        //}
-        ExecutorService RNSExecutor = new ThreadPoolExecutor(1,
-                Settings.getInstance().getReticulumMaxNetworkThreadPoolSize(),  // we don't need many max threads
+        ////// if possible one higher than NetworkThreadPriority
+        ////if (rnsThreadPriority < 10) {
+        ////    rnsThreadPriority++;
+        ////}
+        //ExecutorService RNSExecutor = new ThreadPoolExecutor(1,
+        //        Settings.getInstance().getReticulumMaxNetworkThreadPoolSize(),  // we don't need many max threads
+        //        NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
+        //        new SynchronousQueue<Runnable>(),
+        //        new NamedThreadFactory("RNS-EPC", rnsThreadPriority));
+        //rnsEPC = new RNSProcessor(RNSExecutor);        // Worker pool: message handling only (MessageTask, ConnectTask). I/O runs on dedicated ioThread.
+        this.rnsWorkerPool = new ThreadPoolExecutor(
+                3, Settings.getInstance().getReticulumMaxNetworkThreadPoolSize(),
                 NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
-                new SynchronousQueue<Runnable>(),
-                new NamedThreadFactory("RNS-EPC", rnsThreadPriority));
-        rnsEPC = new RNSProcessor(RNSExecutor);
+                new LinkedBlockingQueue<>(),
+                new NamedThreadFactory("RNS-Worker", rnsThreadPriority));
     }
 
     // Note: potentially create persistent serverIdentity (utility rnid) and load it from file
@@ -252,8 +262,17 @@ public class RNS {
         //dataDestination.announce();
         //log.debug("Sent initial announce from {} ({})", encodeHexString(dataDestination.getHash()), dataDestination.getName());
 
-        // Start up first networking thread (the RNS main thread, somilar to the "server loop" in a standalone Reticulum app)
-        rnsEPC.start();
+        // Start up first networking thread (the RNS main thread, similar to the "server loop" in a standalone Reticulum app)
+        //rnsEPC.start();
+
+        // Start up "main" thread, one for each destination to handle aspects separately.
+        // Note: Each such thread is equivalent to the peerTypes "NETWORK" and "NETWORKDATA".
+        this.rnsBaseThread = new Thread(this::runBaseLoop, "rnsMesh-BASE");
+        this.rnsBaseThread.setDaemon(false);
+        this.rnsBaseThread.start();
+        //this.rnsDataThread = new Thread(this::runDataLoop, "rnsMesh-DATA");
+        //this.rnsDataThread.setDaemon(false);
+        //this.rnsDataThread.start();
     }
 
     private void initConfig(String configDir) throws IOException {
@@ -321,6 +340,60 @@ public class RNS {
         }
     }
 
+    //private Predicate<ReticulumPeer> isBasePeer = peer -> {
+    //    return this.getActiveImmutableLinkedPeers().stream().anyMatch(p -> p.getPeerAspect() == RNSCommon.PeerAspect.BASE);
+    //};
+
+    // "main" loop for baseDestination (chain tasks)
+    private void runBaseLoop() {
+        while (!isShuttingDown && !Thread.currentThread().isInterrupted()) {
+            final List<ReticulumPeer> peersThisRound = this.getActiveImmutableLinkedPeers().stream()
+                    .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.BASE)
+                    .collect(Collectors.toList());
+
+            for (ReticulumPeer peer : peersThisRound) {
+                ExecuteProduceConsume.Task task;
+                while ((task = peer.getMessageTask(Peer.NETWORK)) != null) {
+                    final ExecuteProduceConsume.Task t = task;
+                    try {
+                        rnsWorkerPool.execute(() -> {
+                            try {
+                                t.perform();
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            } catch (Exception e) {
+                                log.warn("Reticulum worker task threw: {}", e.getMessage(), e);
+                            }
+                        });
+                    } catch (java.util.concurrent.RejectedExecutionException e) {
+                        // Worker pool is full or shutting down - log and continue
+                        // Message will be lost but system remains stable
+                        log.warn("[{}] Reticulum worker pool rejected message task (pool full or shutting down)",
+                                peer.getPeerConnectionId());
+                        break; // Stop draining this peer's queue
+                    }
+                }
+            }
+
+            // Sleep unconditionally at the end of every cycle to cap the loop
+            // at ~100 iterations/sec.
+            if (!isShuttingDown && !Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        log.debug("Mesh loop for destination {} exiting.", baseDestination.getName());
+    }
+
+    //// "main" loop for dataDestination (QDN tasks)
+    //private void runDataLoop() {
+    //    //... TODO (similar to runBaseLoop()
+    //}
+
     public void broadcast(Function<ReticulumPeer, Message> peerMessageBuilder) {
         for (ReticulumPeer peer : getActiveImmutableLinkedPeers()) {
             if (this.isShuttingDown) {
@@ -371,13 +444,33 @@ public class RNS {
         //dataDestination.setProofStrategy(ProofStrategy.PROVE_NONE);
 
         // Stop processing threads
-        try {
-            if (!this.rnsEPC.shutdown(5000)) {
-                log.warn("Reticulum threads failed to terminate");
+        //try {
+        //    if (!this.rnsEPC.shutdown(5000)) {
+        //        log.warn("Reticulum threads failed to terminate");
+        //    }
+        //} catch (InterruptedException e) {
+        //    log.warn("Interrupted while waiting for rnsEPC threads to terminate");
+        //}
+        if (this.rnsBaseThread != null && this.rnsBaseThread.isAlive()) {
+            this.rnsBaseThread.interrupt();
+            try {
+                this.rnsBaseThread.join(5000);
+                if (this.rnsBaseThread.isAlive())
+                    log.warn("RNS base thread did not terminate in time");
+            } catch (InterruptedException e) {
+                log.warn("Interrupted while waiting for RNS base thread");
             }
-        } catch (InterruptedException e) {
-            log.warn("Interrupted while waiting for rnsEPC threads to terminate");
         }
+        //if (this.rnsDataThread != null && this.rnsDataThread.isAlive()) {
+        //    this.rnsDataThread.interrupt();
+        //    try {
+        //        this.rnsDataThread.join(5000);
+        //        if (this.rnsDataThread.isAlive())
+        //            log.warn("RNS base thread did not terminate in time");
+        //    } catch (InterruptedException e) {
+        //        log.warn("Interrupted while waiting for RNS base thread");
+        //    }
+        //}
         
         // gracefully close links of peers that point to us
         for (ReticulumPeer p: incomingPeers) {
@@ -574,104 +667,104 @@ public class RNS {
         }
     }
 
-    class RNSProcessor extends ExecuteProduceConsume {
-
-        //private final Logger logger = LoggerFactory.getLogger(RNSProcessor.class);
-
-        private final AtomicLong nextConnectTaskTimestamp = new AtomicLong(0L); // ms - try first connect once NTP syncs
-        private final AtomicLong nextBroadcastTimestamp = new AtomicLong(0L); // ms - try first broadcast once NTP syncs
-        private final AtomicLong nextPingTimestamp = new AtomicLong(0L); // ms - try first low-level Ping
-        private final AtomicLong nextPruneTimestamp = new AtomicLong(0L); // ms - try first low-level Ping
-
-        private Iterator<SelectionKey> channelIterator = null;
-
-        RNSProcessor(ExecutorService executor) {
-            super(executor);
-            final Long now = NTP.getTime();
-            nextPruneTimestamp.set(now + PRUNE_INTERVAL/2);
-        }
-
-        @Override
-        protected void onSpawnFailure() {
-            // For debugging:
-            // ExecutorDumper.dump(this.executor, 3, ExecuteProduceConsume.class);
-        }
-
-        @Override
-        protected Task produceTask(boolean canBlock) throws InterruptedException {
-            Task task;
-
-            //// TODO: Needed? Figure out how to add pending messages in RNSPeer
-            ////        (RNSPeer: pendingMessages.offer(message))
-            //task = maybeProducePeerMessageTask();
-            //if (task != null) {
-            //    return task;
-            //}
-
-            //final Long now = NTP.getTime();
-            //
-            //// ping task (Link+Channel+Buffer)
-            //task = maybeProducePeerPingTask(now);
-            //if (task != null) {
-            //    return task;
-            //}
-            // we'll just wait instead of producing tasks
-            try {
-                TimeUnit.MILLISECONDS.sleep(100);
-            } catch (InterruptedException e) {
-                log.error("exception: {}", e);
-            }
-
-
-            //task = maybeProduceBroadcastTask(now);
-            //if (task != null) {
-            //    return task;
-            //}
-
-            //// Prune stuck/slow/old peers (moved from Controller)
-            //task = maybeProduceRNSPrunePeersTask(now);
-            //if (task != null) {
-            //    return task;
-            //}
-
-            return null;
-        }
-
-        //private Task maybeProducePeerPingTask(Long now) {
-        //    //var ilp = getImmutableLinkedPeers().stream()
-        //    //        .map(peer -> peer.getPingTask(now))
-        //    //        .filter(Objects::nonNull)
-        //    //        .findFirst()
-        //    //        .orElse(null);
-        //    //if (nonNull(ilp)) {
-        //    //    log.info("ilp - {}", ilp);
-        //    //}
-        //    //return ilp;
-        //    return getActiveImmutableLinkedPeers().stream()
-        //            .map(peer -> peer.getPingTask(now))
-        //            .filter(Objects::nonNull)
-        //            .findFirst()
-        //            .orElse(null);
-        //}
-
-        //private Task maybeProduceBroadcastTask(Long now) {
-        //    if (now == null || now < nextBroadcastTimestamp.get()) {
-        //        return null;
-        //    }
-        //
-        //    nextBroadcastTimestamp.set(now + BROADCAST_INTERVAL);
-        //    return new RNSBroadcastTask();
-        //}
-        //
-        //private Task maybeProduceRNSPrunePeersTask(Long now) {
-        //    if (now == null || now < nextPruneTimestamp.get()) {
-        //        return null;
-        //    }
-        //
-        //    nextPruneTimestamp.set(now + PRUNE_INTERVAL);
-        //    return new RNSPrunePeersTask();
-        //}
-    }
+    //class RNSProcessor extends ExecuteProduceConsume {
+    //
+    //    //private final Logger logger = LoggerFactory.getLogger(RNSProcessor.class);
+    //
+    //    private final AtomicLong nextConnectTaskTimestamp = new AtomicLong(0L); // ms - try first connect once NTP syncs
+    //    private final AtomicLong nextBroadcastTimestamp = new AtomicLong(0L); // ms - try first broadcast once NTP syncs
+    //    private final AtomicLong nextPingTimestamp = new AtomicLong(0L); // ms - try first low-level Ping
+    //    private final AtomicLong nextPruneTimestamp = new AtomicLong(0L); // ms - try first low-level Ping
+    //
+    //    private Iterator<SelectionKey> channelIterator = null;
+    //
+    //    RNSProcessor(ExecutorService executor) {
+    //        super(executor);
+    //        final Long now = NTP.getTime();
+    //        nextPruneTimestamp.set(now + PRUNE_INTERVAL/2);
+    //    }
+    //
+    //    @Override
+    //    protected void onSpawnFailure() {
+    //        // For debugging:
+    //        // ExecutorDumper.dump(this.executor, 3, ExecuteProduceConsume.class);
+    //    }
+    //
+    //    @Override
+    //    protected Task produceTask(boolean canBlock) throws InterruptedException {
+    //        Task task;
+    //
+    //        //// TODO: Needed? Figure out how to add pending messages in RNSPeer
+    //        ////        (RNSPeer: pendingMessages.offer(message))
+    //        //task = maybeProducePeerMessageTask();
+    //        //if (task != null) {
+    //        //    return task;
+    //         //}
+    //
+    //        //final Long now = NTP.getTime();
+    //        //
+    //        //// ping task (Link+Channel+Buffer)
+    //        //task = maybeProducePeerPingTask(now);
+    //        //if (task != null) {
+    //        //    return task;
+    //        //}
+    //        // we'll just wait instead of producing tasks
+    //        try {
+    //            TimeUnit.MILLISECONDS.sleep(100);
+    //        } catch (InterruptedException e) {
+    //            log.error("exception: {}", e);
+    //        }
+    //
+    //
+    //        //task = maybeProduceBroadcastTask(now);
+    //        //if (task != null) {
+    //        //    return task;
+    //        //}
+    //
+    //        //// Prune stuck/slow/old peers (moved from Controller)
+    //        //task = maybeProduceRNSPrunePeersTask(now);
+    //        //if (task != null) {
+    //        //    return task;
+    //        //}
+    //
+    //        return null;
+    //    }
+    //
+    //    //private Task maybeProducePeerPingTask(Long now) {
+    //    //    //var ilp = getImmutableLinkedPeers().stream()
+    //    //    //        .map(peer -> peer.getPingTask(now))
+    //    //    //        .filter(Objects::nonNull)
+    //    //    //        .findFirst()
+    //    //    //        .orElse(null);
+    //    //    //if (nonNull(ilp)) {
+    //    //    //    log.info("ilp - {}", ilp);
+    //    //    //}
+    //    //    //return ilp;
+    //    //    return getActiveImmutableLinkedPeers().stream()
+    //    //            .map(peer -> peer.getPingTask(now))
+    //    //            .filter(Objects::nonNull)
+    //    //            .findFirst()
+    //    //            .orElse(null);
+    //    //}
+    //
+    //    //private Task maybeProduceBroadcastTask(Long now) {
+    //    //    if (now == null || now < nextBroadcastTimestamp.get()) {
+    //    //        return null;
+    //    //    }
+    //    //
+    //    //    nextBroadcastTimestamp.set(now + BROADCAST_INTERVAL);
+    //    //    return new RNSBroadcastTask();
+    //    //}
+    //    //
+    //    //private Task maybeProduceRNSPrunePeersTask(Long now) {
+    //    //    if (now == null || now < nextPruneTimestamp.get()) {
+    //    //        return null;
+    //    //    }
+    //    //
+    //    //    nextPruneTimestamp.set(now + PRUNE_INTERVAL);
+    //    //    return new RNSPrunePeersTask();
+    //    //}
+    //}
 
     private static class SingletonContainer {
         private static final RNS INSTANCE = new RNS();
