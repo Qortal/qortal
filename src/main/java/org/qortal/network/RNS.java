@@ -1056,21 +1056,21 @@ public class RNS {
     }
 
     public List<PeerData> getAllKnownPeers() {
-        return getImmutableIncomingPeers().stream()
+        return getActiveImmutableLinkedPeers().stream()
                 .map(ReticulumPeer::getPeerData)
                 .collect(Collectors.toList());
     }
 
     public List<PeerData> getAllKnownCorePeers() {
-        return getImmutableIncomingPeers().stream()
-                .filter(p -> p.isDataPeer())
+        return getActiveImmutableLinkedPeers().stream()
+                .filter(p -> !p.isDataPeer())
                 .map(ReticulumPeer::getPeerData)
                 .collect(Collectors.toList());
     }
 
     public List<PeerData> getAllKnownDataPeers() {
-        return getImmutableIncomingPeers().stream()
-                .filter(p -> !p.isDataPeer())
+        return getActiveImmutableLinkedPeers().stream()
+                .filter(p -> p.isDataPeer())
                 .map(ReticulumPeer::getPeerData)
                 .collect(Collectors.toList());
     }
