@@ -1398,8 +1398,9 @@ public class Network {
         }
         
         // Group handshaked peers by their nodeId (reading from immutable snapshot)
+        // exclude ReticulumPeers
         Map<String, List<Peer>> byNodeId = getImmutableHandshakedPeers().stream()
-                .filter(p -> p.getPeersNodeId() != null)
+                .filter(p -> p.getPeersNodeId() != null && p.getPeerMetaType() != PeerMetaType.RETICULUM)
                 .collect(Collectors.groupingBy(Peer::getPeersNodeId));
         
         // Grace period before enforcing direction on single connections
