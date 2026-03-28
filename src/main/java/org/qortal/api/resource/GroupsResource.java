@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.qortal.api.ApiError;
 import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
+import org.qortal.api.model.GroupKickInfo;
 import org.qortal.api.model.GroupMembers;
 import org.qortal.api.model.GroupMembers.MemberInfo;
 import org.qortal.api.model.GroupWithJoinRequests;
@@ -171,6 +172,48 @@ public class GroupsResource {
 			}
 
 			return allGroupData;
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
+	@Path("/kicks/member")
+	@Operation(
+		summary = "List group kicks for a member",
+		description = "Returns all kick transactions where the given address was kicked from a group. Only confirmed kicks are returned.",
+		responses = {
+			@ApiResponse(
+				description = "list of kick summaries (member, groupId, reason, timestamp)",
+				content = @Content(
+					mediaType = MediaType.APPLICATION_JSON,
+					array = @ArraySchema(schema = @Schema(implementation = GroupKickInfo.class))
+				)
+			)
+		}
+	)
+	@ApiErrors({ApiError.INVALID_ADDRESS, ApiError.INVALID_CRITERIA, ApiError.REPOSITORY_ISSUE})
+	public List<GroupKickInfo> getGroupKicks(
+			@Parameter(description = "Address of the kicked member", required = true) @QueryParam("address") String address,
+			@Parameter(description = "Optional group ID to filter by") @QueryParam("groupId") Integer groupId,
+			@Parameter(description = "Only return kicks with timestamp strictly before this (ms since epoch)") @QueryParam("before") Long before,
+			@Parameter(description = "Only return kicks with timestamp strictly after this (ms since epoch)") @QueryParam("after") Long after,
+			@Parameter(ref = "limit") @QueryParam("limit") Integer limit,
+			@Parameter(ref = "offset") @QueryParam("offset") Integer offset,
+			@Parameter(ref = "reverse") @QueryParam("reverse") Boolean reverse) {
+		if (address == null || address.isEmpty())
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
+		if (!Crypto.isValidAddress(address))
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
+		if (before != null && before < 1500000000000L)
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+		if (after != null && after < 1500000000000L)
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<GroupKickSummaryData> list = repository.getTransactionRepository().getGroupKicks(address, groupId, before, after, limit, offset, reverse);
+			return list.stream()
+					.map(k -> new GroupKickInfo(k.getMember(), k.getGroupId(), k.getReason(), k.getTimestamp()))
+					.collect(Collectors.toList());
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}

@@ -20,6 +20,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bouncycastle.util.encoders.Base64;
 import org.qortal.api.*;
+import org.qortal.crypto.AES;
 import org.qortal.api.model.FileProperties;
 import org.qortal.api.model.PeerCountInfo;
 import org.qortal.api.model.PeerInfo;
@@ -44,7 +45,9 @@ import org.qortal.data.arbitrary.ArbitraryCategoryInfo;
 import org.qortal.data.arbitrary.ArbitraryDataIndexDetail;
 import org.qortal.data.arbitrary.ArbitraryDataIndexScorecard;
 import org.qortal.data.arbitrary.ArbitraryResourceData;
+import org.qortal.data.arbitrary.ArbitraryResourceDataResponse;
 import org.qortal.data.arbitrary.ArbitraryResourceMetadata;
+import org.qortal.data.arbitrary.ArbitraryResourceRequest;
 import org.qortal.data.arbitrary.ArbitraryResourceStatus;
 import org.qortal.data.arbitrary.IndexCache;
 import org.qortal.data.naming.NameData;
@@ -76,11 +79,15 @@ import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 
 import java.io.BufferedWriter;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import javax.crypto.CipherInputStream;
+import javax.crypto.spec.SecretKeySpec;
 import java.net.FileNameMap;
 import java.net.URLConnection;
 import java.nio.file.Files;
@@ -803,6 +810,134 @@ public class ArbitraryResource {
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}
+	}
+
+
+	@POST
+	@Path("/resources/onchain/data")
+	@Operation(
+			summary = "Batch-fetch on-chain (RAW_DATA) resources",
+			description = "Accepts a list of resources identified by service, name, and identifier. " +
+					"Only resources whose data is stored directly on-chain (RAW_DATA transactions) are supported. " +
+					"Each item in the response either contains the base64-encoded data or an error message.",
+			requestBody = @RequestBody(
+					required = true,
+					content = @Content(
+							mediaType = MediaType.APPLICATION_JSON,
+							array = @ArraySchema(schema = @Schema(implementation = ArbitraryResourceRequest.class))
+					)
+			),
+			responses = {
+					@ApiResponse(
+							description = "List of results, one per requested resource",
+							content = @Content(
+									mediaType = MediaType.APPLICATION_JSON,
+									array = @ArraySchema(schema = @Schema(implementation = ArbitraryResourceDataResponse.class))
+							)
+					)
+			}
+	)
+	@Produces(MediaType.APPLICATION_JSON)
+	public List<ArbitraryResourceDataResponse> getOnchainResourceData(List<ArbitraryResourceRequest> requests) {
+		// Authentication can be bypassed in the settings, for those running public QDN nodes
+		if (!Settings.getInstance().isQDNAuthBypassEnabled()) {
+			Security.checkApiCallAllowed(request, null);
+		}
+
+		if (requests == null || requests.isEmpty()) {
+			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.INVALID_CRITERIA, "Request list must not be empty");
+		}
+
+		List<ArbitraryResourceDataResponse> results = new ArrayList<>(requests.size());
+
+		try (Repository repository = RepositoryManager.getRepository()) {
+			for (ArbitraryResourceRequest req : requests) {
+				if (req.service == null || req.name == null || req.name.isEmpty()) {
+					results.add(ArbitraryResourceDataResponse.error(req.service, req.name, req.identifier, "Invalid request: service and name are required"));
+					continue;
+				}
+
+				// Normalize empty identifier to null so the DB query matches correctly
+				String identifier = (req.identifier != null && !req.identifier.isEmpty()) ? req.identifier : null;
+
+				// Use the same two-step lookup as the download path:
+				// 1. Get the latest signature from ArbitraryResourcesCache (fast single-column lookup)
+				byte[] latestSignature = repository.getArbitraryRepository()
+						.getLatestSignature(req.service, req.name, identifier);
+
+				if (latestSignature == null) {
+					results.add(ArbitraryResourceDataResponse.error(req.service, req.name, req.identifier, "Resource not found"));
+					continue;
+				}
+
+				// 2. Load the full transaction by that signature
+				ArbitraryTransactionData txData = repository.getArbitraryRepository()
+						.getSingleTransactionBySignature(latestSignature);
+
+				if (txData == null) {
+					results.add(ArbitraryResourceDataResponse.error(req.service, req.name, req.identifier, "Resource not found"));
+					continue;
+				}
+
+			if (txData.getDataType() != ArbitraryTransactionData.DataType.RAW_DATA) {
+				results.add(ArbitraryResourceDataResponse.error(req.service, req.name, req.identifier, "Not on-chain data"));
+				continue;
+			}
+
+			byte[] rawData = txData.getData();
+			if (rawData == null) {
+				results.add(ArbitraryResourceDataResponse.error(req.service, req.name, req.identifier, "Resource not found"));
+				continue;
+			}
+
+			// Decrypt if a secret key is present (RAW_DATA is always AES-CBC encrypted, no compression)
+			byte[] secret = txData.getSecret();
+			if (secret != null && secret.length > 0) {
+				try {
+					javax.crypto.SecretKey aesKey = new SecretKeySpec(secret, 0, secret.length, "AES");
+					ByteArrayInputStream encryptedStream = new ByteArrayInputStream(rawData);
+					byte[] decrypted;
+					try (CipherInputStream cipherStream = AES.createDecryptingInputStream("AES/CBC/PKCS5Padding", aesKey, encryptedStream);
+						 ByteArrayOutputStream decryptedOut = new ByteArrayOutputStream()) {
+						byte[] buf = new byte[4096];
+						int n;
+						while ((n = cipherStream.read(buf)) != -1) {
+							decryptedOut.write(buf, 0, n);
+						}
+						decrypted = decryptedOut.toByteArray();
+					}
+					rawData = decrypted;
+				} catch (Exception e) {
+					// Fall back to legacy AES algorithm
+					try {
+						javax.crypto.SecretKey aesKey = new SecretKeySpec(secret, 0, secret.length, "AES");
+						ByteArrayInputStream encryptedStream = new ByteArrayInputStream(rawData);
+						byte[] decrypted;
+						try (CipherInputStream cipherStream = AES.createDecryptingInputStream("AES", aesKey, encryptedStream);
+							 ByteArrayOutputStream decryptedOut = new ByteArrayOutputStream()) {
+							byte[] buf = new byte[4096];
+							int n;
+							while ((n = cipherStream.read(buf)) != -1) {
+								decryptedOut.write(buf, 0, n);
+							}
+							decrypted = decryptedOut.toByteArray();
+						}
+						rawData = decrypted;
+					} catch (Exception e2) {
+						results.add(ArbitraryResourceDataResponse.error(req.service, req.name, req.identifier, "Failed to decrypt data"));
+						continue;
+					}
+				}
+			}
+
+			String base64Data = Base64.toBase64String(rawData);
+			results.add(ArbitraryResourceDataResponse.success(req.service, req.name, req.identifier, base64Data));
+			}
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+
+		return results;
 	}
 
 

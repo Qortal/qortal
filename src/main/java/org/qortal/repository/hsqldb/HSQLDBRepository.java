@@ -5,6 +5,7 @@ import org.apache.logging.log4j.Logger;
 import org.qortal.crypto.Crypto;
 import org.qortal.globalization.Translator;
 import org.qortal.gui.SysTray;
+import org.qortal.controller.Controller;
 import org.qortal.repository.*;
 import org.qortal.repository.hsqldb.transaction.HSQLDBTransactionRepository;
 import org.qortal.settings.Settings;
@@ -440,6 +441,18 @@ public class HSQLDBRepository implements Repository {
 			return;
 		}
 
+		// Skip checkpoint while blockchain-critical work (sync, minting, block import) is active.
+		// Checkpoint during these operations risks stalling the entire node. The checkpoint
+		// request is preserved and will be retried on the next repository close.
+		try {
+			if (Controller.getInstance() != null
+					&& Controller.getInstance().getBlockchainLock().isLocked()) {
+				return;
+			}
+		} catch (Exception e) {
+			// Controller not yet initialized during startup — safe to proceed
+		}
+
 		int attemptNumber = CHECKPOINT_ATTEMPTS_SINCE_REQUEST.incrementAndGet();
 		int attemptsBeforeForceful;
 		if (attemptNumber < CHECKPOINT_FORCEFUL_AFTER_ATTEMPTS) {
@@ -453,18 +466,15 @@ public class HSQLDBRepository implements Repository {
 		long now = System.currentTimeMillis();
 		boolean forcefulAttempt = attemptNumber >= CHECKPOINT_FORCEFUL_AFTER_ATTEMPTS && attemptsBeforeForceful == 0;
 
-		if (forcefulAttempt) {
-			CHECKPOINT_GATE.writeLock().lock();
-		} else {
-			// Use non-blocking tryLock for most attempts to avoid queuing a writer that blocks readers
-			// under fair lock ordering (which causes a "lock wave" of reader starvation).
-			if (!CHECKPOINT_GATE.writeLock().tryLock()) {
-				if (shouldLogCheckpointPendingSummary(now)) {
-					LOGGER.info("Checkpoint pending summary: attemptsSinceRequest={}, attemptsBeforeForceful={}, reason=checkpoint_gate_busy",
-							attemptNumber, attemptsBeforeForceful);
-				}
-				return;
+		// Always use non-blocking tryLock to avoid queuing a writer on the fair RW lock,
+		// which would block all subsequent readers and cause a node-wide stall ("coma").
+		// On forceful attempts we log at a higher urgency but still do not block.
+		if (!CHECKPOINT_GATE.writeLock().tryLock()) {
+			if (shouldLogCheckpointPendingSummary(now)) {
+				LOGGER.info("Checkpoint pending summary: attemptsSinceRequest={}, attemptsBeforeForceful={}, forceful={}, reason=checkpoint_gate_busy",
+						attemptNumber, attemptsBeforeForceful, forcefulAttempt);
 			}
+			return;
 		}
 
 		try {
@@ -478,13 +488,16 @@ public class HSQLDBRepository implements Repository {
 
 			// We can only perform a CHECKPOINT if no other HSQLDB session is mid-transaction,
 			// otherwise the CHECKPOINT blocks for COMMITs and other threads can't open HSQLDB sessions
-			// due to HSQLDB blocking until CHECKPOINT finishes - i.e. deadlock
+			// due to HSQLDB blocking until CHECKPOINT finishes - i.e. deadlock.
+			// Exclude our own session: with autoCommit=false, even read-only work can appear
+			// as transaction=TRUE; counting ourselves would spuriously block checkpoint.
 			String sql = "SELECT COUNT(*) "
 					+ "FROM Information_schema.system_sessions "
-					+ "WHERE transaction = TRUE";
+					+ "WHERE transaction = TRUE AND session_id != ?";
 
 				try {
 					PreparedStatement pstmt = this.cachePreparedStatement(sql);
+					pstmt.setLong(1, this.sessionId);
 
 					if (!pstmt.execute())
 						throw new DataException("Unable to check repository session status");

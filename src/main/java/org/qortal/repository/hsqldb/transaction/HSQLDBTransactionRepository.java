@@ -7,6 +7,7 @@ import org.qortal.arbitrary.misc.Service;
 import org.qortal.data.PaymentData;
 import org.qortal.data.account.AccountData;
 import org.qortal.data.group.GroupApprovalData;
+import org.qortal.data.group.GroupKickSummaryData;
 import org.qortal.data.transaction.BaseTransactionData;
 import org.qortal.data.transaction.GroupApprovalTransactionData;
 import org.qortal.data.transaction.TransactionData;
@@ -1077,6 +1078,50 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 		}
 	}
 
+	@Override
+	public List<GroupKickSummaryData> getGroupKicks(String memberAddress, Integer groupId,
+			Long before, Long after, Integer limit, Integer offset, Boolean reverse) throws DataException {
+		List<Object> bindParams = new ArrayList<>(6);
+		bindParams.add(memberAddress);
+		StringBuilder sql = new StringBuilder(320);
+		sql.append("SELECT gk.address, gk.group_id, gk.reason, t.created_when FROM GroupKickTransactions gk ");
+		sql.append("INNER JOIN Transactions t ON gk.signature = t.signature ");
+		sql.append("WHERE gk.address = ? AND t.block_height IS NOT NULL ");
+		if (groupId != null) {
+			sql.append("AND gk.group_id = ? ");
+			bindParams.add(groupId);
+		}
+		if (before != null) {
+			sql.append("AND t.created_when < ? ");
+			bindParams.add(before);
+		}
+		if (after != null) {
+			sql.append("AND t.created_when > ? ");
+			bindParams.add(after);
+		}
+		sql.append("ORDER BY t.created_when ");
+		sql.append((reverse != null && reverse) ? "DESC" : "ASC");
+		sql.append(", gk.signature ");
+		sql.append((reverse != null && reverse) ? "DESC" : "ASC");
+		HSQLDBRepository.limitOffsetSql(sql, limit, offset);
+
+		List<GroupKickSummaryData> results = new ArrayList<>();
+		try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), bindParams.toArray())) {
+			if (resultSet == null)
+				return results;
+			do {
+				String member = resultSet.getString(1);
+				int gid = resultSet.getInt(2);
+				String reason = resultSet.getString(3);
+				long timestamp = resultSet.getLong(4);
+				results.add(new GroupKickSummaryData(member, gid, reason, timestamp));
+			} while (resultSet.next());
+			return results;
+		} catch (SQLException e) {
+			throw new DataException("Unable to fetch group kicks from repository", e);
+		}
+	}
+
 	public List<String> getConfirmedRewardShareCreatorsExcludingSelfShares() throws DataException {
 		List<String> rewardShareCreators = new ArrayList<>();
 
@@ -1803,6 +1848,53 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 			return transactions;
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch payment transactions between addresses from repository", e);
+		}
+	}
+
+	@Override
+	public List<String[]> getReceivedPaymentsForNotifications(String recipient, Long after, int limit) throws DataException {
+		// Single indexed query — no per-row hydration.
+		// Uses PaymentTransactionsRecipientIndex on PT.recipient and
+		// the primary key join to Transactions for created_when / creator.
+		StringBuilder sql = new StringBuilder(256);
+		sql.append("SELECT PT.recipient, PT.amount, T.creator, T.created_when, T.signature ");
+		sql.append("FROM PaymentTransactions PT ");
+		sql.append("JOIN Transactions T ON T.signature = PT.signature ");
+		sql.append("WHERE PT.recipient = ? AND T.block_height IS NOT NULL");
+
+		List<Object> params = new ArrayList<>();
+		params.add(recipient);
+
+		if (after != null) {
+			sql.append(" AND T.created_when > ?");
+			params.add(after);
+		}
+
+		sql.append(" ORDER BY T.created_when DESC");
+		HSQLDBRepository.limitOffsetSql(sql, limit, null);
+
+		List<String[]> results = new ArrayList<>();
+
+		try (ResultSet rs = this.repository.checkedExecute(sql.toString(), params.toArray())) {
+			if (rs == null) return results;
+			do {
+				String recipientAddr = rs.getString(1);
+				long amount          = rs.getLong(2);
+				byte[] creatorKey    = rs.getBytes(3);
+				long timestamp       = rs.getLong(4);
+				byte[] sig           = rs.getBytes(5);
+
+				String sender      = org.qortal.crypto.Crypto.toAddress(creatorKey);
+				String amountStr   = org.qortal.utils.Amounts.prettyAmount(amount);
+				String tsStr       = String.valueOf(timestamp);
+				String sigStr      = sig != null ? org.qortal.utils.Base58.encode(sig) : null;
+
+				results.add(new String[]{sender, recipientAddr, amountStr, tsStr, sigStr});
+			} while (rs.next());
+
+			return results;
+		} catch (java.sql.SQLException e) {
+			throw new DataException("Unable to fetch payment notifications history", e);
 		}
 	}
 

@@ -244,7 +244,6 @@ public class ArbitraryDataCacheManager extends Thread {
             for (ArbitraryTransactionData transactionData : resourceQueueCopy) {
                 // Best not to return when controller is stopping, as ideally we need to finish processing
 
-                LOGGER.debug(() -> String.format("Processing transaction %.8s in arbitrary resource queue...", Base58.encode(transactionData.getSignature())));
 
                 // Remove from the queue regardless of outcome
                 this.updateQueue.remove(transactionData);
@@ -259,6 +258,7 @@ public class ArbitraryDataCacheManager extends Thread {
                     arbitraryTransaction.updateArbitraryResourceStatus(repository);
                     repository.saveChanges();
 
+
                     EventBus.INSTANCE.notify(
                         new DataMonitorEvent(
                             System.currentTimeMillis(),
@@ -270,8 +270,6 @@ public class ArbitraryDataCacheManager extends Thread {
                             transactionData.getTimestamp()
                         )
                     );
-
-                    LOGGER.debug(() -> String.format("Finished processing transaction %.8s in arbitrary resource queue...", Base58.encode(transactionData.getSignature())));
 
                 } catch (DataException e) {
                     repository.discardChanges();
@@ -288,7 +286,6 @@ public class ArbitraryDataCacheManager extends Thread {
 
     public void addToUpdateQueue(ArbitraryTransactionData transactionData) {
         this.updateQueue.add(transactionData);
-        LOGGER.debug(() -> String.format("Transaction %.8s added to queue", Base58.encode(transactionData.getSignature())));
     }
 
     public boolean needsArbitraryResourcesCacheRebuild(Repository repository) throws DataException {

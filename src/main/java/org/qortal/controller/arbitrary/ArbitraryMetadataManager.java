@@ -67,6 +67,15 @@ public class ArbitraryMetadataManager {
      */
     private final ConcurrentHashMap<String, Triple<Integer, Integer, Long>> arbitraryMetadataSignatureRequests = new ConcurrentHashMap<>();
 
+    /**
+     * Separate rate-limit map used exclusively by the latest-100 burst fetcher.
+     * Burst rules: up to 3 attempts if >= 60s since last; after 3 attempts,
+     * allow again if >= 5 minutes since last (counter resets).
+     * Key: signature encoded in base58
+     * Value: Triple<broadcastCount, unused, lastAttemptTimestamp>
+     */
+    private final ConcurrentHashMap<String, Triple<Integer, Integer, Long>> burstMetadataSignatureRequests = new ConcurrentHashMap<>();
+
 
     private ArbitraryMetadataManager() {
         scheduler.scheduleAtFixedRate(this::processNetworkGetArbitraryMetadataMessage, 60, 1, TimeUnit.SECONDS);
@@ -83,46 +92,76 @@ public class ArbitraryMetadataManager {
         if (now == null) {
             return;
         }
-        final long requestMinimumTimestamp = now - ArbitraryDataManager.ARBITRARY_REQUEST_TIMEOUT;
-        arbitraryMetadataRequests.entrySet().removeIf(entry -> entry.getValue().getC() == null || entry.getValue().getC() < requestMinimumTimestamp);
+        final long requestMinimumTimestamp = now - ArbitraryDataManager.METADATA_REQUEST_TIMEOUT;
+        // Evict any entry older than METADATA_REQUEST_TIMEOUT regardless of completion state.
+        // - Completed outbound entries (getA() == null): fine to evict after timeout.
+        // - Active outbound entries (getA() != null): their poll loop's finally block removes them
+        //   before the timeout expires, so any such entry still present after the timeout is a
+        //   stale inbound relay entry with no owner thread — safe to evict.
+        arbitraryMetadataRequests.entrySet().removeIf(entry ->
+                entry.getValue().getC() == null
+                || entry.getValue().getC() < requestMinimumTimestamp);
+
+        // Evict burst rate-limit entries older than 10 minutes (covers the 5-min retry window with margin)
+        final long burstMinimumTimestamp = now - 10 * 60 * 1000L;
+        burstMetadataSignatureRequests.entrySet().removeIf(entry -> entry.getValue().getC() == null || entry.getValue().getC() < burstMinimumTimestamp);
+
+        // Evict standard rate-limit entries older than 65 minutes (covers the 60min max gate with margin)
+        final long sigMinimumTimestamp = now - 65 * 60 * 1000L;
+        arbitraryMetadataSignatureRequests.entrySet().removeIf(entry ->
+                entry.getValue().getC() == null || entry.getValue().getC() < sigMinimumTimestamp);
     }
 
 
     public ArbitraryDataTransactionMetadata fetchMetadata(ArbitraryDataResource arbitraryDataResource, boolean useRateLimiter) {
+        return fetchMetadataInternal(arbitraryDataResource, useRateLimiter, false);
+    }
+
+    public ArbitraryDataTransactionMetadata fetchMetadataForBurst(ArbitraryDataResource arbitraryDataResource) {
+        return fetchMetadataInternal(arbitraryDataResource, true, true);
+    }
+
+    private ArbitraryDataTransactionMetadata fetchMetadataInternal(ArbitraryDataResource arbitraryDataResource, boolean useRateLimiter, boolean fromBurst) {
         try (final Repository repository = RepositoryManager.getRepository()) {
-            // Find latest transaction
-            ArbitraryTransactionData latestTransaction = repository.getArbitraryRepository()
-                    .getLatestTransaction(arbitraryDataResource.getResourceId(), arbitraryDataResource.getService(),
-                            null, arbitraryDataResource.getIdentifier());
+            // Fast path: indexed point lookup on ArbitraryResourcesCache instead of expensive
+            // range scan + JOIN + ORDER BY on ArbitraryTransactions via getLatestTransaction().
+            byte[] signature = repository.getArbitraryRepository()
+                    .getLatestSignature(arbitraryDataResource.getService(),
+                            arbitraryDataResource.getResourceId(), arbitraryDataResource.getIdentifier());
 
-            if (latestTransaction != null) {
-                byte[] signature = latestTransaction.getSignature();
-                byte[] metadataHash = latestTransaction.getMetadataHash();
-                if (metadataHash == null) {
-                    // This resource doesn't have metadata
-                    throw new IllegalArgumentException("This resource doesn't have metadata");
-                }
+            if (signature == null) {
+                // Resource not yet in cache — will be picked up on the next cycle
+                return null;
+            }
 
-                ArbitraryDataFile metadataFile = ArbitraryDataFile.fromHash(metadataHash, signature);
-                if (!metadataFile.exists()) {
-                    // Request from network
-                    this.fetchArbitraryMetadata(latestTransaction, useRateLimiter);
-                }
+            // Fast path: PK lookup for just the metadata_hash column
+            byte[] metadataHash = repository.getArbitraryRepository()
+                    .getMetadataHashBySignature(signature);
 
-                // Now check again as it may have been downloaded above
-                if (metadataFile.exists()) {
-                    // Use local copy
-                    ArbitraryDataTransactionMetadata transactionMetadata = new ArbitraryDataTransactionMetadata(metadataFile.getFilePath());
-                    try {
-                        transactionMetadata.read();
-                    } catch (DataException e) {
-                        // Invalid file, so delete it
-                        LOGGER.info("Deleting invalid metadata file due to exception: {}", e.getMessage());
-                        transactionMetadata.delete();
-                        return null;
-                    }
-                    return transactionMetadata;
+            if (metadataHash == null) {
+                // This resource doesn't have metadata
+                return null;
+            }
+
+            ArbitraryDataFile metadataFile = ArbitraryDataFile.fromHash(metadataHash, signature);
+            if (!metadataFile.exists()) {
+                // Request from network
+                this.fetchArbitraryMetadata(signature, metadataHash, useRateLimiter, fromBurst);
+            }
+
+            // Now check again as it may have been downloaded above
+            if (metadataFile.exists()) {
+                // Use local copy
+                ArbitraryDataTransactionMetadata transactionMetadata = new ArbitraryDataTransactionMetadata(metadataFile.getFilePath());
+                try {
+                    transactionMetadata.read();
+                } catch (DataException e) {
+                    // Invalid file, so delete it
+                    LOGGER.info("Deleting invalid metadata file due to exception: {}", e.getMessage());
+                    transactionMetadata.delete();
+                    return null;
                 }
+                return transactionMetadata;
             }
 
         } catch (DataException | IOException e) {
@@ -136,12 +175,23 @@ public class ArbitraryMetadataManager {
     // Request metadata from network
 
     public byte[] fetchArbitraryMetadata(ArbitraryTransactionData arbitraryTransactionData, boolean useRateLimiter) {
-        byte[] metadataHash = arbitraryTransactionData.getMetadataHash();
+        return fetchArbitraryMetadata(arbitraryTransactionData.getSignature(), arbitraryTransactionData.getMetadataHash(), useRateLimiter, false);
+    }
+
+    /**
+     * Burst rate-limit rules (fromBurst=true, separate counter map):
+     *  - Up to 3 attempts allowed if >= 60s since last attempt.
+     *  - After 3 attempts, allowed again if >= 5 minutes since last (counter resets to 1).
+     */
+    public byte[] fetchArbitraryMetadata(ArbitraryTransactionData arbitraryTransactionData, boolean useRateLimiter, boolean fromBurst) {
+        return fetchArbitraryMetadata(arbitraryTransactionData.getSignature(), arbitraryTransactionData.getMetadataHash(), useRateLimiter, fromBurst);
+    }
+
+    private byte[] fetchArbitraryMetadata(byte[] signature, byte[] metadataHash, boolean useRateLimiter, boolean fromBurst) {
         if (metadataHash == null) {
             return null;
         }
 
-        byte[] signature = arbitraryTransactionData.getSignature();
         String signature58 = Base58.encode(signature);
 
         // Require an NTP sync
@@ -153,7 +203,9 @@ public class ArbitraryMetadataManager {
         // ATOMIC check-and-update using compute() to prevent race conditions
         // This ensures only one thread can pass the rate limit check and update the counter
         // compute() returns the new value that was stored in the map
-        Triple<Integer, Integer, Long> updatedRequest = arbitraryMetadataSignatureRequests.compute(signature58, (key, existing) -> {
+        ConcurrentHashMap<String, Triple<Integer, Integer, Long>> requestMap =
+                fromBurst ? burstMetadataSignatureRequests : arbitraryMetadataSignatureRequests;
+        Triple<Integer, Integer, Long> updatedRequest = requestMap.compute(signature58, (key, existing) -> {
             if (existing == null) {
                 // First request - allow it and create entry
                 return new Triple<>(1, 0, now);
@@ -170,8 +222,22 @@ public class ArbitraryMetadataManager {
             }
             
             long timeSinceLastAttempt = now - lastAttemptTimestamp;
-            
-            // Rate limiting logic (same as shouldMakeMetadataRequestForSignature)
+
+            if (fromBurst) {
+                // Burst rate-limit: up to 3 attempts if >= 60s since last.
+                // After 3 attempts, allow again if >= 5 minutes since last (reset counter).
+                if (timeSinceLastAttempt > 5 * 60 * 1000L) {
+                    // 5 minutes passed — reset and allow
+                    return new Triple<>(1, directPeerRequestCount, now);
+                }
+                if (timeSinceLastAttempt > 60 * 1000L && networkBroadcastCount < 3) {
+                    return new Triple<>(networkBroadcastCount + 1, directPeerRequestCount, now);
+                }
+                // Rate limited for burst
+                return existing;
+            }
+
+            // Standard rate limiting logic
             // Allow a second attempt after 60 seconds
             if (timeSinceLastAttempt > 60 * 1000L) {
                 // We haven't tried for at least 60 seconds
@@ -201,7 +267,6 @@ public class ArbitraryMetadataManager {
         
         if (!requestAllowed) {
             if (useRateLimiter) {
-                LOGGER.trace("Skipping metadata request for signature {} due to rate limit", signature58);
                 return null;
             }
             // If rate limiter is disabled, we still want to proceed
@@ -231,24 +296,29 @@ public class ArbitraryMetadataManager {
         // Broadcast request
         NetworkData.getInstance().broadcast(peer -> getArbitraryMetadataMessage);
 
-        // Poll to see if data has arrived
+        // Poll to see if data has arrived.
+        // The entry is always removed in the finally block so cleanup never races with the poll loop.
         final long singleWait = 100;
         long totalWait = 0;
-        while (totalWait < ArbitraryDataManager.ARBITRARY_REQUEST_TIMEOUT) {
-            try {
-                Thread.sleep(singleWait);
-            } catch (InterruptedException e) {
-                break;
+        try {
+            while (totalWait < ArbitraryDataManager.METADATA_REQUEST_TIMEOUT) {
+                try {
+                    Thread.sleep(singleWait);
+                } catch (InterruptedException e) {
+                    break;
+                }
+
+                requestEntry = arbitraryMetadataRequests.get(id);
+                if (requestEntry == null)
+                    break;
+
+                if (requestEntry.getA() == null)
+                    break;
+
+                totalWait += singleWait;
             }
-
-            requestEntry = arbitraryMetadataRequests.get(id);
-            if (requestEntry == null)
-                return null;
-
-            if (requestEntry.getA() == null)
-                break;
-
-            totalWait += singleWait;
+        } finally {
+            arbitraryMetadataRequests.remove(id);
         }
 
         try {
@@ -373,7 +443,6 @@ public class ArbitraryMetadataManager {
         }
 
         ArbitraryMetadataMessage arbitraryMetadataMessage = (ArbitraryMetadataMessage) message;
-        LOGGER.debug("Received metadata from peer {}", peer);
 
         // Do we have a pending request for this data?
         Triple<String, Peer, Long> request = arbitraryMetadataRequests.get(message.getId());
@@ -410,7 +479,8 @@ public class ArbitraryMetadataManager {
                 arbitraryMetadataFile.save();
                 // Clear fileContent after saving - data is now on disk and can be reloaded if needed
                 arbitraryMetadataFile.clearFileContent();
-            }
+
+            } 
 
             // Forwarding
             if (isRelayRequest && Settings.getInstance().isRelayModeEnabled()) {
@@ -424,7 +494,6 @@ public class ArbitraryMetadataManager {
                         // Forward to requesting peer
                         LOGGER.debug("Forwarding metadata to requesting peer: {}", requestingPeer);
                         requestingPeer.sendMessage(forwardArbitraryMetadataMessage);
-                       
                     }
                 }
             }
@@ -488,7 +557,7 @@ public class ArbitraryMetadataManager {
 
                 // If we've seen this request recently, then ignore
                 if (arbitraryMetadataRequests.putIfAbsent(peerMessage.message.getId(), newEntry) != null) {
-                    LOGGER.debug("Ignoring metadata request from peer {} for signature {}", peerMessage.peer, signature58);
+                    LOGGER.trace("Ignoring metadata request from peer {} for signature {}", peerMessage.peer, signature58);
                     continue;
                 }
 
@@ -523,8 +592,12 @@ public class ArbitraryMetadataManager {
 
                 try {
 
-                    // Check if we're even allowed to serve metadata for this transaction
-                    if (ArbitraryDataStorageManager.getInstance().canStoreData(transactionData)) {
+                    // For serving metadata we only need to check the name isn't blocked —
+                    // canStoreData() is a storage-policy check for data files and must NOT gate
+                    // metadata serving (it rejects RAW_DATA transactions even when they carry a
+                    // valid metadataHash, and it rejects names not followed under FOLLOWED policy).
+                    boolean isBlocked = ListUtils.isNameBlocked(transactionData.getName());
+                    if (!isBlocked) {
 
                         byte[] metadataHash = transactionData.getMetadataHash();
                         if (metadataHash != null) {
@@ -550,8 +623,8 @@ public class ArbitraryMetadataManager {
                                 }
                                 LOGGER.debug("Sent metadata");
 
-                                // Nothing left to do, so return to prevent any unnecessary forwarding from occurring
-                                LOGGER.debug("No need for any forwarding because metadata request is fully served");
+                                // We've served the request — skip forwarding
+                                continue;
                             }
 
                         }

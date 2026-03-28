@@ -2,6 +2,7 @@ package org.qortal.repository;
 
 import org.qortal.api.SearchMode;
 import org.qortal.arbitrary.misc.Service;
+import org.qortal.controller.arbitrary.ArbitraryTransactionDataHashWrapper;
 import org.qortal.data.arbitrary.ArbitraryResourceData;
 import org.qortal.data.arbitrary.ArbitraryResourceMetadata;
 import org.qortal.data.arbitrary.ArbitraryResourceStatus;
@@ -29,6 +30,11 @@ public interface ArbitraryRepository {
 
 	List<ArbitraryTransactionData> getLatestArbitraryTransactions() throws DataException;
 
+	List<ArbitraryTransactionData> getLatestArbitraryTransactions(Integer limit) throws DataException;
+
+	/** Lightweight fetch — returns only (signature, service, name, identifier) ordered newest-first. */
+	List<ArbitraryTransactionDataHashWrapper> getArbitraryTransactionSignaturesLite() throws DataException;
+
 	List<ArbitraryTransactionData> getLatestArbitraryTransactionsByName(String name) throws DataException;
 
 	public ArbitraryTransactionData getSingleTransactionBySignature(byte[] signature) throws DataException;
@@ -45,6 +51,8 @@ public interface ArbitraryRepository {
 	public ArbitraryResourceData getArbitraryResource(Service service, String name, String identifier) throws DataException;
 
 	public byte[] getLatestSignature(Service service, String name, String identifier) throws DataException;
+
+	public byte[] getMetadataHashBySignature(byte[] signature) throws DataException;
 
 	public List<ArbitraryResourceData> getArbitraryResources(Integer limit, Integer offset, Boolean reverse) throws DataException;
 

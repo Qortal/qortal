@@ -12,12 +12,14 @@ import org.qortal.api.ApiError;
 import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiException;
 import org.qortal.api.ApiExceptionFactory;
+import org.qortal.api.model.AppRatingsResponse;
 import org.qortal.api.model.PollVotes;
 import org.qortal.crypto.Crypto;
 import org.qortal.data.account.AccountData;
 import org.qortal.data.transaction.CreatePollTransactionData;
 import org.qortal.data.transaction.VoteOnPollTransactionData;
 import org.qortal.data.voting.PollData;
+import org.qortal.data.voting.PollDataWithVotes;
 import org.qortal.data.voting.PollOptionData;
 import org.qortal.data.voting.VoteOnPollData;
 import org.qortal.repository.DataException;
@@ -168,6 +170,115 @@ public class PollsResource {
                     } else {
                         return new PollVotes(votes, totalVotes, totalWeight, voteCounts, voteWeights);
                     }
+            } catch (ApiException e) {
+                    throw e;
+            } catch (DataException e) {
+                    throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+            }
+    }
+
+    @GET
+    @Path("/apps/ratings")
+    @Operation(
+            summary = "Get all app rating polls with vote counts",
+            description = "Returns aggregated vote data for all app library rating polls in a single request. " +
+                    "This endpoint optimizes bulk fetching of app ratings by reducing N×2 API calls to a single call.",
+            responses = {
+                    @ApiResponse(
+                            description = "Bulk app ratings data",
+                            content = @Content(
+                                    mediaType = MediaType.APPLICATION_JSON,
+                                    schema = @Schema(implementation = AppRatingsResponse.class)
+                            )
+                    )
+            }
+    )
+    @ApiErrors({ApiError.REPOSITORY_ISSUE, ApiError.INVALID_CRITERIA})
+    public AppRatingsResponse getAppRatings(
+            @Parameter(description = "Filter by service type (APP or WEBSITE)")
+            @QueryParam("service") String service,
+
+            @Parameter(ref = "limit")
+            @QueryParam("limit") Integer limit,
+
+            @Parameter(ref = "offset")
+            @QueryParam("offset") Integer offset,
+
+            @Parameter(description = "Return polls published before this timestamp")
+            @QueryParam("before") Long before,
+
+            @Parameter(description = "Return polls published after this timestamp")
+            @QueryParam("after") Long after
+    ) {
+            try (final Repository repository = RepositoryManager.getRepository()) {
+                    // Build prefix based on service filter
+                    String prefix = "app-library-";
+                    if (service != null) {
+                            if (!service.equals("APP") && !service.equals("WEBSITE")) {
+                                    throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+                            }
+                            prefix = "app-library-" + service + "-rating-";
+                    }
+
+                    // Fetch polls with votes
+                    List<PollDataWithVotes> pollsWithVotes =
+                            repository.getVotingRepository().getPollsByPrefix(prefix, limit, offset);
+
+                    // Filter by timestamp if needed
+                    if (before != null || after != null) {
+                            pollsWithVotes = pollsWithVotes.stream()
+                                    .filter(p -> {
+                                            long published = p.getPollData().getPublished();
+                                            if (before != null && published >= before) return false;
+                                            if (after != null && published <= after) return false;
+                                            return true;
+                                    })
+                                    .collect(Collectors.toList());
+                    }
+
+                    // Build response
+                    Map<String, AppRatingsResponse.AppRating> ratingsMap = new HashMap<>();
+
+                    for (PollDataWithVotes pollWithVotes : pollsWithVotes) {
+                            PollData pollData = pollWithVotes.getPollData();
+                            String pollName = pollData.getPollName();
+
+                            // Parse poll name: app-library-{SERVICE}-rating-{APP_NAME}
+                            String extractedService = null;
+                            String appName = null;
+                            String[] parts = pollName.split("-", 5);
+                            if (parts.length >= 5) {
+                                    extractedService = parts[2];  // APP or WEBSITE
+                                    appName = parts[4];            // Q-Tube, etc.
+                            }
+
+                            // Convert vote maps to lists
+                            List<PollVotes.OptionCount> voteCounts = pollWithVotes.getVoteCountMap().entrySet().stream()
+                                    .map(e -> new PollVotes.OptionCount(e.getKey(), e.getValue()))
+                                    .collect(Collectors.toList());
+
+                            List<PollVotes.OptionWeight> voteWeights = pollWithVotes.getVoteWeightMap().entrySet().stream()
+                                    .map(e -> new PollVotes.OptionWeight(e.getKey(), e.getValue()))
+                                    .collect(Collectors.toList());
+
+                            AppRatingsResponse.AppRating rating = new AppRatingsResponse.AppRating(
+                                    pollName,
+                                    extractedService,
+                                    appName,
+                                    pollData.getOwner(),
+                                    pollData.getPublished(),
+                                    pollData.getDescription(),
+                                    pollWithVotes.getTotalVotes(),
+                                    pollWithVotes.getTotalWeight(),
+                                    voteCounts,
+                                    voteWeights
+                            );
+
+                            ratingsMap.put(pollName, rating);
+                    }
+
+                    return new AppRatingsResponse(ratingsMap.size(), offset != null ? offset : 0, ratingsMap);
+
             } catch (ApiException e) {
                     throw e;
             } catch (DataException e) {

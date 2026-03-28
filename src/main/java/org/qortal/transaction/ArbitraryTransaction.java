@@ -14,21 +14,26 @@ import org.qortal.controller.repository.NamesDatabaseIntegrityCheck;
 import org.qortal.crypto.Crypto;
 import org.qortal.crypto.MemoryPoW;
 import org.qortal.data.PaymentData;
+import org.qortal.data.arbitrary.ArbitraryResourceCache;
 import org.qortal.data.arbitrary.ArbitraryResourceData;
 import org.qortal.data.arbitrary.ArbitraryResourceMetadata;
 import org.qortal.data.arbitrary.ArbitraryResourceStatus;
 import org.qortal.data.naming.NameData;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.TransactionData;
+import org.qortal.notification.NotificationManager;
+import org.qortal.notification.ResourcePublishedEvent;
 import org.qortal.payment.Payment;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
+import org.qortal.settings.Settings;
 import org.qortal.transform.TransformationException;
 import org.qortal.transform.Transformer;
 import org.qortal.transform.transaction.ArbitraryTransactionTransformer;
 import org.qortal.transform.transaction.TransactionTransformer;
 import org.qortal.utils.ArbitraryTransactionUtils;
+import org.qortal.utils.Base58;
 import org.qortal.utils.NTP;
 
 import java.io.IOException;
@@ -433,6 +438,7 @@ public class ArbitraryTransaction extends Transaction {
 		}
 
 		// Check for existing cached data
+		final boolean isNewResource = (existingArbitraryResourceData == null);
 		if (existingArbitraryResourceData == null) {
 			// Nothing exists yet, so set creation date from the current transaction (it will be reduced later if needed)
 			arbitraryResourceData.created = arbitraryTransactionData.getTimestamp();
@@ -458,6 +464,7 @@ public class ArbitraryTransaction extends Transaction {
 		// Save
 		repository.getArbitraryRepository().save(arbitraryResourceData);
 
+		ResourcePublishedEvent metadataFirstTimeEvent = null;
 		// Update metadata for latest transaction if it is local
 		if (latestTransactionData.getMetadataHash() != null) {
 			ArbitraryDataFile metadataFile = ArbitraryDataFile.fromHash(latestTransactionData.getMetadataHash(), latestTransactionData.getSignature());
@@ -473,7 +480,27 @@ public class ArbitraryTransaction extends Transaction {
 					metadata.setCategory(transactionMetadata.getCategory());
 					metadata.setTags(transactionMetadata.getTags());
 					repository.getArbitraryRepository().save(metadata);
+					metadata.setArbitraryResourceData(null); // clear back-reference before placing in cache to avoid circular serialization
+					arbitraryResourceData.metadata = metadata;
 
+					// First time we have metadata for this resource? Fire notification with metadata populated.
+					boolean hadNoMetadata = existingArbitraryResourceData == null
+							|| existingArbitraryResourceData.metadata == null
+							|| !existingArbitraryResourceData.metadata.hasMetadata();
+					if (hadNoMetadata && service != null && name != null) {
+						String serviceName = service.name();
+						String ident = arbitraryTransactionData.getIdentifier() != null ? arbitraryTransactionData.getIdentifier() : "";
+						String sig = arbitraryTransactionData.getSignature() != null ? Base58.encode(arbitraryTransactionData.getSignature()) : null;
+						String title = transactionMetadata.getTitle();
+						String description = transactionMetadata.getDescription();
+						List<String> tags = transactionMetadata.getTags();
+						String categoryStr = transactionMetadata.getCategory() != null ? transactionMetadata.getCategory().toString() : null;
+						metadataFirstTimeEvent = new ResourcePublishedEvent(
+								serviceName, name, ident, sig,
+								title, description, tags, categoryStr,
+								arbitraryTransactionData.getTimestamp(),
+								null);
+					}
 				} catch (IOException e) {
 					// Ignore, as we can add it again later
 				}
@@ -483,6 +510,47 @@ public class ArbitraryTransaction extends Transaction {
 				ArbitraryResourceMetadata metadata = new ArbitraryResourceMetadata();
 				metadata.setArbitraryResourceData(arbitraryResourceData);
 				repository.getArbitraryRepository().delete(metadata);
+			}
+		}
+
+		// Update in-memory search cache so new/updated resources are visible immediately
+		// without waiting for the periodic cache-refresh timer.
+		if (Settings.getInstance().isDbCacheEnabled()) {
+			ArbitraryResourceCache cache = ArbitraryResourceCache.getInstance();
+			synchronized (cache.getDataByService()) {
+				cache.getDataByService()
+						.computeIfAbsent(service.value, k -> new HashMap<>())
+						.put(ArbitraryResourceCache.resourceKey(name, identifier), arbitraryResourceData);
+			}
+		}
+
+		// Fire RESOURCE_PUBLISHED notification for new resources.
+		if (isNewResource && service != null && name != null) {
+			try {
+				String serviceName = service.name();
+				String ident = arbitraryTransactionData.getIdentifier() != null ? arbitraryTransactionData.getIdentifier() : "";
+				String sig = arbitraryTransactionData.getSignature() != null ? Base58.encode(arbitraryTransactionData.getSignature()) : null;
+				ResourcePublishedEvent ev = new ResourcePublishedEvent(
+					serviceName,
+					name,
+					ident,
+					sig,
+					null, null, null, null,
+					arbitraryTransactionData.getTimestamp(),
+					null
+				);
+				NotificationManager.getInstance().processResourcePublishedEarly(ev);
+			} catch (Exception e) {
+				LOGGER.debug("Error firing RESOURCE_PUBLISHED notification: {}", e.getMessage());
+			}
+		}
+
+		// If we saved metadata for the first time, fire full notification (with metadata) so metadata-based filters match.
+		if (metadataFirstTimeEvent != null) {
+			try {
+				NotificationManager.getInstance().processResourcePublished(metadataFirstTimeEvent);
+			} catch (Exception e) {
+				LOGGER.debug("Error firing RESOURCE_PUBLISHED notification (metadata first time): {}", e.getMessage());
 			}
 		}
 	}

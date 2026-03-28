@@ -27,9 +27,11 @@ import java.sql.SQLException;
 import java.sql.SQLNonTransientConnectionException;
 import java.sql.Statement;
 import java.time.format.DateTimeFormatter;
+import java.util.concurrent.locks.Lock;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -123,7 +125,12 @@ public class HSQLDBCacheUtils {
 
         // cache all results for requested service
         if( service != null ) {
-            candidates.addAll(cache.getDataByService().getOrDefault(service.value, new ArrayList<>(0)));
+            synchronized (cache.getDataByService()) {
+                Map<String, ArbitraryResourceData> serviceMap = cache.getDataByService().get(service.value);
+                if (serviceMap != null) {
+                    candidates.addAll(serviceMap.values());
+                }
+            }
         }
         // if no requested, then empty cache
 
@@ -362,6 +369,147 @@ public class HSQLDBCacheUtils {
         else {
             return listCopy2;
         }
+    }
+
+    /**
+     * Notification-history–specific path: sort once by created desc, then one pass with early exit.
+     * Avoids full filter-then-sort of the entire service list so history stays fast for large caches.
+     * Supports the same metadata filters as filterList (query, title, description, keywords).
+     *
+     * @param candidates   list for a single service (from cache)
+     * @param after       only items with created &gt; after
+     * @param limit       stop after this many results
+     * @param identifier  optional prefix/contains filter on identifier
+     * @param prefixOnly  true for prefix match, false for contains
+     * @param blockedNames names to exclude (e.g. from ListUtils.blockedNames()); null = no exclusion
+     * @param names       optional: exact (case-insensitive) name match — resource name must be one of these; null/empty = pass
+     * @param query       optional: match name, identifier, title or description (or name only if defaultResource); null = pass
+     * @param defaultResource when true with query, only default identifier and query on name
+     * @param title       optional: prefix/contains on metadata title; null/empty = pass
+     * @param description optional: prefix/contains on metadata description; null/empty = pass
+     * @param keywords    optional: at least one keyword in metadata description; null/empty = pass
+     * @param before      optional: only items with created &lt; before; null = no filter
+     * @param followedNames optional: retain only if resource name (case-insensitive) is in this list; null/empty = pass
+     * @return at most {@code limit} items, newest first (no metadata/status stripping)
+     */
+    public static List<ArbitraryResourceData> getRecentForNotificationHistory(
+            List<ArbitraryResourceData> candidates,
+            long after,
+            int limit,
+            String identifier,
+            boolean prefixOnly,
+            List<String> blockedNames,
+            List<String> names,
+            String query,
+            boolean defaultResource,
+            String title,
+            String description,
+            List<String> keywords,
+            Long before,
+            List<String> followedNames) {
+
+        if (candidates == null || candidates.isEmpty() || limit <= 0) {
+            return new ArrayList<>();
+        }
+
+        List<ArbitraryResourceData> sorted = new ArrayList<>(candidates);
+        sorted.sort(CREATED_WHEN_COMPARATOR.reversed());
+
+        List<String> namesLower = null;
+        if (names != null && !names.isEmpty()) {
+            namesLower = names.stream().map(String::toLowerCase).collect(Collectors.toList());
+        }
+
+        List<String> keywordsLower = null;
+        if (keywords != null && !keywords.isEmpty()) {
+            keywordsLower = keywords.stream().map(String::toLowerCase).collect(Collectors.toList());
+        }
+
+        List<String> followedLower = null;
+        if (followedNames != null && !followedNames.isEmpty()) {
+            followedLower = followedNames.stream()
+                    .filter(java.util.Objects::nonNull)
+                    .map(String::toLowerCase)
+                    .collect(Collectors.toList());
+        }
+
+        List<ArbitraryResourceData> result = new ArrayList<>(Math.min(limit, sorted.size()));
+        for (ArbitraryResourceData r : sorted) {
+            if (result.size() >= limit) break;
+
+            Long created = r.created;
+            if (created == null || created <= after) continue;
+            if (before != null && created != null && created >= before) continue;
+            if (blockedNames != null && blockedNames.contains(r.name)) continue;
+            if (followedLower != null) {
+                if (r.name == null || !followedLower.contains(r.name.toLowerCase())) continue;
+            }
+
+            if (identifier != null && !identifier.isEmpty()) {
+                String id = r.identifier;
+                if (id == null) continue;
+                String idLower = id.toLowerCase();
+                String identLower = identifier.toLowerCase();
+                if (prefixOnly ? !idLower.startsWith(identLower) : !idLower.contains(identLower)) continue;
+            }
+
+            if (query != null && !query.isEmpty()) {
+                String q = query.toLowerCase();
+                boolean queryMatch;
+                if (defaultResource) {
+                    queryMatch = DEFAULT_IDENTIFIER.equals(r.identifier) && r.name != null
+                            && (prefixOnly ? r.name.toLowerCase().startsWith(q) : r.name.toLowerCase().contains(q));
+                } else {
+                    queryMatch = (r.name != null && (prefixOnly ? r.name.toLowerCase().startsWith(q) : r.name.toLowerCase().contains(q)))
+                            || (r.identifier != null && (prefixOnly ? r.identifier.toLowerCase().startsWith(q) : r.identifier.toLowerCase().contains(q)));
+                    if (!queryMatch && r.metadata != null) {
+                        String t = r.metadata.getTitle();
+                        String d = r.metadata.getDescription();
+                        queryMatch = (t != null && (prefixOnly ? t.toLowerCase().startsWith(q) : t.toLowerCase().contains(q)))
+                                || (d != null && (prefixOnly ? d.toLowerCase().startsWith(q) : d.toLowerCase().contains(q)));
+                    }
+                }
+                if (!queryMatch) continue;
+            }
+
+            if (title != null && !title.isEmpty()) {
+                if (r.metadata == null) continue;
+                String t = r.metadata.getTitle();
+                if (t == null) continue;
+                String tLower = t.toLowerCase();
+                String titleLower = title.toLowerCase();
+                if (prefixOnly ? !tLower.startsWith(titleLower) : !tLower.contains(titleLower)) continue;
+            }
+
+            if (description != null && !description.isEmpty()) {
+                if (r.metadata == null) continue;
+                String d = r.metadata.getDescription();
+                if (d == null) continue;
+                String dLower = d.toLowerCase();
+                String descLower = description.toLowerCase();
+                if (prefixOnly ? !dLower.startsWith(descLower) : !dLower.contains(descLower)) continue;
+            }
+
+            if (keywordsLower != null) {
+                if (r.metadata == null || r.metadata.getDescription() == null) continue;
+                String dLower = r.metadata.getDescription().toLowerCase();
+                boolean anyMatch = false;
+                for (String k : keywordsLower) {
+                    if (dLower.contains(k)) {
+                        anyMatch = true;
+                        break;
+                    }
+                }
+                if (!anyMatch) continue;
+            }
+
+            if (namesLower != null) {
+                if (r.name == null || !namesLower.contains(r.name.toLowerCase())) continue;
+            }
+
+            result.add(r);
+        }
+        return result;
     }
 
     /**
@@ -702,9 +850,12 @@ public class HSQLDBCacheUtils {
 
             List<ArbitraryResourceData> resources = getResources(repository);
 
-            Map<Integer, List<ArbitraryResourceData>> dataByService
-                    = resources.stream()
-                        .collect(Collectors.groupingBy(data -> data.service.value));
+            Map<Integer, Map<String, ArbitraryResourceData>> dataByService = new HashMap<>();
+            for (ArbitraryResourceData data : resources) {
+                dataByService
+                    .computeIfAbsent(data.service.value, k -> new HashMap<>())
+                    .put(ArbitraryResourceCache.resourceKey(data.name, data.identifier), data);
+            }
 
             // lock, clear and refill
             synchronized (cache.getDataByService()) {
@@ -740,19 +891,23 @@ public class HSQLDBCacheUtils {
         sql.append("FROM NAMES ");
         sql.append("INNER JOIN ACCOUNTS on owner = account ");
 
-        Statement statement = repository.getConnection().createStatement();
+        Lock readLock = HSQLDBRepository.CHECKPOINT_GATE.readLock();
+        readLock.lock();
+        try (Statement statement = repository.getConnection().createStatement();
+             ResultSet resultSet = statement.executeQuery(sql.toString())) {
 
-        ResultSet resultSet = statement.executeQuery(sql.toString());
+            if (resultSet == null)
+                return;
 
-        if (resultSet == null)
-            return;
+            if (!resultSet.next())
+                return;
 
-        if (!resultSet.next())
-            return;
-
-        do {
-            levelByName.put(resultSet.getString(1), resultSet.getInt(2));
-        } while(resultSet.next());
+            do {
+                levelByName.put(resultSet.getString(1), resultSet.getInt(2));
+            } while(resultSet.next());
+        } finally {
+            readLock.unlock();
+        }
     }
 
     /**
@@ -774,72 +929,74 @@ public class HSQLDBCacheUtils {
         sql.append("FROM ArbitraryResourcesCache ");
         sql.append("LEFT JOIN ArbitraryMetadataCache USING (service, name, identifier) WHERE name IS NOT NULL");
 
-        List<ArbitraryResourceData> arbitraryResources = new ArrayList<>();
-        Statement statement = repository.getConnection().createStatement();
+        Lock readLock = HSQLDBRepository.CHECKPOINT_GATE.readLock();
+        readLock.lock();
+        try (Statement statement = repository.getConnection().createStatement();
+             ResultSet resultSet = statement.executeQuery(sql.toString())) {
 
-        ResultSet resultSet = statement.executeQuery(sql.toString());
+            if (resultSet == null)
+                return resources;
 
-        if (resultSet == null)
-            return resources;
+            if (!resultSet.next())
+                return resources;
 
-        if (!resultSet.next())
-            return resources;
+            do {
+                String nameResult = resultSet.getString(1);
+                int serviceResult = resultSet.getInt(2);
+                String identifierResult = resultSet.getString(3);
+                Integer sizeResult = resultSet.getInt(4);
+                Integer status = resultSet.getInt(5);
+                Long created = resultSet.getLong(6);
+                Long updated = resultSet.getLong(7);
 
-        do {
-            String nameResult = resultSet.getString(1);
-            int serviceResult = resultSet.getInt(2);
-            String identifierResult = resultSet.getString(3);
-            Integer sizeResult = resultSet.getInt(4);
-            Integer status = resultSet.getInt(5);
-            Long created = resultSet.getLong(6);
-            Long updated = resultSet.getLong(7);
+                String titleResult = resultSet.getString(8);
+                String descriptionResult = resultSet.getString(9);
+                String category = resultSet.getString(10);
+                String tag1 = resultSet.getString(11);
+                String tag2 = resultSet.getString(12);
+                String tag3 = resultSet.getString(13);
+                String tag4 = resultSet.getString(14);
+                String tag5 = resultSet.getString(15);
 
-            String titleResult = resultSet.getString(8);
-            String descriptionResult = resultSet.getString(9);
-            String category = resultSet.getString(10);
-            String tag1 = resultSet.getString(11);
-            String tag2 = resultSet.getString(12);
-            String tag3 = resultSet.getString(13);
-            String tag4 = resultSet.getString(14);
-            String tag5 = resultSet.getString(15);
+                byte[] latestSignatureResult = resultSet.getBytes(16);
 
-            byte[] latestSignatureResult = resultSet.getBytes(16);
+                if (Objects.equals(identifierResult, "default")) {
+                    identifierResult = null;
+                }
 
-            if (Objects.equals(identifierResult, "default")) {
-                // Map "default" back to null. This is optional but probably less confusing than returning "default".
-                identifierResult = null;
-            }
+                ArbitraryResourceData arbitraryResourceData = new ArbitraryResourceData();
+                arbitraryResourceData.name = nameResult;
+                arbitraryResourceData.service = Service.valueOf(serviceResult);
+                arbitraryResourceData.identifier = identifierResult;
+                arbitraryResourceData.size = sizeResult;
+                arbitraryResourceData.created = created;
+                arbitraryResourceData.updated = (updated == 0) ? null : updated;
+                arbitraryResourceData.latestSignature = latestSignatureResult;
 
-            ArbitraryResourceData arbitraryResourceData = new ArbitraryResourceData();
-            arbitraryResourceData.name = nameResult;
-            arbitraryResourceData.service = Service.valueOf(serviceResult);
-            arbitraryResourceData.identifier = identifierResult;
-            arbitraryResourceData.size = sizeResult;
-            arbitraryResourceData.created = created;
-            arbitraryResourceData.updated = (updated == 0) ? null : updated;
-            arbitraryResourceData.latestSignature = latestSignatureResult;
+                arbitraryResourceData.setStatus(ArbitraryResourceStatus.Status.valueOf(status));
 
-            arbitraryResourceData.setStatus(ArbitraryResourceStatus.Status.valueOf(status));
+                ArbitraryResourceMetadata metadata = new ArbitraryResourceMetadata();
+                metadata.setTitle(titleResult);
+                metadata.setDescription(descriptionResult);
+                metadata.setCategory(Category.uncategorizedValueOf(category));
 
-            ArbitraryResourceMetadata metadata = new ArbitraryResourceMetadata();
-            metadata.setTitle(titleResult);
-            metadata.setDescription(descriptionResult);
-            metadata.setCategory(Category.uncategorizedValueOf(category));
+                List<String> tags = new ArrayList<>();
+                if (tag1 != null) tags.add(tag1);
+                if (tag2 != null) tags.add(tag2);
+                if (tag3 != null) tags.add(tag3);
+                if (tag4 != null) tags.add(tag4);
+                if (tag5 != null) tags.add(tag5);
+                metadata.setTags(!tags.isEmpty() ? tags : null);
 
-            List<String> tags = new ArrayList<>();
-            if (tag1 != null) tags.add(tag1);
-            if (tag2 != null) tags.add(tag2);
-            if (tag3 != null) tags.add(tag3);
-            if (tag4 != null) tags.add(tag4);
-            if (tag5 != null) tags.add(tag5);
-            metadata.setTags(!tags.isEmpty() ? tags : null);
+                if (metadata.hasMetadata()) {
+                    arbitraryResourceData.metadata = metadata;
+                }
 
-            if (metadata.hasMetadata()) {
-                arbitraryResourceData.metadata = metadata;
-            }
-
-            resources.add( arbitraryResourceData );
-        } while (resultSet.next());
+                resources.add( arbitraryResourceData );
+            } while (resultSet.next());
+        } finally {
+            readLock.unlock();
+        }
 
         return resources;
     }
@@ -857,10 +1014,10 @@ public class HSQLDBCacheUtils {
 
         LOGGER.info( "Getting account balances ...");
 
-        try {
-            Statement statement = repository.getConnection().createStatement();
-
-            ResultSet resultSet = statement.executeQuery(sql.toString());
+        Lock readLock = HSQLDBRepository.CHECKPOINT_GATE.readLock();
+        readLock.lock();
+        try (Statement statement = repository.getConnection().createStatement();
+             ResultSet resultSet = statement.executeQuery(sql.toString())) {
 
             if (resultSet == null || !resultSet.next())
                 return new ArrayList<>(0);
@@ -876,6 +1033,8 @@ public class HSQLDBCacheUtils {
             LOGGER.warn(e.getMessage());
         } catch (Exception e) {
             LOGGER.error(e.getMessage(), e);
+        } finally {
+            readLock.unlock();
         }
 
         LOGGER.info("Retrieved account balances: count = " + data.size());

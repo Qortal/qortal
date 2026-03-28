@@ -203,8 +203,6 @@ public class ChatTransaction extends Transaction {
 		// Reject if unconfirmed pile already has X recent CHAT transactions from same creator
 		int recentCount = countRecentChatTransactionsByCreator(creator);
 		if (recentCount >= Settings.getInstance().getMaxRecentChatMessagesPerAccount()) {
-			LOGGER.info("Chat rate limit exceeded for {}: {} recent txs (limit {})",
-					creator.getAddress(), recentCount, Settings.getInstance().getMaxRecentChatMessagesPerAccount());
 			return ValidationResult.TOO_MANY_UNCONFIRMED;
 		}
 
@@ -277,8 +275,7 @@ public class ChatTransaction extends Transaction {
 			int creatorCount = timestamps.size();
 			int totalCount = recentChatTimestamps.values().stream().mapToInt(ArrayDeque::size).sum();
 			int accountCount = recentChatTimestamps.size();
-			LOGGER.info("Chat rate-limit cache: creator has {} recent txs | cache total: {} txs across {} accounts",
-					creatorCount, totalCount, accountCount);
+
 			return creatorCount;
 		}
 	}
@@ -295,9 +292,7 @@ public class ChatTransaction extends Transaction {
 
 			long fetchStart = System.currentTimeMillis();
 			List<TransactionData> unconfirmedTransactions = repository.getTransactionRepository().getUnconfirmedTransactions();
-			long fetchElapsed = System.currentTimeMillis() - fetchStart;
-			LOGGER.info("Warming recent chat timestamps cache: getUnconfirmedTransactions() returned {} rows in {}ms",
-					unconfirmedTransactions.size(), fetchElapsed);
+
 
 			for (TransactionData txData : unconfirmedTransactions) {
 				if (txData.getType() != TransactionType.CHAT)
@@ -312,7 +307,6 @@ public class ChatTransaction extends Transaction {
 			}
 
 			cacheWarmed = true;
-			LOGGER.info("Recent chat timestamps cache warmed with {} creator entries", recentChatTimestamps.size());
 		}
 	}
 

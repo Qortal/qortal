@@ -17,6 +17,7 @@ import org.qortal.data.transaction.ArbitraryTransactionData.DataType;
 import org.qortal.data.transaction.ArbitraryTransactionData.Method;
 import org.qortal.data.transaction.BaseTransactionData;
 import org.qortal.data.transaction.TransactionData;
+import org.qortal.controller.arbitrary.ArbitraryTransactionDataHashWrapper;
 import org.qortal.repository.ArbitraryRepository;
 import org.qortal.repository.DataException;
 import org.qortal.settings.Settings;
@@ -229,13 +230,19 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 
 	@Override
 	public List<ArbitraryTransactionData> getLatestArbitraryTransactions() throws DataException {
+		return getLatestArbitraryTransactions(null);
+	}
+
+	@Override
+	public List<ArbitraryTransactionData> getLatestArbitraryTransactions(Integer limit) throws DataException {
 		String sql = "SELECT type, reference, signature, creator, created_when, fee, " +
 				"tx_group_id, block_height, approval_status, approval_height, " +
 				"version, nonce, service, size, is_data_raw, data, metadata_hash, " +
 				"name, identifier, update_method, secret, compression FROM ArbitraryTransactions " +
 				"JOIN Transactions USING (signature) " +
 				"WHERE name IS NOT NULL " +
-				"ORDER BY created_when DESC";
+				"ORDER BY created_when DESC" +
+				(limit != null ? " LIMIT " + limit : "");
 		List<ArbitraryTransactionData> arbitraryTransactionData = new ArrayList<>();
 
 		try (ResultSet resultSet = this.repository.checkedExecute(sql)) {
@@ -294,6 +301,34 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 			LOGGER.error(e.getMessage(), e);
 			return new ArrayList<>(0);
 		}
+	}
+
+	@Override
+	public List<ArbitraryTransactionDataHashWrapper> getArbitraryTransactionSignaturesLite() throws DataException {
+		String sql = "SELECT signature, service, name, identifier, metadata_hash, created_when " +
+				"FROM ArbitraryTransactions " +
+				"JOIN Transactions USING (signature) " +
+				"WHERE name IS NOT NULL " +
+				"ORDER BY created_when DESC";
+
+		List<ArbitraryTransactionDataHashWrapper> results = new ArrayList<>();
+		try (ResultSet resultSet = this.repository.checkedExecute(sql)) {
+			if (resultSet == null)
+				return results;
+
+			do {
+				byte[] signature = resultSet.getBytes(1);
+				int service = resultSet.getInt(2);
+				String name = resultSet.getString(3);
+				String identifier = resultSet.getString(4);
+				byte[] metadataHash = resultSet.getBytes(5);
+				long timestamp = resultSet.getLong(6);
+				results.add(new ArbitraryTransactionDataHashWrapper(signature, service, name, identifier, metadataHash, timestamp));
+			} while (resultSet.next());
+		} catch (SQLException e) {
+			throw new DataException("Unable to fetch lightweight arbitrary transaction signatures", e);
+		}
+		return results;
 	}
 
 	@Override
@@ -719,6 +754,18 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch arbitrary resource from repository", e);
+		}
+	}
+
+	@Override
+	public byte[] getMetadataHashBySignature(byte[] signature) throws DataException {
+		String sql = "SELECT metadata_hash FROM ArbitraryTransactions WHERE signature = ?";
+		try (ResultSet resultSet = this.repository.checkedExecute(sql, signature)) {
+			if (resultSet == null)
+				return null;
+			return resultSet.getBytes(1);
+		} catch (SQLException e) {
+			throw new DataException("Unable to fetch metadata hash by signature", e);
 		}
 	}
 

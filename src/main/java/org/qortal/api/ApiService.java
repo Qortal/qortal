@@ -321,6 +321,7 @@ public class ApiService {
 			context.addServlet(TradeOffersWebSocket.class, "/websockets/crosschain/tradeoffers");
 			context.addServlet(TradeBotWebSocket.class, "/websockets/crosschain/tradebot");
 			context.addServlet(TradePresenceWebSocket.class, "/websockets/crosschain/tradepresence");
+			context.addServlet(NotificationsWebSocket.class, "/websockets/notifications");
 
 			// Deprecated
 			context.addServlet(PresenceWebSocket.class, "/websockets/presence");

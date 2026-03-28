@@ -3,6 +3,7 @@ package org.qortal.repository;
 import org.qortal.api.resource.TransactionsResource.ConfirmationStatus;
 import org.qortal.arbitrary.misc.Service;
 import org.qortal.data.group.GroupApprovalData;
+import org.qortal.data.group.GroupKickSummaryData;
 import org.qortal.data.transaction.GroupApprovalTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.data.transaction.TransferAssetTransactionData;
@@ -199,6 +200,23 @@ public interface TransactionRepository {
 			throws DataException;
 
 	/**
+	 * Returns list of group kick transactions where the given address was kicked.
+	 * Only confirmed (block-included) kicks are returned.
+	 *
+	 * @param memberAddress address of the kicked member (required)
+	 * @param groupId optional group ID to filter by
+	 * @param before optional: only kicks with timestamp strictly before this (ms)
+	 * @param after optional: only kicks with timestamp strictly after this (ms)
+	 * @param limit maximum number of results
+	 * @param offset result offset for pagination
+	 * @param reverse if true, newest first
+	 * @return list of kick summaries (member, groupId, reason, timestamp)
+	 * @throws DataException
+	 */
+	public List<GroupKickSummaryData> getGroupKicks(String memberAddress, Integer groupId,
+			Long before, Long after, Integer limit, Integer offset, Boolean reverse) throws DataException;
+
+	/**
 	 * Returns list of reward share transaction creators, excluding self shares.
 	 * This uses confirmed transactions only.
 	 *
@@ -237,6 +255,18 @@ public interface TransactionRepository {
 	public List<TransactionData> getPaymentsBetweenAddresses(String recipientAddress, String senderAddress,
 			Long amount, Integer startBlock, Integer blockLimit, ConfirmationStatus confirmationStatus, 
 			Integer limit, Integer offset, Boolean reverse) throws DataException;
+
+	/**
+	 * Lightweight payment history fetch for notifications.
+	 * <p>
+	 * Returns at most {@code limit} confirmed payments to {@code recipient} after
+	 * {@code after} (epoch ms, optional), sorted most-recent-first.  Each entry is
+	 * a String array: {@code [senderAddress, recipientAddress, amountPretty, timestampMs]}.
+	 * <p>
+	 * This is a single indexed query with no per-row hydration — much faster than
+	 * {@link #getPaymentsBetweenAddresses} for notification history use.
+	 */
+	public List<String[]> getReceivedPaymentsForNotifications(String recipient, Long after, int limit) throws DataException;
 
 	/**
 	 * Returns list of transactions pending approval, with optional txGgroupId filtering.

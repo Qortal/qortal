@@ -434,7 +434,7 @@ public class Settings {
 	 *
 	 * The number of seconds in between DB cache updates. If DB Cache is disabled, then this is ignored.
 	 */
-	private int dbCacheFrequency = 120;
+	private int dbCacheFrequency = 1800;
 
 	/**
 	 * Network Thread Priority
