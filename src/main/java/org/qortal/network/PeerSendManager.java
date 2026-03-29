@@ -114,7 +114,8 @@ public class PeerSendManager {
         // Stage 2: Sender thread pool (2 threads for network transmission)
         this.executor = Executors.newFixedThreadPool(SENDER_THREAD_COUNT, r -> {
             Thread t = new Thread(r);
-            t.setName("PeerSender-" + peer.getResolvedAddress().getHostString() + "-" + threadCount.getAndIncrement());
+            //t.setName("PeerSender-" + peer.getResolvedAddress().getHostString() + "-" + threadCount.getAndIncrement());
+            t.setName("DiskIO-" + peer.getPeerIndexString() + "-" + threadCount.getAndIncrement());
             LOGGER.trace("Starting new sender thread: {}", peer.toString());
             return t;
         });
