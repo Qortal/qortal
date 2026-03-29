@@ -430,28 +430,25 @@ public class ReticulumPeer implements Peer {
 
     public void disconnect(String reason) {
         log.debug("@@@-> Disconnecting peer {} after {} - reason: {}", this.toString(), getConnectionAge(), reason);
-        makePeerUnavailable();
+        var isShuttingDown = RNS.getInstance().isShuttingDown();
+        log.debug("ReticulumPeer disconnect, RNS isShuttingDown: {}", isShuttingDown);
+        if (!isShuttingDown) {
+            makePeerUnavailable();
+            //if (nonNull(this.peerBuffer)) {
+            //    shutdownChannel();
+            //    this.peerBuffer.close();
+            ////    this.peerBuffer = null;
+            //}
+            //this.peerLink.teardown();
+        }
         this.isPeerAvailable = false;
-        //this.shutdown();
-        ////if (nonNull(this.peerLink)) {
-        ////    this.peerLink.teardown();
-        ////} else {
-        ////    this.shutdown();
-        ////}
     }
 
     public void shutdown() {
         if (nonNull(this.peerLink)) {
-            log.info("shutdown - peerLink: {}, status: {}, channel: {}", peerLink.toString(), peerLink.getStatus(), peerBuffer);
+            //log.info("shutdown - peerLink: {}, status: {}, channel: {}", peerLink.toString(), peerLink.getStatus(), peerBuffer);
             if (peerLink.getStatus() == ACTIVE) {
                 disconnect("shutting down");
-                //makePeerUnavailable();
-                //if (nonNull(this.peerBuffer)) {
-                //    shutdownChannel();
-                //    this.peerBuffer.close();
-                ////    this.peerBuffer = null;
-                //}
-                //this.peerLink.teardown();
             } else {
                 log.info("shutdown - status (non-ACTIVE): {}", peerLink.getStatus());
             }
