@@ -483,7 +483,6 @@ public class RNS {
         // Disconnect peers gracefully and terminate Reticulum
         for (ReticulumPeer p: linkedPeers) {
             log.info("shutting down peer: {}", encodeHexString(p.getDestinationHash()));
-            //p.makePeerUnavailable();
             p.shutdown();
             //try {
             //    TimeUnit.MILLISECONDS.sleep(200); // allow for peers to disconnect gracefully
@@ -492,8 +491,8 @@ public class RNS {
             //}
         }
         log.debug("Shutdown of linkedPeers completed");
-        // Note: we still need to get the packet timeout callback to work...
         reticulum.exitHandler();
+        log.info("shutdown of Reticulum complete");
     }
 
     public void sendCloseToRemote(Link link) {
@@ -783,6 +782,11 @@ public class RNS {
             }
         }
         return activePeers;
+    }
+
+    // recovery from disconnected interfaces (eg. restart disconnected interfaces, etc)
+    public void maybeRecoverInstance() {
+        // TODO: check interfaces <=> if none available, shutdown and reintialize RNS
     }
 
     // note: we already have a lobok getter for this

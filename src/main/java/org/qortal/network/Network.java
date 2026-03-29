@@ -3117,11 +3117,6 @@ public class Network {
                 LOGGER.debug("Error closing channel selector: {}", e.getMessage());
             }
         }
-
-        // shutdown Reticulum, try to gracefully shut down peers
-        LOGGER.debug("Shutting down RNS");
-        rns.shutdown();
-        LOGGER.debug("RNS shutdown complete.");
     }
 
 }
