@@ -569,6 +569,33 @@ public class HSQLDBGroupRepository implements GroupRepository {
 	}
 
 	@Override
+	public List<GroupMemberData> getAllGroupMemberships() throws DataException {
+		StringBuilder sql = new StringBuilder(256);
+
+		sql.append("SELECT address, joined_when, reference, group_id FROM GroupMembers");
+
+		List<GroupMemberData> members = new ArrayList<>();
+
+		try (ResultSet resultSet = this.repository.checkedExecute(sql.toString())) {
+			if (resultSet == null)
+				return members;
+
+			do {
+				String member = resultSet.getString(1);
+				long joined = resultSet.getLong(2);
+				byte[] reference = resultSet.getBytes(3);
+				int groupId = resultSet.getInt(4);
+
+				members.add(new GroupMemberData(groupId, member, joined, reference));
+			} while (resultSet.next());
+
+			return members;
+		} catch (SQLException e) {
+			throw new DataException("Unable to fetch group members from repository", e);
+		}
+	}
+
+	@Override
 	public Integer countGroupMembers(int groupId) throws DataException {
 		try (ResultSet resultSet = this.repository.checkedExecute("SELECT COUNT(*) FROM GroupMembers WHERE group_id = ?", groupId)) {
 			int count = resultSet.getInt(1);

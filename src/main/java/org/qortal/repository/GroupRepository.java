@@ -85,6 +85,8 @@ public interface GroupRepository {
 		return getGroupMembers(groupId, null, null, null);
 	}
 
+	List<GroupMemberData> getAllGroupMemberships() throws DataException;
+
 	/** Returns number of group members, or null if group doesn't exist */
 	public Integer countGroupMembers(int groupId) throws DataException;
 

@@ -24,4 +24,5 @@ public interface ChatRepository {
 
 	public ActiveChats getActiveChats(String address, Encoding encoding, Boolean hasChatReference) throws DataException;
 
+	public List<ChatTransactionData> getAllChatData() throws DataException;
 }
