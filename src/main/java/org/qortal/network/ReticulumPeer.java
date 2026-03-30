@@ -262,6 +262,7 @@ public class ReticulumPeer implements Peer {
         //this.sendStreamId = getRandomStreamId();
         //this.receiveStreamId = sendStreamId;
 
+        this.replyQueues = new ConcurrentHashMap<>();
         this.pendingMessages = new LinkedBlockingQueue<>();
         this.creationTimestamp = Instant.now();
         this.lastAccessTimestamp = Instant.now();
