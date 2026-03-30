@@ -4,6 +4,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.qortal.controller.arbitrary.PeerMessage;
 import org.qortal.data.block.BlockData;
+import org.qortal.data.transaction.ChatTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.network.Network;
 import org.qortal.network.Peer;
@@ -286,13 +287,6 @@ public class TransactionImporter extends Thread {
             return;
         }
 
-        // discard general chat transactions, chat transactions with no group and no recipient
-        sigValidTransactions.removeIf(
-                transactionData -> transactionData.getType() == Transaction.TransactionType.CHAT &&
-                        transactionData.getTxGroupId() == 0 &&
-                        transactionData.getRecipient() == null
-        );
-
         if (Synchronizer.getInstance().isSyncRequested() || Synchronizer.getInstance().isSynchronizing()) {
             // Prioritize syncing, and don't attempt to lock
             return;
@@ -434,7 +428,17 @@ public class TransactionImporter extends Thread {
         TransactionMessage transactionMessage = (TransactionMessage) message;
         TransactionData transactionData = transactionMessage.getTransactionData();
 
-        if (this.incomingTransactions.size() < MAX_INCOMING_TRANSACTIONS) {
+        // if chat transaction, then delegate it
+        if( transactionData.getType() == Transaction.TransactionType.CHAT  ) {
+
+            if( transactionData instanceof ChatTransactionData ) {
+                ChatTransactionDelegate.getInstance().delegate( (ChatTransactionData) transactionData);
+            }
+            else {
+                LOGGER.warn( "type and instance do not match");
+            }
+        }
+        else if (this.incomingTransactions.size() < MAX_INCOMING_TRANSACTIONS) {
             synchronized (this.incomingTransactions) {
                 if (!incomingTransactionQueueContains(transactionData.getSignature())) {
                     this.incomingTransactions.put(transactionData, Boolean.FALSE);
@@ -493,6 +497,9 @@ public class TransactionImporter extends Thread {
             Map<String, TransactionData> transactionsCachedBySignature58
                 = this.getCachedSigValidTransactions().stream()
                     .collect(Collectors.toMap(t -> Base58.encode(t.getSignature()), Function.identity()));
+
+            // also check the chat transactions
+            transactionsCachedBySignature58.putAll(ChatTransactionDelegate.getInstance().getDataBySignature());
 
             Map<Boolean, List<Map.Entry<String, PeerMessage>>> transactionsCachedBySignature58Partition
                 = peerMessageBySignature58.entrySet().stream()
@@ -592,6 +599,14 @@ public class TransactionImporter extends Thread {
                 LOGGER.error(String.format("Repository issue while sending unconfirmed transaction signatures to peers"), e);
             }
         }
+
+        // add the validated chat transaction signatures here since they are no longer in the transaction repository, so
+        // they are no longer getting adding in above with the unconfirmed transactions
+        signatures.addAll(
+            ChatTransactionDelegate.getInstance().getValidatedChatTransactions().stream()
+                .map(TransactionData::getSignature)
+                .collect(Collectors.toList())
+        );
 
         Message transactionSignaturesMessage = new TransactionSignaturesMessage(signatures);
 
