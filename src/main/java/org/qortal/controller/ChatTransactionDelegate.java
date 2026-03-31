@@ -76,13 +76,23 @@ public class ChatTransactionDelegate implements ChatRepository {
      * Incoming Chats
      *
      * Chat data that gets delegated to this singleton, then get scheduled for validation.
+     *
+     * Guarded by incomingDataLock
      */
     private final List<ChatTransactionData> incomingChats;
+
+    /**
+     * Incoming Data Lock
+     */
+    private final Object imcomingDataLock = new Object();
+
 
     /**
      * Validated Chats
      *
      * Chats that have been validated and are available for responding to external request from other nodes and clients.
+     *
+     * Guarded by chatDataLock
      */
     private final List<ChatTransactionData> validatedChats;
 
@@ -90,6 +100,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      * Recent Chats By Address
      *
      * Chats that were broadcast within the last hour by address. Address -> List of Recent Chats
+     *
+     * Guarded by chatDataLock
      */
     private final Map<String, List<ChatTransactionData>> recentChatsByAddress;
 
@@ -97,6 +109,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      * Signatures By Data
      *
      * Validated chat transactions hashed by their signature that is Base58 encoded
+     *
+     * Guarded by chatDataLock
      */
     private final Map<String, ChatTransactionData> dataBySignature;
 
@@ -104,6 +118,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      * References By Data
      *
      * Validated chat transactions hashed by their reference that is Base58 encoded.
+     *
+     * Guarded by chatDataLock
      */
     private final Map<String, ChatTransactionData> dataByReference;
 
@@ -111,6 +127,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      * Chat References By Data
      *
      * Validated chat transactions hashed by their chat reference that is Base58 encoded.
+     *
+     * Guarded by chatDataLock
      */
     private final Map<String, ChatTransactionData> dataByChatReference;
 
@@ -118,6 +136,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      * Latest Chat By Group Id
      *
      * The latest validated chat transaction for a group.
+     *
+     * Guarded by chatDataLock
      */
     private final Map<Integer, ChatTransactionData> latestChatByGroupId;
 
@@ -125,6 +145,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      * Latest Chat With Chat Reference By Group Id
      *
      * The latest validated chat transaction with a chat reference for a group.
+     *
+     * Guarded by chatDataLock
      */
     private final Map<Integer, ChatTransactionData> latestChatWithChatReferenceByGroupId;
 
@@ -132,6 +154,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      * Latest Chat Without Chat Reference By Group Id
      *
      * The latest validated chat transaction without a chat reference for a group.
+     *
+     * Guarded by chatDataLock
      */
     private final Map<Integer, ChatTransactionData> latestChatWithoutChatReferenceByGroupId;
 
@@ -141,6 +165,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      * A list of validated chats hashed by an address that is involved in each one of those chats.
      *
      * address -> list of chats where the address is either the sender or recipient
+     *
+     * Guarded by chatDataLock
      */
     private final Map<String, List<ChatTransactionData>> listByInvolved;
 
@@ -177,6 +203,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      *
      * Primary name hashed by owner address.
      * address -> primary name
+     *
+     * Guarded by nameDataLock
      */
     private final Map<String, String> primaryNameByOwner;
 
@@ -199,6 +227,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      *
      * The balance for every address.
      * Address -> Balance
+     *
+     * Guarded by balanceDataLock
      */
     private final Map<String, Long> balancesByAddress;
 
@@ -222,6 +252,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      * Group data hashed by Group Id.
      *
      * Group Id -> Group
+     *
+     * Guarded by groupDataLock
      */
     private final Map<Integer, GroupData> groupById;
 
@@ -229,6 +261,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      * Group Id By Address
      *
      * A list of group Id's hashed by address. Each group Id represent group membership for the address.
+     *
+     * Guarded by groupDataLock
      */
     private final Map<String, List<Integer>> groupIdsByAddress;
 
@@ -371,6 +405,8 @@ public class ChatTransactionDelegate implements ChatRepository {
      * Map Chat
      *
      * Put the validated chat into all the maps, so they can get fetched in the future.
+     *
+     * chatDataLock needs to be synchronized on before this is called on
      *
      * @param validatedChat the validated chat transaction data
      */
@@ -541,7 +577,7 @@ public class ChatTransactionDelegate implements ChatRepository {
 
         List<ChatTransactionData> chatsToValidate;
 
-        synchronized (this.incomingChats ) {
+        synchronized (this.imcomingDataLock ) {
             chatsToValidate = new ArrayList<>(this.incomingChats.size());
             chatsToValidate.addAll(this.incomingChats);
             this.incomingChats.clear();
@@ -586,7 +622,11 @@ public class ChatTransactionDelegate implements ChatRepository {
             }
 
             // block message by registered name
-            String name = this.primaryNameByOwner.get(chatTransactionData.getSender());
+            String name;
+            synchronized ( this.nameDataLock ) {
+                name = this.primaryNameByOwner.get(chatTransactionData.getSender());
+            }
+
             if (name != null) {
                 if (ListUtils.isNameBlocked(name)) {
                     return Transaction.ValidationResult.NAME_BLOCKED;
@@ -736,7 +776,7 @@ public class ChatTransactionDelegate implements ChatRepository {
      */
     public void delegate(ChatTransactionData chatTransactionData) {
 
-        synchronized (this.incomingChats) {
+        synchronized (this.imcomingDataLock) {
             incomingChats.add(chatTransactionData);
         }
     }
@@ -1055,7 +1095,7 @@ public class ChatTransactionDelegate implements ChatRepository {
         Map<Integer, Optional<ChatTransactionData>> latestChatByUserGroupId = new HashMap<>(groupIds.size());
 
         for( int groupId : groupIds ) {
-            synchronized (this.groupDataLock) {
+            synchronized (this.chatDataLock) {
                 if (hasChatReference == null) {
                     latestChatByUserGroupId.put(groupId, Optional.ofNullable(this.latestChatByGroupId.get(groupId)));
                 } else if (hasChatReference) {
@@ -1082,7 +1122,7 @@ public class ChatTransactionDelegate implements ChatRepository {
                 if (entry.getValue().isPresent()) {
                     final ChatTransactionData chat = entry.getValue().get();
                     final String senderName;
-                    synchronized ( this.primaryNameByOwner) {
+                    synchronized ( this.nameDataLock) {
                         senderName = this.primaryNameByOwner.getOrDefault(chat.getSender(), chat.getSender());
                     }
 
@@ -1198,7 +1238,7 @@ public class ChatTransactionDelegate implements ChatRepository {
      * @return the chat data
      */
     public ChatTransactionData fromSignature(String signature58) {
-        synchronized (this.dataBySignature) {
+        synchronized (this.chatDataLock) {
             return this.dataBySignature.get(signature58);
         }
     }
