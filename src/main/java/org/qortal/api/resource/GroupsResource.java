@@ -11,8 +11,10 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.qortal.api.ApiError;
 import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
+import org.qortal.api.model.GroupKickInfo;
 import org.qortal.api.model.GroupMembers;
 import org.qortal.api.model.GroupMembers.MemberInfo;
+import org.qortal.api.model.GroupWithJoinRequests;
 import org.qortal.crypto.Crypto;
 import org.qortal.data.group.*;
 import org.qortal.data.transaction.*;
@@ -30,7 +32,11 @@ import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -71,6 +77,13 @@ public class GroupsResource {
 					// Exclude memberCount for this group
 				}
 			});
+			try {
+				List<String> owners = allGroupData.stream().map(GroupData::getOwner).distinct().collect(Collectors.toList());
+				Map<String, String> primaryNamesByOwner = repository.getNameRepository().getPrimaryNamesByOwners(owners);
+				allGroupData.forEach(g -> g.setOwnerPrimaryName(primaryNamesByOwner.get(g.getOwner())));
+			} catch (DataException e) {
+				// Leave ownerPrimaryName null
+			}
 			return allGroupData;
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
@@ -97,7 +110,14 @@ public class GroupsResource {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
-			return repository.getGroupRepository().getGroupsByOwner(owner);
+			List<GroupData> groups = repository.getGroupRepository().getGroupsByOwner(owner);
+			try {
+				Map<String, String> primaryNamesByOwner = repository.getNameRepository().getPrimaryNamesByOwners(Collections.singletonList(owner));
+				groups.forEach(g -> g.setOwnerPrimaryName(primaryNamesByOwner.get(g.getOwner())));
+			} catch (DataException e) {
+				// Leave ownerPrimaryName null
+			}
+			return groups;
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}
@@ -107,6 +127,7 @@ public class GroupsResource {
 	@Path("/member/{address}")
 	@Operation(
 		summary = "List all groups where address is a member",
+		description = "By default returns groups where the address is a member. Use adminOnly=true to return only groups where the address is an admin. Use ownerOnly=true to return only groups where the address is the owner.",
 		responses = {
 			@ApiResponse(
 				description = "group info",
@@ -118,12 +139,22 @@ public class GroupsResource {
 		}
 	)
 	@ApiErrors({ApiError.INVALID_ADDRESS, ApiError.REPOSITORY_ISSUE})
-	public List<GroupData> getGroupsWithMember(@PathParam("address") String member) {
+	public List<GroupData> getGroupsWithMember(
+			@PathParam("address") String member,
+			@Parameter(description = "If true, return only groups where the address is an admin") @QueryParam("adminOnly") Boolean adminOnly,
+			@Parameter(description = "If true, return only groups where the address is the owner") @QueryParam("ownerOnly") Boolean ownerOnly) {
 		if (!Crypto.isValidAddress(member))
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
-			List<GroupData> allGroupData = repository.getGroupRepository().getGroupsWithMember(member);
+			List<GroupData> allGroupData;
+			if (Boolean.TRUE.equals(ownerOnly)) {
+				allGroupData = repository.getGroupRepository().getGroupsByOwner(member);
+			} else if (Boolean.TRUE.equals(adminOnly)) {
+				allGroupData = repository.getGroupRepository().getGroupsByAdmin(member);
+			} else {
+				allGroupData = repository.getGroupRepository().getGroupsWithMember(member);
+			}
 			allGroupData.forEach(groupData -> {
 				try {
 					groupData.memberCount = repository.getGroupRepository().countGroupMembers(groupData.getGroupId());
@@ -131,7 +162,58 @@ public class GroupsResource {
 					// Exclude memberCount for this group
 				}
 			});
+
+			try {
+				List<String> owners = allGroupData.stream().map(GroupData::getOwner).distinct().collect(Collectors.toList());
+				Map<String, String> primaryNamesByOwner = repository.getNameRepository().getPrimaryNamesByOwners(owners);
+				allGroupData.forEach(groupData -> groupData.setOwnerPrimaryName(primaryNamesByOwner.get(groupData.getOwner())));
+			} catch (DataException e) {
+				// Leave ownerPrimaryName null
+			}
+
 			return allGroupData;
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
+	@Path("/kicks/member")
+	@Operation(
+		summary = "List group kicks for a member",
+		description = "Returns all kick transactions where the given address was kicked from a group. Only confirmed kicks are returned.",
+		responses = {
+			@ApiResponse(
+				description = "list of kick summaries (member, groupId, reason, timestamp)",
+				content = @Content(
+					mediaType = MediaType.APPLICATION_JSON,
+					array = @ArraySchema(schema = @Schema(implementation = GroupKickInfo.class))
+				)
+			)
+		}
+	)
+	@ApiErrors({ApiError.INVALID_ADDRESS, ApiError.INVALID_CRITERIA, ApiError.REPOSITORY_ISSUE})
+	public List<GroupKickInfo> getGroupKicks(
+			@Parameter(description = "Address of the kicked member", required = true) @QueryParam("address") String address,
+			@Parameter(description = "Optional group ID to filter by") @QueryParam("groupId") Integer groupId,
+			@Parameter(description = "Only return kicks with timestamp strictly before this (ms since epoch)") @QueryParam("before") Long before,
+			@Parameter(description = "Only return kicks with timestamp strictly after this (ms since epoch)") @QueryParam("after") Long after,
+			@Parameter(ref = "limit") @QueryParam("limit") Integer limit,
+			@Parameter(ref = "offset") @QueryParam("offset") Integer offset,
+			@Parameter(ref = "reverse") @QueryParam("reverse") Boolean reverse) {
+		if (address == null || address.isEmpty())
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
+		if (!Crypto.isValidAddress(address))
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
+		if (before != null && before < 1500000000000L)
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+		if (after != null && after < 1500000000000L)
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<GroupKickSummaryData> list = repository.getTransactionRepository().getGroupKicks(address, groupId, before, after, limit, offset, reverse);
+			return list.stream()
+					.map(k -> new GroupKickInfo(k.getMember(), k.getGroupId(), k.getReason(), k.getTimestamp()))
+					.collect(Collectors.toList());
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}
@@ -159,6 +241,12 @@ public class GroupsResource {
 				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.GROUP_UNKNOWN);
 
 			groupData.memberCount = repository.getGroupRepository().countGroupMembers(groupId);
+			try {
+				Optional<String> primaryName = repository.getNameRepository().getPrimaryName(groupData.getOwner());
+				groupData.setOwnerPrimaryName(primaryName.orElse(null));
+			} catch (DataException e) {
+				// Leave ownerPrimaryName null
+			}
 			return groupData;
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
@@ -197,6 +285,14 @@ public class GroupsResource {
 				// Convert form
 				List<MemberInfo> membersInfo = admins.stream().map(admin -> new MemberInfo(admin.getAdmin(), null, true)).collect(Collectors.toList());
 
+				try {
+					List<String> addresses = membersInfo.stream().map(m -> m.member).collect(Collectors.toList());
+					Map<String, String> primaryNames = repository.getNameRepository().getPrimaryNamesByOwners(addresses);
+					membersInfo.forEach(m -> m.setPrimaryName(primaryNames.get(m.member)));
+				} catch (DataException e) {
+					// Leave primaryName null
+				}
+
 				return new GroupMembers(membersInfo, memberCount, adminCount);
 			}
 
@@ -207,6 +303,14 @@ public class GroupsResource {
 			// Convert form
 			Predicate<GroupMemberData> memberIsAdmin = member -> admins.stream().anyMatch(admin -> admin.getAdmin().equals(member.getMember()));
 			List<MemberInfo> membersInfo = members.stream().map(member -> new MemberInfo(member.getMember(), member.getJoined(), memberIsAdmin.test(member))).collect(Collectors.toList());
+
+			try {
+				List<String> addresses = membersInfo.stream().map(m -> m.member).collect(Collectors.toList());
+				Map<String, String> primaryNames = repository.getNameRepository().getPrimaryNamesByOwners(addresses);
+				membersInfo.forEach(m -> m.setPrimaryName(primaryNames.get(m.member)));
+			} catch (DataException e) {
+				// Leave primaryName null
+			}
 
 			return new GroupMembers(membersInfo, memberCount, adminCount);
 		} catch (DataException e) {
@@ -810,6 +914,55 @@ public class GroupsResource {
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
 			return repository.getGroupRepository().getJoinRequestsByJoiner(address);
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
+	@Path("/joinrequests/admin/{address}")
+	@Operation(
+		summary = "Groups where address is admin, with pending join requests for each",
+		description = "Returns all groups where the given address is an admin, and the pending join requests for each group.",
+		responses = {
+			@ApiResponse(
+				description = "list of group with its join requests",
+				content = @Content(
+					mediaType = MediaType.APPLICATION_JSON,
+					array = @ArraySchema(schema = @Schema(implementation = GroupWithJoinRequests.class))
+				)
+			)
+		}
+	)
+	@ApiErrors({ApiError.INVALID_ADDRESS, ApiError.REPOSITORY_ISSUE})
+	public List<GroupWithJoinRequests> getAdminGroupsWithJoinRequests(@PathParam("address") String address) {
+		if (!Crypto.isValidAddress(address))
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<GroupData> groups = repository.getGroupRepository().getGroupsByAdmin(address);
+			if (groups.isEmpty())
+				return new ArrayList<>();
+
+			try {
+				List<String> owners = groups.stream().map(GroupData::getOwner).distinct().collect(Collectors.toList());
+				Map<String, String> primaryNamesByOwner = repository.getNameRepository().getPrimaryNamesByOwners(owners);
+				groups.forEach(g -> g.setOwnerPrimaryName(primaryNamesByOwner.get(g.getOwner())));
+			} catch (DataException e) {
+				// Leave ownerPrimaryName null
+			}
+
+			List<Integer> groupIds = groups.stream().map(GroupData::getGroupId).collect(Collectors.toList());
+			List<GroupJoinRequestData> allJoinRequests = repository.getGroupRepository().getJoinRequestsByGroupIds(groupIds);
+			Map<Integer, List<GroupJoinRequestData>> joinRequestsByGroupId = allJoinRequests.stream()
+					.collect(Collectors.groupingBy(GroupJoinRequestData::getGroupId));
+
+			List<GroupWithJoinRequests> result = new ArrayList<>(groups.size());
+			for (GroupData group : groups) {
+				List<GroupJoinRequestData> joinRequests = joinRequestsByGroupId.getOrDefault(group.getGroupId(), new ArrayList<>());
+				result.add(new GroupWithJoinRequests(group, joinRequests));
+			}
+			return result;
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}

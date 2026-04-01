@@ -53,7 +53,7 @@ public class BlockMessage extends Message {
 
 			return new BlockMessage(id, blockData, blockTransformation.getTransactions(), blockTransformation.getAtStates());
 		} catch (TransformationException e) {
-			LOGGER.info(String.format("Received garbled BLOCK message: %s", e.getMessage()));
+			LOGGER.warn(String.format("Received garbled BLOCK message: %s", e.getMessage()));
 			throw new MessageException(e.getMessage(), e);
 		}
 	}

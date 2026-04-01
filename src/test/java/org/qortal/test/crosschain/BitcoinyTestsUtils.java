@@ -1,9 +1,8 @@
 package org.qortal.test.crosschain;
 
-import com.google.common.collect.ImmutableList;
 import org.bitcoinj.core.NetworkParameters;
-import org.bitcoinj.crypto.ChildNumber;
 import org.bitcoinj.crypto.DeterministicKey;
+import org.bitcoinj.crypto.HDPath;
 import org.bitcoinj.script.Script;
 import org.bitcoinj.wallet.DeterministicKeyChain;
 import org.bitcoinj.wallet.DeterministicSeed;
@@ -33,7 +32,7 @@ public class BitcoinyTestsUtils {
         final Wallet wallet = Wallet.createDeterministic(networkParameters, Script.ScriptType.P2PKH);
         final DeterministicSeed seed = wallet.getKeyChainSeed();
         final DeterministicKeyChain keyChain = DeterministicKeyChain.builder().seed(seed).build();
-        final ImmutableList<ChildNumber> path = keyChain.getAccountPath();
+        final HDPath path = keyChain.getAccountPath();
         final DeterministicKey parent = keyChain.getKeyByPath(path, true);
         final String rootKey = parent.serializePrivB58(networkParameters);
 

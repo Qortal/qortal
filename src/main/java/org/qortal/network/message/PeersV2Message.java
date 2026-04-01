@@ -74,7 +74,7 @@ public class PeersV2Message extends Message {
 
 			try {
 				//PeerAddress peerAddress = PeerAddress.fromString(addressString);
-                PeerAddress peerAddress = (PeerAddress) PeerAddressFactory.create("address", addressString);
+                PeerAddress peerAddress = (PeerAddress) PeerAddressFactory.create("uri", addressString);
 				peerAddresses.add(peerAddress);
 			} catch (IllegalArgumentException e) {
 				throw new MessageException("Invalid peer address in received PEERS_V2 message");

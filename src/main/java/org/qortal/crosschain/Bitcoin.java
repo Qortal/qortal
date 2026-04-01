@@ -208,7 +208,7 @@ public class Bitcoin extends Bitcoiny {
 	}
 
 	public static synchronized Bitcoin getInstance() {
-		if (instance == null) {
+		if (instance == null && Settings.getInstance().isWalletEnabled("BTC")) {
 			BitcoinNet bitcoinNet = Settings.getInstance().getBitcoinNet();
 
 			BitcoinyBlockchainProvider electrumX = new ElectrumX("Bitcoin-" + bitcoinNet.name(), bitcoinNet.getGenesisHash(), bitcoinNet.getServers(), DEFAULT_ELECTRUMX_PORTS);

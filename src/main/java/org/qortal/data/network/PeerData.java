@@ -3,7 +3,7 @@ package org.qortal.data.network;
 import io.swagger.v3.oas.annotations.media.Schema;
 import org.qortal.network.PeerAddress;
 import org.qortal.network.PeerAddressFactory;
-import org.qortal.network.RNSCommon.PeerType;
+import org.qortal.network.RNSCommon.PeerMetaType;
 import org.qortal.network.ReticulumPeerAddress;
 
 import javax.xml.bind.annotation.XmlAccessType;
@@ -30,7 +30,7 @@ public class PeerData {
 	private Long addedWhen;
 	private String addedBy;
     private PeerData peerData;
-    private PeerType peerType;
+    private PeerMetaType peerMetaType;
 
 	/** The number of consecutive times we failed to sync with this peer */
 	private int failedSyncCount = 0;
@@ -56,7 +56,7 @@ public class PeerData {
 
 	public PeerData(PeerAddress peerAddress) {
 		this(peerAddress, null, null, null, null, null);
-        //this.peerType = PeerType.IP;
+        //this.peerMetaType = PeerMetaType.IP;
 	}
 
     // Getters / setters
@@ -112,13 +112,17 @@ public class PeerData {
 		this.failedSyncCount++;
 	}
 
-    public PeerType getPeerType() {
-        return this.peerType;
-    }
+	public Boolean equals(PeerData against) {
+		return this.getAddress().equals(against.getAddress());
+	}
 
-    public void setPeerType(PeerType pt) {
-      this.peerType = pt;
-    }
+  public PeerMetaType getPeerMetaType() {
+      return this.peerMetaType;
+  }
+
+  public void setPeerMetaType(PeerMetaType pt) {
+    this.peerMetaType = pt;
+  }
 
 	// Pretty peerAddress getter for JAXB
 	@XmlElement(name = "address")

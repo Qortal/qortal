@@ -1,7 +1,7 @@
 name: PR testing
 
 on:
-  pull_request:
+  push:
     branches: [ master ]
 
 jobs:
@@ -21,11 +21,11 @@ jobs:
       with:
         java-version: '11'
         distribution: 'adopt'
-        
+
     - name: Load custom deps
       run: |
         mvn install -DskipTests=true --file pom.xml
-        
+
     - name: Run all tests
       run: |
         mvn -B clean test -DskipTests=false --file pom.xml

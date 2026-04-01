@@ -12,15 +12,11 @@ import org.qortal.api.ApiError;
 import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.Security;
+import org.qortal.api.model.crosschain.ForeignCoinStatus;
 import org.qortal.api.model.crosschain.PirateChainSendRequest;
-import org.qortal.crosschain.ChainableServer;
-import org.qortal.crosschain.ForeignBlockchainException;
-import org.qortal.crosschain.PirateChain;
-import org.qortal.crosschain.PirateLightClient;
-import org.qortal.crosschain.ServerConnectionInfo;
-import org.qortal.crosschain.ServerInfo;
-import org.qortal.crosschain.SimpleTransaction;
-import org.qortal.crosschain.ServerConfigurationInfo;
+import org.qortal.controller.PirateChainWalletController;
+import org.qortal.crosschain.*;
+import org.qortal.settings.Settings;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.GET;
@@ -37,6 +33,70 @@ public class CrossChainPirateChainResource {
 
 	@Context
 	HttpServletRequest request;
+
+	@GET
+	@Path("/status")
+	@Operation(
+			summary = "Returns wallet status, connected server count and known server count",
+			description = "Returns the status of the wallet and the number of electrumX servers available/connected",
+			responses = {
+					@ApiResponse(
+							content = @Content(
+									schema = @Schema(
+											implementation = ForeignCoinStatus.class
+									)
+							)
+					)
+			}
+	)
+	public ForeignCoinStatus getPirateStatus() {
+		PirateChainWalletController pirateWallet = PirateChainWalletController.getInstance();
+		PirateChain pirate = PirateChain.getInstance();
+		boolean isEnabled = pirateWallet != null;
+		int connections = 0;
+		int known = 0;
+		if (isEnabled && pirate.getBlockchainProvider() instanceof ElectrumX) {
+			connections = ((ElectrumX) pirate.getBlockchainProvider()).getConnectedServerCount();
+			known = ((ElectrumX) pirate.getBlockchainProvider()).getKnownServerCount();
+		}
+
+		return new ForeignCoinStatus(isEnabled, connections, known);
+	}
+
+	@POST
+	@Path("/start")
+	@Operation(
+			summary = "Start PirateChain Electrum Connections",
+			description = "Start PirateChain Electrum Connections",
+			responses = {
+					@ApiResponse(
+							description = "true if Pirate Wallet Started",
+							content = @Content(
+									schema = @Schema(
+											type = "string"
+									)
+							)
+					)
+			}
+	)
+	@SecurityRequirement(name = "apiKey")
+	public String startPirateChainSingleton(
+			@HeaderParam(Security.API_KEY_HEADER) String apiKey) {
+
+		Security.checkApiCallAllowed(request);
+		Settings.getInstance().enableWallet("ARRR");
+		PirateChainWalletController pirate = PirateChainWalletController.getInstance();
+
+		try {
+			Thread.sleep(100);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+
+		boolean started = pirate != null;
+
+		return Boolean.toString(started);
+	}
 
 	@GET
 	@Path("/height")

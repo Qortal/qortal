@@ -123,7 +123,7 @@ public class NamesDatabaseIntegrityCheck {
             }
 
         } catch (DataException e) {
-            LOGGER.info("Unable to run integrity check for name {}: {}", name, e.getMessage());
+            LOGGER.warn("Unable to run integrity check for name {}: {}", name, e.getMessage());
         }
 
         return modificationCount;
@@ -138,11 +138,11 @@ public class NamesDatabaseIntegrityCheck {
             long cacheStartTime = System.currentTimeMillis();
             this.buildTransactionsByNameCache(repository);
             long cacheEndTime = System.currentTimeMillis();
-            LOGGER.info("Cache built in {} ms", cacheEndTime - cacheStartTime);
+            LOGGER.debug("Cache built in {} ms", cacheEndTime - cacheStartTime);
 
             List<String> names = this.fetchAllNames(repository);
             int totalNames = names.size();
-            LOGGER.info("Rebuilding {} names...", totalNames);
+            LOGGER.debug("Rebuilding {} names...", totalNames);
 
             int processedCount = 0;
             int logInterval = Math.max(1, totalNames / 10); // Log every 10%
@@ -158,7 +158,7 @@ public class NamesDatabaseIntegrityCheck {
                     long estimatedTotalTime = (long) (elapsedTime / (processedCount / (double) totalNames));
                     long estimatedTimeRemaining = estimatedTotalTime - elapsedTime;
 
-                    LOGGER.info(String.format("Progress: %d/%d names (%.1f%%) - Elapsed: %d ms - Est. remaining: %d ms",
+                    LOGGER.debug(String.format("Progress: %d/%d names (%.1f%%) - Elapsed: %d ms - Est. remaining: %d ms",
                             processedCount, totalNames, percentComplete,
                             elapsedTime, estimatedTimeRemaining));
                 }
@@ -167,7 +167,7 @@ public class NamesDatabaseIntegrityCheck {
             long saveStartTime = System.currentTimeMillis();
             repository.saveChanges();
             long saveEndTime = System.currentTimeMillis();
-            LOGGER.info("Changes saved in {} ms", saveEndTime - saveStartTime);
+            LOGGER.debug("Changes saved in {} ms", saveEndTime - saveStartTime);
 
             // Clear cache after use
             this.transactionsByNameCache = null;
@@ -177,7 +177,7 @@ public class NamesDatabaseIntegrityCheck {
                     modificationCount, totalTime, totalTime / 1000.0);
         }
         catch (DataException e) {
-            LOGGER.info("Error when running integrity check for all names: {}", e.getMessage());
+            LOGGER.warn("Error when running integrity check for all names: {}", e.getMessage());
         }
 
         return modificationCount;
@@ -202,7 +202,7 @@ public class NamesDatabaseIntegrityCheck {
                     // We expect this name to still be registered to this transaction's creator
 
                     if (nameData == null) {
-                        LOGGER.info("Error: registered name {} doesn't exist in Names table. Adding...", registeredName);
+                        LOGGER.warn("Error: registered name {} doesn't exist in Names table. Adding...", registeredName);
                         integrityCheckFailed = true;
                     }
                     else {
@@ -212,7 +212,7 @@ public class NamesDatabaseIntegrityCheck {
                     // Check the owner is correct
                     PublicKeyAccount creator = new PublicKeyAccount(repository, registerNameTransactionData.getCreatorPublicKey());
                     if (!Objects.equals(creator.getAddress(), nameData.getOwner())) {
-                        LOGGER.info("Error: registered name {} is owned by {}, but it should be {}",
+                        LOGGER.warn("Error: registered name {} is owned by {}, but it should be {}",
                                 registeredName, nameData.getOwner(), creator.getAddress());
                         integrityCheckFailed = true;
                     }
@@ -231,7 +231,7 @@ public class NamesDatabaseIntegrityCheck {
                         // When this name is the "new name", we expect the current owner to match the txn creator
                         if (Objects.equals(updateNameTransactionData.getNewName(), registeredName)) {
                             if (!Objects.equals(creator.getAddress(), nameData.getOwner())) {
-                                LOGGER.info("Error: registered name {} is owned by {}, but it should be {}",
+                                LOGGER.warn("Error: registered name {} is owned by {}, but it should be {}",
                                         registeredName, nameData.getOwner(), creator.getAddress());
                                 integrityCheckFailed = true;
                             }
@@ -251,12 +251,12 @@ public class NamesDatabaseIntegrityCheck {
                             }
                             NameData newNameData = repository.getNameRepository().fromName(newName);
                             if (newNameData == null) {
-                                LOGGER.info("Error: registered name {} has no new name data. This is likely due to account {} " +
+                                LOGGER.warn("Error: registered name {} has no new name data. This is likely due to account {} " +
                                                 "being renamed another time, which is a scenario that is not yet checked automatically.",
                                         updateNameTransactionData.getNewName(), creator.getAddress());
                             }
                             else if (!Objects.equals(creator.getAddress(), newNameData.getOwner())) {
-                                LOGGER.info("Error: registered name {} is owned by {}, but it should be {}",
+                                LOGGER.warn("Error: registered name {} is owned by {}, but it should be {}",
                                         updateNameTransactionData.getNewName(), newNameData.getOwner(), creator.getAddress());
                                 integrityCheckFailed = true;
                             }
@@ -266,7 +266,7 @@ public class NamesDatabaseIntegrityCheck {
                         }
 
                         else {
-                            LOGGER.info("Unhandled update case for name {}", registeredName);
+                            LOGGER.warn("Unhandled update case for name {}", registeredName);
                         }
                     }
 
@@ -275,7 +275,7 @@ public class NamesDatabaseIntegrityCheck {
                         BuyNameTransactionData buyNameTransactionData = (BuyNameTransactionData) latestUpdate;
                         PublicKeyAccount creator = new PublicKeyAccount(repository, buyNameTransactionData.getCreatorPublicKey());
                         if (!Objects.equals(creator.getAddress(), nameData.getOwner())) {
-                            LOGGER.info("Error: registered name {} is owned by {}, but it should be {}",
+                            LOGGER.warn("Error: registered name {} is owned by {}, but it should be {}",
                                     registeredName, nameData.getOwner(), creator.getAddress());
                             integrityCheckFailed = true;
                         }
@@ -289,7 +289,7 @@ public class NamesDatabaseIntegrityCheck {
                         SellNameTransactionData sellNameTransactionData = (SellNameTransactionData) latestUpdate;
                         PublicKeyAccount creator = new PublicKeyAccount(repository, sellNameTransactionData.getCreatorPublicKey());
                         if (!Objects.equals(creator.getAddress(), nameData.getOwner())) {
-                            LOGGER.info("Error: registered name {} is owned by {}, but it should be {}",
+                            LOGGER.warn("Error: registered name {} is owned by {}, but it should be {}",
                                     registeredName, nameData.getOwner(), creator.getAddress());
                             integrityCheckFailed = true;
                         }
@@ -299,7 +299,7 @@ public class NamesDatabaseIntegrityCheck {
                     }
 
                     else {
-                        LOGGER.info("Unhandled case for name {}", registeredName);
+                        LOGGER.warn("Unhandled case for name {}", registeredName);
                     }
 
                 }
@@ -312,7 +312,7 @@ public class NamesDatabaseIntegrityCheck {
         }
 
         if (integrityCheckFailed) {
-            LOGGER.info("Registered names database integrity check failed. Bootstrapping is recommended.");
+            LOGGER.warn("Registered names database integrity check failed. Bootstrapping is recommended.");
         } else {
             LOGGER.info("Registered names database integrity check passed.");
         }

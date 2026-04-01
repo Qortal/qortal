@@ -17,10 +17,8 @@ public class ChallengeMessage extends Message {
 		super(MessageType.CHALLENGE);
 
 		ByteArrayOutputStream bytes = new ByteArrayOutputStream(publicKey.length + challenge.length);
-
 		try {
 			bytes.write(publicKey);
-
 			bytes.write(challenge);
 		} catch (IOException e) {
 			throw new AssertionError("IOException shouldn't occur with ByteArrayOutputStream");

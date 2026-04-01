@@ -16,8 +16,17 @@ public class ArbitraryDataBuildQueueItem extends ArbitraryDataResource {
     private Long buildEndTimestamp = null;
     private Integer priority = 0;
     private boolean failed = false;
+    // Track if we've already recalculated priority with chunk counts to avoid repeated calculations
+    private boolean priorityRecalculatedWithChunks = false;
 
     private static int HIGH_PRIORITY_THRESHOLD = 5;
+    
+    // Threshold for considering a file "large" (in chunks, where each chunk = 512KB)
+    // Files with > 200 chunks (~100MB) are considered large
+    private static int LARGE_FILE_CHUNK_THRESHOLD = 200;
+    
+    // Priority aging: boost priority by 1 every 10 seconds to prevent starvation
+    private static long PRIORITY_AGING_INTERVAL_MS = 10 * 1000L; // 10 seconds
 
     /* The maximum amount of time to spend on a single build */
     // TODO: interrupt an in-progress build
@@ -29,6 +38,8 @@ public class ArbitraryDataBuildQueueItem extends ArbitraryDataResource {
         super(resourceId, resourceIdType, service, identifier);
 
         this.creationTimestamp = NTP.getTime();
+        // Calculate initial priority based on file size
+        this.calculatePriority();
     }
 
     public void prepareForBuild() {
@@ -84,6 +95,69 @@ public class ArbitraryDataBuildQueueItem extends ArbitraryDataResource {
         return this.buildStartTimestamp;
     }
 
+    /**
+     * Calculate priority based on file size (chunk count).
+     * Smaller files get higher priority (lower number) to improve responsiveness.
+     */
+    public void calculatePriority() {
+        Integer totalChunks = this.getTotalChunkCount();
+        
+        if (totalChunks == null) {
+            // If we don't know size yet, use default priority
+            this.priority = 0;
+            return;
+        }
+        
+        // Smaller files get higher priority (lower number)
+        if (totalChunks <= 5) {
+            // Very small: < 2.5MB - highest priority
+            this.priority = 10;
+        } else if (totalChunks <= 20) {
+            // Small: < 10MB - high priority
+            this.priority = 5;
+        } else if (totalChunks <= 100) {
+            // Medium: < 50MB - normal priority
+            this.priority = 0;
+        } else {
+            // Large: > 50MB - lower priority
+            this.priority = -5;
+        }
+    }
+
+    /**
+     * Get effective priority with aging applied.
+     * Priority increases (number decreases) over time to prevent starvation.
+     * Also recalculates priority ONCE if chunk counts have become available since creation.
+     * 
+     * @return effective priority (lower number = higher priority)
+     */
+    public Integer getEffectivePriority() {
+        // Only recalculate priority ONCE when chunk counts become available
+        // Don't recalculate on every call (this was causing high CPU usage during polling)
+        if (!priorityRecalculatedWithChunks) {
+            Integer totalChunks = this.getTotalChunkCount();
+            if (totalChunks != null) {
+                // Chunk count is now available - recalculate priority once
+                this.calculatePriority();
+                this.priorityRecalculatedWithChunks = true;
+            }
+        }
+        
+        Long now = NTP.getTime();
+        if (now == null || this.creationTimestamp == null) {
+            return this.getPriority();
+        }
+        
+        // Calculate age in milliseconds
+        long ageMs = now - this.creationTimestamp;
+        
+        // Boost priority by 1 every 10 seconds (prevents starvation)
+        // Lower number = higher priority, so we subtract the boost
+        int ageBoost = (int) (ageMs / PRIORITY_AGING_INTERVAL_MS);
+        
+        return this.getPriority() - ageBoost;
+    }
+
     public Integer getPriority() {
         if (this.priority != null) {
             return this.priority;
@@ -97,6 +171,20 @@ public class ArbitraryDataBuildQueueItem extends ArbitraryDataResource {
 
     public boolean isHighPriority() {
         return this.priority >= HIGH_PRIORITY_THRESHOLD;
+    }
+    
+    /**
+     * Check if this is a large file based on chunk count.
+     * Large files should use the reserved thread to prevent blocking small files.
+     * 
+     * @return true if file has more than LARGE_FILE_CHUNK_THRESHOLD chunks
+     */
+    public boolean isLargeFile() {
+        Integer totalChunks = this.getTotalChunkCount();
+        if (totalChunks == null) {
+            return false; // Unknown size, treat as not large
+        }
+        return totalChunks > LARGE_FILE_CHUNK_THRESHOLD;
     }
 
     public void setFailed(boolean failed) {

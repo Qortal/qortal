@@ -5,14 +5,14 @@ import static io.grpc.MethodDescriptor.generateFullMethodName;
 /**
  */
 @javax.annotation.Generated(
-    value = "by gRPC proto compiler (version 1.45.1)",
+    value = "by gRPC proto compiler (version 1.68.1)",
     comments = "Source: service.proto")
 @io.grpc.stub.annotations.GrpcGenerated
 public final class CompactTxStreamerGrpc {
 
   private CompactTxStreamerGrpc() {}
 
-  public static final String SERVICE_NAME = "cash.z.wallet.sdk.rpc.CompactTxStreamer";
+  public static final java.lang.String SERVICE_NAME = "cash.z.wallet.sdk.rpc.CompactTxStreamer";
 
   // Static method descriptors that strictly reflect the proto.
   private static volatile io.grpc.MethodDescriptor<cash.z.wallet.sdk.rpc.Service.ChainSpec,
@@ -495,14 +495,14 @@ public final class CompactTxStreamerGrpc {
 
   /**
    */
-  public static abstract class CompactTxStreamerImplBase implements io.grpc.BindableService {
+  public interface AsyncService {
 
     /**
      * <pre>
      * Return the height of the tip of the best chain
      * </pre>
      */
-    public void getLatestBlock(cash.z.wallet.sdk.rpc.Service.ChainSpec request,
+    default void getLatestBlock(cash.z.wallet.sdk.rpc.Service.ChainSpec request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.BlockID> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetLatestBlockMethod(), responseObserver);
     }
@@ -512,7 +512,7 @@ public final class CompactTxStreamerGrpc {
      * Return the compact block corresponding to the given block identifier
      * </pre>
      */
-    public void getBlock(cash.z.wallet.sdk.rpc.Service.BlockID request,
+    default void getBlock(cash.z.wallet.sdk.rpc.Service.BlockID request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.CompactFormats.CompactBlock> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetBlockMethod(), responseObserver);
     }
@@ -522,7 +522,7 @@ public final class CompactTxStreamerGrpc {
      * Return a list of consecutive compact blocks
      * </pre>
      */
-    public void getBlockRange(cash.z.wallet.sdk.rpc.Service.BlockRange request,
+    default void getBlockRange(cash.z.wallet.sdk.rpc.Service.BlockRange request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.CompactFormats.CompactBlock> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetBlockRangeMethod(), responseObserver);
     }
@@ -532,7 +532,7 @@ public final class CompactTxStreamerGrpc {
      * Return the requested full (not compact) transaction (as from pirated)
      * </pre>
      */
-    public void getTransaction(cash.z.wallet.sdk.rpc.Service.TxFilter request,
+    default void getTransaction(cash.z.wallet.sdk.rpc.Service.TxFilter request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.RawTransaction> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetTransactionMethod(), responseObserver);
     }
@@ -542,7 +542,7 @@ public final class CompactTxStreamerGrpc {
      * Submit the given transaction to the Zcash network
      * </pre>
      */
-    public void sendTransaction(cash.z.wallet.sdk.rpc.Service.RawTransaction request,
+    default void sendTransaction(cash.z.wallet.sdk.rpc.Service.RawTransaction request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.SendResponse> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getSendTransactionMethod(), responseObserver);
     }
@@ -552,21 +552,21 @@ public final class CompactTxStreamerGrpc {
      * Return the txids corresponding to the given t-address within the given block range
      * </pre>
      */
-    public void getTaddressTxids(cash.z.wallet.sdk.rpc.Service.TransparentAddressBlockFilter request,
+    default void getTaddressTxids(cash.z.wallet.sdk.rpc.Service.TransparentAddressBlockFilter request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.RawTransaction> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetTaddressTxidsMethod(), responseObserver);
     }
 
     /**
      */
-    public void getTaddressBalance(cash.z.wallet.sdk.rpc.Service.AddressList request,
+    default void getTaddressBalance(cash.z.wallet.sdk.rpc.Service.AddressList request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.Balance> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetTaddressBalanceMethod(), responseObserver);
     }
 
     /**
      */
-    public io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.Address> getTaddressBalanceStream(
+    default io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.Address> getTaddressBalanceStream(
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.Balance> responseObserver) {
       return io.grpc.stub.ServerCalls.asyncUnimplementedStreamingCall(getGetTaddressBalanceStreamMethod(), responseObserver);
     }
@@ -584,7 +584,7 @@ public final class CompactTxStreamerGrpc {
      * in the exclude list that don't exist in the mempool are ignored.
      * </pre>
      */
-    public void getMempoolTx(cash.z.wallet.sdk.rpc.Service.Exclude request,
+    default void getMempoolTx(cash.z.wallet.sdk.rpc.Service.Exclude request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.CompactFormats.CompactTx> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetMempoolTxMethod(), responseObserver);
     }
@@ -597,21 +597,21 @@ public final class CompactTxStreamerGrpc {
      * The block can be specified by either height or hash.
      * </pre>
      */
-    public void getTreeState(cash.z.wallet.sdk.rpc.Service.BlockID request,
+    default void getTreeState(cash.z.wallet.sdk.rpc.Service.BlockID request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.TreeState> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetTreeStateMethod(), responseObserver);
     }
 
     /**
      */
-    public void getAddressUtxos(cash.z.wallet.sdk.rpc.Service.GetAddressUtxosArg request,
+    default void getAddressUtxos(cash.z.wallet.sdk.rpc.Service.GetAddressUtxosArg request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.GetAddressUtxosReplyList> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetAddressUtxosMethod(), responseObserver);
     }
 
     /**
      */
-    public void getAddressUtxosStream(cash.z.wallet.sdk.rpc.Service.GetAddressUtxosArg request,
+    default void getAddressUtxosStream(cash.z.wallet.sdk.rpc.Service.GetAddressUtxosArg request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.GetAddressUtxosReply> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetAddressUtxosStreamMethod(), responseObserver);
     }
@@ -621,7 +621,7 @@ public final class CompactTxStreamerGrpc {
      * Return information about this lightwalletd instance and the blockchain
      * </pre>
      */
-    public void getLightdInfo(cash.z.wallet.sdk.rpc.Service.Empty request,
+    default void getLightdInfo(cash.z.wallet.sdk.rpc.Service.Empty request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.LightdInfo> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getGetLightdInfoMethod(), responseObserver);
     }
@@ -631,118 +631,28 @@ public final class CompactTxStreamerGrpc {
      * Testing-only, requires lightwalletd --ping-very-insecure (do not enable in production)
      * </pre>
      */
-    public void ping(cash.z.wallet.sdk.rpc.Service.Duration request,
+    default void ping(cash.z.wallet.sdk.rpc.Service.Duration request,
         io.grpc.stub.StreamObserver<cash.z.wallet.sdk.rpc.Service.PingResponse> responseObserver) {
       io.grpc.stub.ServerCalls.asyncUnimplementedUnaryCall(getPingMethod(), responseObserver);
-    }
-
-    @java.lang.Override public final io.grpc.ServerServiceDefinition bindService() {
-      return io.grpc.ServerServiceDefinition.builder(getServiceDescriptor())
-          .addMethod(
-            getGetLatestBlockMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.ChainSpec,
-                cash.z.wallet.sdk.rpc.Service.BlockID>(
-                  this, METHODID_GET_LATEST_BLOCK)))
-          .addMethod(
-            getGetBlockMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.BlockID,
-                cash.z.wallet.sdk.rpc.CompactFormats.CompactBlock>(
-                  this, METHODID_GET_BLOCK)))
-          .addMethod(
-            getGetBlockRangeMethod(),
-            io.grpc.stub.ServerCalls.asyncServerStreamingCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.BlockRange,
-                cash.z.wallet.sdk.rpc.CompactFormats.CompactBlock>(
-                  this, METHODID_GET_BLOCK_RANGE)))
-          .addMethod(
-            getGetTransactionMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.TxFilter,
-                cash.z.wallet.sdk.rpc.Service.RawTransaction>(
-                  this, METHODID_GET_TRANSACTION)))
-          .addMethod(
-            getSendTransactionMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.RawTransaction,
-                cash.z.wallet.sdk.rpc.Service.SendResponse>(
-                  this, METHODID_SEND_TRANSACTION)))
-          .addMethod(
-            getGetTaddressTxidsMethod(),
-            io.grpc.stub.ServerCalls.asyncServerStreamingCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.TransparentAddressBlockFilter,
-                cash.z.wallet.sdk.rpc.Service.RawTransaction>(
-                  this, METHODID_GET_TADDRESS_TXIDS)))
-          .addMethod(
-            getGetTaddressBalanceMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.AddressList,
-                cash.z.wallet.sdk.rpc.Service.Balance>(
-                  this, METHODID_GET_TADDRESS_BALANCE)))
-          .addMethod(
-            getGetTaddressBalanceStreamMethod(),
-            io.grpc.stub.ServerCalls.asyncClientStreamingCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.Address,
-                cash.z.wallet.sdk.rpc.Service.Balance>(
-                  this, METHODID_GET_TADDRESS_BALANCE_STREAM)))
-          .addMethod(
-            getGetMempoolTxMethod(),
-            io.grpc.stub.ServerCalls.asyncServerStreamingCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.Exclude,
-                cash.z.wallet.sdk.rpc.CompactFormats.CompactTx>(
-                  this, METHODID_GET_MEMPOOL_TX)))
-          .addMethod(
-            getGetTreeStateMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.BlockID,
-                cash.z.wallet.sdk.rpc.Service.TreeState>(
-                  this, METHODID_GET_TREE_STATE)))
-          .addMethod(
-            getGetAddressUtxosMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.GetAddressUtxosArg,
-                cash.z.wallet.sdk.rpc.Service.GetAddressUtxosReplyList>(
-                  this, METHODID_GET_ADDRESS_UTXOS)))
-          .addMethod(
-            getGetAddressUtxosStreamMethod(),
-            io.grpc.stub.ServerCalls.asyncServerStreamingCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.GetAddressUtxosArg,
-                cash.z.wallet.sdk.rpc.Service.GetAddressUtxosReply>(
-                  this, METHODID_GET_ADDRESS_UTXOS_STREAM)))
-          .addMethod(
-            getGetLightdInfoMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.Empty,
-                cash.z.wallet.sdk.rpc.Service.LightdInfo>(
-                  this, METHODID_GET_LIGHTD_INFO)))
-          .addMethod(
-            getPingMethod(),
-            io.grpc.stub.ServerCalls.asyncUnaryCall(
-              new MethodHandlers<
-                cash.z.wallet.sdk.rpc.Service.Duration,
-                cash.z.wallet.sdk.rpc.Service.PingResponse>(
-                  this, METHODID_PING)))
-          .build();
     }
   }
 
   /**
+   * Base class for the server implementation of the service CompactTxStreamer.
    */
-  public static final class CompactTxStreamerStub extends io.grpc.stub.AbstractAsyncStub<CompactTxStreamerStub> {
+  public static abstract class CompactTxStreamerImplBase
+      implements io.grpc.BindableService, AsyncService {
+
+    @java.lang.Override public final io.grpc.ServerServiceDefinition bindService() {
+      return CompactTxStreamerGrpc.bindService(this);
+    }
+  }
+
+  /**
+   * A stub to allow clients to do asynchronous rpc calls to service CompactTxStreamer.
+   */
+  public static final class CompactTxStreamerStub
+      extends io.grpc.stub.AbstractAsyncStub<CompactTxStreamerStub> {
     private CompactTxStreamerStub(
         io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
       super(channel, callOptions);
@@ -909,8 +819,10 @@ public final class CompactTxStreamerGrpc {
   }
 
   /**
+   * A stub to allow clients to do synchronous rpc calls to service CompactTxStreamer.
    */
-  public static final class CompactTxStreamerBlockingStub extends io.grpc.stub.AbstractBlockingStub<CompactTxStreamerBlockingStub> {
+  public static final class CompactTxStreamerBlockingStub
+      extends io.grpc.stub.AbstractBlockingStub<CompactTxStreamerBlockingStub> {
     private CompactTxStreamerBlockingStub(
         io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
       super(channel, callOptions);
@@ -1060,8 +972,10 @@ public final class CompactTxStreamerGrpc {
   }
 
   /**
+   * A stub to allow clients to do ListenableFuture-style rpc calls to service CompactTxStreamer.
    */
-  public static final class CompactTxStreamerFutureStub extends io.grpc.stub.AbstractFutureStub<CompactTxStreamerFutureStub> {
+  public static final class CompactTxStreamerFutureStub
+      extends io.grpc.stub.AbstractFutureStub<CompactTxStreamerFutureStub> {
     private CompactTxStreamerFutureStub(
         io.grpc.Channel channel, io.grpc.CallOptions callOptions) {
       super(channel, callOptions);
@@ -1190,10 +1104,10 @@ public final class CompactTxStreamerGrpc {
       io.grpc.stub.ServerCalls.ServerStreamingMethod<Req, Resp>,
       io.grpc.stub.ServerCalls.ClientStreamingMethod<Req, Resp>,
       io.grpc.stub.ServerCalls.BidiStreamingMethod<Req, Resp> {
-    private final CompactTxStreamerImplBase serviceImpl;
+    private final AsyncService serviceImpl;
     private final int methodId;
 
-    MethodHandlers(CompactTxStreamerImplBase serviceImpl, int methodId) {
+    MethodHandlers(AsyncService serviceImpl, int methodId) {
       this.serviceImpl = serviceImpl;
       this.methodId = methodId;
     }
@@ -1273,6 +1187,109 @@ public final class CompactTxStreamerGrpc {
     }
   }
 
+  public static final io.grpc.ServerServiceDefinition bindService(AsyncService service) {
+    return io.grpc.ServerServiceDefinition.builder(getServiceDescriptor())
+        .addMethod(
+          getGetLatestBlockMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.ChainSpec,
+              cash.z.wallet.sdk.rpc.Service.BlockID>(
+                service, METHODID_GET_LATEST_BLOCK)))
+        .addMethod(
+          getGetBlockMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.BlockID,
+              cash.z.wallet.sdk.rpc.CompactFormats.CompactBlock>(
+                service, METHODID_GET_BLOCK)))
+        .addMethod(
+          getGetBlockRangeMethod(),
+          io.grpc.stub.ServerCalls.asyncServerStreamingCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.BlockRange,
+              cash.z.wallet.sdk.rpc.CompactFormats.CompactBlock>(
+                service, METHODID_GET_BLOCK_RANGE)))
+        .addMethod(
+          getGetTransactionMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.TxFilter,
+              cash.z.wallet.sdk.rpc.Service.RawTransaction>(
+                service, METHODID_GET_TRANSACTION)))
+        .addMethod(
+          getSendTransactionMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.RawTransaction,
+              cash.z.wallet.sdk.rpc.Service.SendResponse>(
+                service, METHODID_SEND_TRANSACTION)))
+        .addMethod(
+          getGetTaddressTxidsMethod(),
+          io.grpc.stub.ServerCalls.asyncServerStreamingCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.TransparentAddressBlockFilter,
+              cash.z.wallet.sdk.rpc.Service.RawTransaction>(
+                service, METHODID_GET_TADDRESS_TXIDS)))
+        .addMethod(
+          getGetTaddressBalanceMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.AddressList,
+              cash.z.wallet.sdk.rpc.Service.Balance>(
+                service, METHODID_GET_TADDRESS_BALANCE)))
+        .addMethod(
+          getGetTaddressBalanceStreamMethod(),
+          io.grpc.stub.ServerCalls.asyncClientStreamingCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.Address,
+              cash.z.wallet.sdk.rpc.Service.Balance>(
+                service, METHODID_GET_TADDRESS_BALANCE_STREAM)))
+        .addMethod(
+          getGetMempoolTxMethod(),
+          io.grpc.stub.ServerCalls.asyncServerStreamingCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.Exclude,
+              cash.z.wallet.sdk.rpc.CompactFormats.CompactTx>(
+                service, METHODID_GET_MEMPOOL_TX)))
+        .addMethod(
+          getGetTreeStateMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.BlockID,
+              cash.z.wallet.sdk.rpc.Service.TreeState>(
+                service, METHODID_GET_TREE_STATE)))
+        .addMethod(
+          getGetAddressUtxosMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.GetAddressUtxosArg,
+              cash.z.wallet.sdk.rpc.Service.GetAddressUtxosReplyList>(
+                service, METHODID_GET_ADDRESS_UTXOS)))
+        .addMethod(
+          getGetAddressUtxosStreamMethod(),
+          io.grpc.stub.ServerCalls.asyncServerStreamingCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.GetAddressUtxosArg,
+              cash.z.wallet.sdk.rpc.Service.GetAddressUtxosReply>(
+                service, METHODID_GET_ADDRESS_UTXOS_STREAM)))
+        .addMethod(
+          getGetLightdInfoMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.Empty,
+              cash.z.wallet.sdk.rpc.Service.LightdInfo>(
+                service, METHODID_GET_LIGHTD_INFO)))
+        .addMethod(
+          getPingMethod(),
+          io.grpc.stub.ServerCalls.asyncUnaryCall(
+            new MethodHandlers<
+              cash.z.wallet.sdk.rpc.Service.Duration,
+              cash.z.wallet.sdk.rpc.Service.PingResponse>(
+                service, METHODID_PING)))
+        .build();
+  }
+
   private static abstract class CompactTxStreamerBaseDescriptorSupplier
       implements io.grpc.protobuf.ProtoFileDescriptorSupplier, io.grpc.protobuf.ProtoServiceDescriptorSupplier {
     CompactTxStreamerBaseDescriptorSupplier() {}
@@ -1296,9 +1313,9 @@ public final class CompactTxStreamerGrpc {
   private static final class CompactTxStreamerMethodDescriptorSupplier
       extends CompactTxStreamerBaseDescriptorSupplier
       implements io.grpc.protobuf.ProtoMethodDescriptorSupplier {
-    private final String methodName;
+    private final java.lang.String methodName;
 
-    CompactTxStreamerMethodDescriptorSupplier(String methodName) {
+    CompactTxStreamerMethodDescriptorSupplier(java.lang.String methodName) {
       this.methodName = methodName;
     }
 

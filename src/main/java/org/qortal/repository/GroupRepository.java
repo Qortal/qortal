@@ -36,6 +36,12 @@ public interface GroupRepository {
 		return getGroupsWithMember(member, null, null, null);
 	}
 
+	public List<GroupData> getGroupsByAdmin(String address, Integer limit, Integer offset, Boolean reverse) throws DataException;
+
+	public default List<GroupData> getGroupsByAdmin(String address) throws DataException {
+		return getGroupsByAdmin(address, null, null, null);
+	}
+
 	public void save(GroupData groupData) throws DataException;
 
 	public void delete(int groupId) throws DataException;
@@ -119,6 +125,9 @@ public interface GroupRepository {
 	public default List<GroupJoinRequestData> getGroupJoinRequests(int groupId) throws DataException {
 		return getGroupJoinRequests(groupId, null, null, null);
 	}
+
+	/** Returns all join requests for the given group IDs in one query. Order: by group_id, then joiner. */
+	public List<GroupJoinRequestData> getJoinRequestsByGroupIds(List<Integer> groupIds) throws DataException;
 
 	public List<GroupJoinRequestData> getJoinRequestsByJoiner(String joiner, Integer limit, Integer offset, Boolean reverse) throws DataException;
 

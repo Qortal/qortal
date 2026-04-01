@@ -8,12 +8,14 @@ public class ArbitraryDirectConnectionInfo {
 
     private final byte[] signature;
     private final String peerAddress;
+    private final String nodeId;
     private final List<byte[]> hashes;
     private final long timestamp;
 
-    public ArbitraryDirectConnectionInfo(byte[] signature, String peerAddress, List<byte[]> hashes, long timestamp) {
+    public ArbitraryDirectConnectionInfo(byte[] signature, String peerAddress, String nodeId, List<byte[]> hashes, long timestamp) {
         this.signature = signature;
         this.peerAddress = peerAddress;
+        this.nodeId = nodeId;
         this.hashes = hashes;
         this.timestamp = timestamp;
     }
@@ -24,6 +26,10 @@ public class ArbitraryDirectConnectionInfo {
 
     public String getPeerAddress() {
         return this.peerAddress;
+    }
+
+    public String getNodeId() {
+        return this.nodeId;
     }
 
     public List<byte[]> getHashes() {
@@ -53,6 +59,7 @@ public class ArbitraryDirectConnectionInfo {
 
         return Arrays.equals(this.signature, otherDirectConnectionInfo.getSignature())
                 && Objects.equals(this.peerAddress, otherDirectConnectionInfo.getPeerAddress())
+                && Objects.equals(this.nodeId, otherDirectConnectionInfo.getNodeId())
                 && Objects.equals(this.hashes, otherDirectConnectionInfo.getHashes())
                 && Objects.equals(this.timestamp, otherDirectConnectionInfo.getTimestamp());
     }

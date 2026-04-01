@@ -3,13 +3,13 @@ package org.qortal.api.websocket;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.eclipse.jetty.websocket.api.Session;
-import org.eclipse.jetty.websocket.api.WebSocketException;
+import org.eclipse.jetty.websocket.api.WriteCallback;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketConnect;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketError;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
 import org.eclipse.jetty.websocket.api.annotations.WebSocket;
-import org.eclipse.jetty.websocket.servlet.WebSocketServletFactory;
+import org.eclipse.jetty.websocket.server.JettyWebSocketServletFactory;
 import org.qortal.data.crosschain.UnsignedFeeEvent;
 import org.qortal.event.Event;
 import org.qortal.event.EventBus;
@@ -25,9 +25,13 @@ public class UnsignedFeesSocket extends ApiWebSocket implements Listener {
 
 	private static final Logger LOGGER = LogManager.getLogger(UnsignedFeesSocket.class);
 
+	/**
+	 * Updated for Jetty 10.
+	 */
 	@Override
-	public void configure(WebSocketServletFactory factory) {
-		factory.register(UnsignedFeesSocket.class);
+	protected void configure(JettyWebSocketServletFactory factory) {
+		// Map the current instance to handle upgrades
+		factory.addMapping("/", (req, res) -> this);
 
 		EventBus.INSTANCE.addListener(this);
 	}
@@ -37,12 +41,13 @@ public class UnsignedFeesSocket extends ApiWebSocket implements Listener {
 		if (!(event instanceof FeeWaitingEvent))
 			return;
 
+		FeeWaitingEvent feeWaitingEvent = (FeeWaitingEvent) event;
+		UnsignedFeeEvent unsignedFeeEvent = new UnsignedFeeEvent(feeWaitingEvent.isPositive(), feeWaitingEvent.getAddress());
+
 		for (Session session : getSessions()) {
-			FeeWaitingEvent feeWaitingEvent = (FeeWaitingEvent) event;
-			sendUnsignedFeeEvent(session, new UnsignedFeeEvent(feeWaitingEvent.isPositive(), feeWaitingEvent.getAddress()));
+			sendUnsignedFeeEvent(session, unsignedFeeEvent);
 		}
 	}
-
 
 	@OnWebSocketConnect
 	@Override
@@ -58,23 +63,27 @@ public class UnsignedFeesSocket extends ApiWebSocket implements Listener {
 
 	@OnWebSocketError
 	public void onWebSocketError(Session session, Throwable throwable) {
-		/* We ignore errors for now, but method here to silence log spam */
+		/* We ignore errors to silence log spam */
 	}
 
 	@OnWebSocketMessage
 	public void onWebSocketMessage(Session session, String message) {
-	}
-
-	private void sendUnsignedFeeEvent(Session session, UnsignedFeeEvent unsignedFeeEvent) {
-		StringWriter stringWriter = new StringWriter();
-
-		try {
-			marshall(stringWriter, unsignedFeeEvent);
-
-			session.getRemote().sendStringByFuture(stringWriter.toString());
-		} catch (IOException | WebSocketException e) {
-			// No output this time
+		if (java.util.Objects.equals(message, "ping") && session.isOpen()) {
+			session.getRemote().sendString("pong", WriteCallback.NOOP);
 		}
 	}
 
+	private void sendUnsignedFeeEvent(Session session, UnsignedFeeEvent unsignedFeeEvent) {
+		if (session.isOpen()) {
+			StringWriter stringWriter = new StringWriter();
+
+			try {
+				marshall(stringWriter, unsignedFeeEvent);
+
+				session.getRemote().sendString(stringWriter.toString(), WriteCallback.NOOP);
+			} catch (IOException e) {
+				// No output this time. WebSocketException catch removed.
+			}
+		}
+	}
 }

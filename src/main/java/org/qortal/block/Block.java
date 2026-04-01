@@ -453,8 +453,22 @@ public class Block {
 			}
 
 			if (onlineAccounts.isEmpty()) {
-				LOGGER.debug("No online accounts - not even our own?");
-				return null;
+				// new v5.1.0, don't fail (25 blocks before payout) when isSingleNodeTestnet == true
+				if (Settings.getInstance().isSingleNodeTestnet()) {
+					Integer nonce = new Random().nextInt(500000);
+					byte[] timestampBytes = Longs.toByteArray(onlineAccountsTimestamp);
+					byte[] signature = Qortal25519Extras.signForAggregation(minter.getPrivateKey(), timestampBytes);
+					byte[] publicKey = minter.getPublicKey();
+					OnlineAccountData me = new OnlineAccountData(
+							NTP.getTime(),
+							signature,
+							publicKey,
+							nonce);
+					onlineAccounts.add(me);	// safe to add because isEmpty
+				} else {
+					LOGGER.error("No online accounts - not even our own?; We will fail to Mint!");
+					return null;
+				}
 			}
 
 			// Load sorted list of reward share public keys into memory, so that the indexes can be obtained.
@@ -1237,10 +1251,11 @@ public class Block {
 		// Remove those already validated & cached by online accounts manager - no need to re-validate them
 		OnlineAccountsManager.getInstance().removeKnown(onlineAccounts, onlineTimestamp);
 
-		// Validate the rest
-		for (OnlineAccountData onlineAccount : onlineAccounts)
-			if (!OnlineAccountsManager.getInstance().verifyMemoryPoW(onlineAccount, null))
-				return ValidationResult.ONLINE_ACCOUNT_NONCE_INCORRECT;
+		// Validate the rest : v5.1.0 Added enhanced speed processing for SingleTestNet Node
+		if(!Settings.getInstance().isSingleNodeTestnet())
+			for (OnlineAccountData onlineAccount : onlineAccounts)
+				if (!OnlineAccountsManager.getInstance().verifyMemoryPoW(onlineAccount, null))
+					return ValidationResult.ONLINE_ACCOUNT_NONCE_INCORRECT;
 
 		// Cache the valid online accounts as they will likely be needed for the next block
 		OnlineAccountsManager.getInstance().addBlocksOnlineAccounts(onlineAccounts, onlineTimestamp);
@@ -1347,6 +1362,10 @@ public class Block {
 			// Create repository savepoint here so we can rollback to it after testing transactions
 			repository.setSavepoint();
 
+			// Set current block context so GROUP_APPROVAL can resolve same-block pending transactions
+			// (they are not in the repository yet during validation)
+			BlockValidationContext.set(this.getTransactions().stream().map(Transaction::getTransactionData).collect(Collectors.toList()));
+
 			if (!isTestnet) {
 				if (this.blockData.getHeight() == 212937) {
 					// Apply fix for block 212937 but fix will be rolled back before we exit method
@@ -1432,6 +1451,8 @@ public class Block {
 			LOGGER.info("DataException during transaction validation", e);
 			return ValidationResult.TRANSACTION_INVALID;
 		} finally {
+			// Always clear block validation context so ThreadLocal is never left set
+			BlockValidationContext.clear();
 			// Rollback repository changes made by test-processing transactions above
 			try {
 				this.repository.rollbackToSavepoint();
@@ -1674,7 +1695,8 @@ public class Block {
 		// Also update "transaction participants" in repository for "transactions involving X" support in API
 		linkTransactionsToBlock();
 
-		postBlockTidy();
+        if(blockchainHeight % 100 == 0) // Only sweep the balance table once every 100 blocks for 0 balances
+		    postBlockTidy();
 
 		// Log some debugging info relating to the block weight calculation
 		this.logDebugInfo();
@@ -1879,6 +1901,11 @@ public class Block {
 
 	protected void processAtFeesAndStates() throws DataException {
 		ATRepository atRepository = this.repository.getATRepository();
+
+		// Safety check: ourAtStates should have been populated during validation
+		if (this.ourAtStates == null) {
+			throw new IllegalStateException("Cannot process AT fees and states: ourAtStates is null. Block validation may have failed.");
+		}
 
 		for (ATStateData atStateData : this.ourAtStates) {
 			Account atAccount = new Account(this.repository, atStateData.getATAddress());
@@ -2553,9 +2580,9 @@ public class Block {
 						.map(GroupAdminData::getAdmin)
 						.collect(Collectors.toList());
 
-				LOGGER.info("Removing NULL Account Address, Dev Admin Count = {}", devAdminAddresses.size());
+				LOGGER.debug("Removing NULL Account Address, Dev Admin Count = {}", devAdminAddresses.size());
 				devAdminAddresses.removeIf( address -> Group.NULL_OWNER_ADDRESS.equals(address) );
-				LOGGER.info("Removed NULL Account Address, Dev Admin Count = {}", devAdminAddresses.size());
+				LOGGER.debug("Removed NULL Account Address, Dev Admin Count = {}", devAdminAddresses.size());
 
 				BlockRewardDistributor devAdminDistributor
 					= (distributionAmount, balanceChanges) -> distributeToAccounts(distributionAmount, devAdminAddresses, balanceChanges);

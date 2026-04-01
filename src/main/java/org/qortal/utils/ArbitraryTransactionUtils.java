@@ -289,7 +289,7 @@ public class ArbitraryTransactionUtils {
             BasicFileAttributes attr = Files.readAttributes(filePath, BasicFileAttributes.class);
             long timeSinceCreated = now - attr.creationTime().toMillis();
             long timeSinceModified = now - attr.lastModifiedTime().toMillis();
-            //LOGGER.info(String.format("timeSinceCreated for path %s is %d. cleanupAfter: %d", filePath, timeSinceCreated, cleanupAfter));
+       
 
             // Check if the file has been created or modified recently
             if (timeSinceCreated > cleanupAfter) {
@@ -331,7 +331,7 @@ public class ArbitraryTransactionUtils {
         ArbitraryDataFile arbitraryDataFile = ArbitraryDataFile.fromHash(completeHash, signature);
 
         if (!ArbitraryTransactionUtils.isFileHashRecent(completeHash, signature, now, cleanupAfter)) {
-            LOGGER.info("Deleting file {} because it can be rebuilt from chunks " +
+            LOGGER.trace("Deleting file {} because it can be rebuilt from chunks " +
                     "if needed", Base58.encode(completeHash));
 
             arbitraryDataFile.delete();
@@ -364,7 +364,7 @@ public class ArbitraryTransactionUtils {
         ArbitraryDataFile arbitraryDataFile = ArbitraryDataFile.fromTransactionData(arbitraryTransactionData);
         int chunkCount = arbitraryDataFile.split(ArbitraryDataFile.CHUNK_SIZE);
         if (chunkCount > 1) {
-            LOGGER.info(String.format("Successfully split %s into %d chunk%s",
+            LOGGER.trace(String.format("Successfully split %s into %d chunk%s",
                     Base58.encode(completeHash), chunkCount, (chunkCount == 1 ? "" : "s")));
 
             // Verify that the chunk hashes match those in the transaction
@@ -375,7 +375,7 @@ public class ArbitraryTransactionUtils {
 
                     // Now delete the original file if it's not recent
                     if (!ArbitraryTransactionUtils.isFileHashRecent(completeHash, signature, now, cleanupAfter)) {
-                        LOGGER.info("Deleting file {} because it can now be rebuilt from " +
+                        LOGGER.trace("Deleting file {} because it can now be rebuilt from " +
                                 "chunks if needed", Base58.encode(completeHash));
 
                         ArbitraryTransactionUtils.deleteCompleteFile(arbitraryTransactionData, now, cleanupAfter);
@@ -421,7 +421,7 @@ public class ArbitraryTransactionUtils {
                         Path newPath = newChunk.getFilePath();
 
                         // Ensure parent directories exist, then copy the file
-                        LOGGER.info("Relocating chunk from {} to {}...", oldPath, newPath);
+                        LOGGER.trace("Relocating chunk from {} to {}...", oldPath, newPath);
                         Files.createDirectories(newPath.getParent());
                         Files.move(oldPath, newPath, REPLACE_EXISTING);
                         filesRelocatedCount++;
@@ -439,7 +439,7 @@ public class ArbitraryTransactionUtils {
                 Path newPath = newCompleteFile.getFilePath();
 
                 // Ensure parent directories exist, then copy the file
-                LOGGER.info("Relocating complete file from {} to {}...", oldPath, newPath);
+                LOGGER.trace("Relocating complete file from {} to {}...", oldPath, newPath);
                 Files.createDirectories(newPath.getParent());
                 Files.move(oldPath, newPath, REPLACE_EXISTING);
                 filesRelocatedCount++;
@@ -456,7 +456,7 @@ public class ArbitraryTransactionUtils {
                 Path newPath = newCompleteFile.getFilePath();
 
                 // Ensure parent directories exist, then copy the file
-                LOGGER.info("Relocating metadata file from {} to {}...", oldPath, newPath);
+                LOGGER.trace("Relocating metadata file from {} to {}...", oldPath, newPath);
                 Files.createDirectories(newPath.getParent());
                 Files.move(oldPath, newPath, REPLACE_EXISTING);
                 filesRelocatedCount++;
@@ -470,7 +470,7 @@ public class ArbitraryTransactionUtils {
             if (filesRelocatedCount > 0) {
                 if (Settings.getInstance().isOriginalCopyIndicatorFileEnabled()) {
                     // Create a file in the same directory, to indicate that this is the original copy
-                    LOGGER.info("Creating original copy indicator file...");
+                    LOGGER.trace("Creating original copy indicator file...");
                     ArbitraryDataFile completeFile = ArbitraryDataFile.fromHash(arbitraryDataFile.getHash(), signature);
                     Path parentDirectory = completeFile.getFilePath().getParent();
                     File file = Paths.get(parentDirectory.toString(), ".original").toFile();
@@ -478,7 +478,7 @@ public class ArbitraryTransactionUtils {
                 }
             }
         } catch (DataException | IOException e) {
-            LOGGER.info("Unable to check and relocate all files for signature {}: {}",
+            LOGGER.trace("Unable to check and relocate all files for signature {}: {}",
                     Base58.encode(arbitraryTransactionData.getSignature()), e.getMessage());
         }
 

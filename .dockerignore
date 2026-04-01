@@ -1,0 +1,7 @@
+.github
+.vscode
+target
+testnet
+WindowsInstaller
+data
+*.iml

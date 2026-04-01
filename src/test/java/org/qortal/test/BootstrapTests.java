@@ -212,7 +212,9 @@ public class BootstrapTests extends Common {
     @Test
     public void testBootstrapHosts() throws IOException {
         String[] bootstrapHosts = Settings.getInstance().getBootstrapHosts();
-        String[] bootstrapTypes = { "archive" }; // , "toponly"
+        String[] bootstrapTypes = { "archive" }; // , "toponly", "full"
+        boolean invalidFile = false;
+        boolean invalidDate = false;
 
         for (String host : bootstrapHosts) {
             for (String type : bootstrapTypes) {
@@ -230,14 +232,20 @@ public class BootstrapTests extends Common {
 
                 // Ensure the bootstrap exists and has a size greated than 100MiB
                 System.out.println(String.format("%s %s size is %d bytes", host, type, fileSize));
-                assertTrue("Bootstrap size must be at least 100MiB", fileSize > 100*1024*1024L);
+                if(fileSize < 100*1024*1024L)
+                    invalidFile = true;
+                //assertTrue("Bootstrap size must be at least 100MiB", fileSize > 100*1024*1024L);
 
                 // Ensure the bootstrap has been published recently (in the last 3 days)
                 long minimumLastMofifiedTimestamp = NTP.getTime() - (3 * 24 * 60 * 60 * 1000L);
                 System.out.println(String.format("%s %s last modified timestamp is %d", host, type, lastModified));
-                assertTrue("Bootstrap last modified date must be in the last 3 days", lastModified > minimumLastMofifiedTimestamp);
+                if(lastModified < minimumLastMofifiedTimestamp)
+                    invalidDate = true;
+                //assertTrue("Bootstrap last modified date must be in the last 3 days", lastModified > minimumLastMofifiedTimestamp);
             }
         }
+        assertFalse("File size must be at least 100MiB", invalidFile);
+        assertFalse("Bootstrap last modified date must be in the last 3 days",invalidDate);
     }
 
     private void deleteBootstraps() throws IOException {

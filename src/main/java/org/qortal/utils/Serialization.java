@@ -4,14 +4,14 @@ import com.google.common.primitives.Ints;
 import org.qortal.transform.TransformationException;
 import org.qortal.transform.Transformer;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.UnsupportedEncodingException;
+import java.io.*;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
 public class Serialization {
 
@@ -53,7 +53,7 @@ public class Serialization {
 	/**
 	 * Write to ByteBuffer a BigDecimal, unscaled, prepended with zero bytes to specified length.
 	 * 
-	 * @param ByteArrayOutputStream
+	 * @param bytes
 	 * @param amount
 	 * @param length
 	 * @throws IOException
@@ -65,7 +65,7 @@ public class Serialization {
 	/**
 	 * Write to ByteBuffer a BigDecimal, unscaled, prepended with zero bytes to fixed length of 8.
 	 * 
-	 * @param ByteArrayOutputStream
+	 * @param bytes
 	 * @param amount
 	 * @throws IOException
 	 */
@@ -162,8 +162,8 @@ public class Serialization {
 	 * These two methods can ultimately be merged together once any differences are
 	 * solved, and unit tests can confirm that they process data identically.
 	 * @param byteBuffer
-	 * @param maxSize
-	 * @return
+	 * @param maxSize length in bytes for the string
+	 * @return a String object from deserialization
 	 * @throws TransformationException
 	 */
 	public static String deserializeSizedStringV2(ByteBuffer byteBuffer, int maxSize) throws TransformationException {
@@ -183,4 +183,122 @@ public class Serialization {
 		return new String(bytes, StandardCharsets.UTF_8);
 	}
 
+	/**
+	 * Serializes a Map<String, Object> into a binary stream.
+	 * Values are converted to String for simplicity.
+	 *
+	 * @param bytes ByteArrayOutputStream
+	 * @param map The map to serialize
+	 * @throws IOException if write fails
+	 *
+	 * @author Ice
+	 * @since v5.1.0
+	 */
+	public static void serializeMap(ByteArrayOutputStream bytes, Map<String, Object> map) throws IOException {
+		// Write the size of the map
+		DataOutputStream dos = new DataOutputStream(bytes);
+		dos.writeInt(map.size());
+
+		// Serialize each entry
+		for (Map.Entry<String, Object> entry : map.entrySet()) {
+			serializeSizedString(dos, entry.getKey());
+
+			// We need to pass the type so deserialize can properly store
+			String type = entry.getValue().getClass().getSimpleName();  // e.g., "String", "Boolean", "Integer"
+			serializeSizedString(dos, type);
+
+			String valueString = (entry.getValue() != null) ? entry.getValue().toString() : "";
+			serializeSizedString(dos, valueString);
+		}
+	}
+
+	/**
+	 * Deserializes a Map<String, String> from a binary stream where strings were written
+	 * as sized UTF-8 encoded values.
+	 *
+	 * @param bytes ByteArrayInputStream to read from
+	 * @return Deserialized map
+	 * @throws IOException if read fails
+	 *
+	 * @author Ice
+	 * @since v5.1.0
+	 */
+	public static Map<String, Object> deserializeMap(ByteBuffer bytes) throws IOException {
+		byte[] byteArray;
+
+		if (bytes.hasArray()) {
+			// Use the backing array directly if available
+			byteArray = bytes.array();
+		} else {
+			// Otherwise, copy remaining bytes into new array
+			byteArray = new byte[bytes.remaining()];
+			bytes.get(byteArray);
+		}
+
+		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(byteArray))) {
+			int mapSize = dis.readInt();
+			Map<String, Object> map = new HashMap<>(mapSize);
+
+			for (int i = 0; i < mapSize; i++) {
+				String key = deserializeSizedString(dis);
+				String type = deserializeSizedString(dis);
+				String rawValue = deserializeSizedString(dis);
+				// @ ToDo: Add additional types for deserialization as needed
+				switch (type) {
+					case "Boolean":
+						map.put(key, (Boolean.parseBoolean(rawValue)) );
+						break;
+					case "Integer":
+						map.put(key, Integer.parseInt(rawValue));
+						break;
+					default:
+						map.put(key, rawValue); // fallback to String
+				};
+			}
+			return map;
+		}
+	}
+
+	/**
+	 * Serializes a string to a binary output stream by first writing its length (as an {@code int}),
+	 * followed by its UTF-8 encoded bytes. This ensures the string can be deserialized later with the
+	 * exact content and encoding.
+	 *
+	 * <p>This method is commonly used in network protocols or file formats where the receiver must know
+	 * the size of the string in advance to read it properly.</p>
+	 *
+	 * @param out the {@link DataOutput} stream to write the serialized string to
+	 * @param value the {@code String} to serialize; must not be {@code null}
+	 * @throws IOException if an I/O error occurs while writing to the stream
+	 *
+	 * @author Ice
+	 * @since v5.1.0
+	 */
+	public static void serializeSizedString(DataOutput out, String value) throws IOException {
+		byte[] utf = value.getBytes(StandardCharsets.UTF_8);
+		out.writeInt(utf.length);
+		out.write(utf);
+	}
+
+	/**
+	 * Deserializes a UTF-8 encoded string from a binary input stream.
+	 * <p>
+	 * This method reads an integer indicating the number of bytes,
+	 * then reads that many bytes and constructs a string from them using UTF-8 encoding.
+	 * It is the inverse of {@link #serializeSizedString(DataOutput, String)}.
+	 * </p>
+	 *
+	 * @param in the {@link DataInput} stream to read the serialized string from
+	 * @return the deserialized {@code String}
+	 * @throws IOException if an I/O error occurs or if the stream does not contain enough bytes
+	 *
+	 * @author Ice
+	 * @since v5.1.0
+	 */
+	public static String deserializeSizedString(DataInput in) throws IOException {
+		int length = in.readInt();
+		byte[] utf = new byte[length];
+		in.readFully(utf);
+		return new String(utf, StandardCharsets.UTF_8);
+	}
 }

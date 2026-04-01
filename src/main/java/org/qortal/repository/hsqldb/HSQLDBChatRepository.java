@@ -12,11 +12,15 @@ import org.qortal.data.transaction.ChatTransactionData;
 import org.qortal.repository.ChatRepository;
 import org.qortal.repository.DataException;
 import org.qortal.transaction.Transaction.TransactionType;
+import org.qortal.utils.NTP;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.qortal.data.chat.ChatMessage.Encoding;
@@ -233,73 +237,101 @@ public class HSQLDBChatRepository implements ChatRepository {
 			tableName = "Names";
 		}
 
-		// Find groups where address is a member and potential latest message details
-		String groupsSql = "SELECT group_id, group_name, latest_timestamp, sender, sender_name, signature, data "
-				+ "FROM GroupMembers "
-				+ "JOIN Groups USING (group_id) "
-				+ "LEFT OUTER JOIN LATERAL("
-					+ "SELECT created_when AS latest_timestamp, sender, name AS sender_name, signature, data "
-					+ "FROM ChatTransactions "
-					+ "JOIN Transactions USING (signature) "
-					+ "LEFT OUTER JOIN " + tableName + " AS SenderNames ON SenderNames.owner = sender "
-					// NOTE: We need to qualify "Groups.group_id" here to avoid "General error" bug in HSQLDB v2.5.0
-					+ "WHERE tx_group_id = Groups.group_id AND type = " + TransactionType.CHAT.value + " ";
+		Long now = NTP.getTime();
+		if (now == null)
+			return new ArrayList<>();
 
-					if (hasChatReference != null) {
-						if (hasChatReference) {
-							groupsSql += "AND chat_reference IS NOT NULL ";
-						} else {
-							groupsSql += "AND chat_reference IS NULL ";
-						}
-					}
-					groupsSql += "ORDER BY created_when DESC "
-					+ "LIMIT 1"
-					+ ") AS LatestMessages ON TRUE "
-					+ "WHERE address = ?";
+		long cutoffTimestamp = now - BlockChain.getInstance().getTransactionExpiryPeriod();
 
-		List<GroupChat> groupChats = new ArrayList<>();
-		try (ResultSet resultSet = this.repository.checkedExecute(groupsSql, address)) {
+		// Step 1: Get all groups the user belongs to
+		String memberSql = "SELECT group_id, group_name FROM GroupMembers JOIN Groups USING (group_id) WHERE address = ?";
+
+		Map<Integer, String> userGroups = new LinkedHashMap<>();
+		try (ResultSet resultSet = this.repository.checkedExecute(memberSql, address)) {
 			if (resultSet != null) {
 				do {
-					int groupId = resultSet.getInt(1);
-					String groupName = resultSet.getString(2);
-
-					Long timestamp = resultSet.getLong(3);
-					if (timestamp == 0 && resultSet.wasNull())
-						timestamp = null;
-
-					String sender = resultSet.getString(4);
-					String senderName = resultSet.getString(5);
-					byte[] signature = resultSet.getBytes(6);
-					byte[] data = resultSet.getBytes(7);
-
-					GroupChat groupChat = new GroupChat(groupId, groupName, timestamp, sender, senderName, signature, encoding, data);
-					groupChats.add(groupChat);
+					userGroups.put(resultSet.getInt(1), resultSet.getString(2));
 				} while (resultSet.next());
 			}
 		} catch (SQLException e) {
-			throw new DataException("Unable to fetch active group chats from repository", e);
+			throw new DataException("Unable to fetch group memberships from repository", e);
 		}
 
-		// We need different SQL to handle group-less chat
-		String grouplessSql = "SELECT created_when, sender, SenderNames.name, signature, data "
-				+ "FROM ChatTransactions "
-				+ "JOIN Transactions USING (signature) "
-				+ "LEFT OUTER JOIN " + tableName + " AS SenderNames ON SenderNames.owner = sender "
-				+ "WHERE tx_group_id = 0 "
-				+ "AND recipient IS NULL ";
+		// Step 2: In one query, get all recent chat messages for the user's groups.
+		// Ordered by created_when DESC so first occurrence per group_id = latest message.
+		// This replaces 53 correlated lateral subqueries with a single efficient query.
+		String latestSql = "SELECT tx_group_id, created_when, CT.sender, SenderNames.name, CT.signature, CT.data "
+				+ "FROM Transactions "
+				+ "JOIN ChatTransactions CT ON CT.signature = Transactions.signature "
+				+ "LEFT OUTER JOIN " + tableName + " AS SenderNames ON SenderNames.owner = CT.sender "
+				+ "WHERE type = " + TransactionType.CHAT.value + " "
+				+ "AND created_when >= ? "
+				+ "AND tx_group_id IN (SELECT group_id FROM GroupMembers WHERE address = ?) ";
 
-				if (hasChatReference != null) {
-					if (hasChatReference) {
-						grouplessSql += "AND chat_reference IS NOT NULL ";
-					} else {
-						grouplessSql += "AND chat_reference IS NULL ";
+		if (hasChatReference != null) {
+			if (hasChatReference) {
+				latestSql += "AND CT.chat_reference IS NOT NULL ";
+			} else {
+				latestSql += "AND CT.chat_reference IS NULL ";
+			}
+		}
+		latestSql += "ORDER BY created_when DESC";
+
+		Map<Integer, Object[]> latestPerGroup = new HashMap<>();
+		try (ResultSet resultSet = this.repository.checkedExecute(latestSql, cutoffTimestamp, address)) {
+			if (resultSet != null) {
+				do {
+					int groupId = resultSet.getInt(1);
+					if (!latestPerGroup.containsKey(groupId)) {
+						latestPerGroup.put(groupId, new Object[] {
+							resultSet.getLong(2),
+							resultSet.getString(3),
+							resultSet.getString(4),
+							resultSet.getBytes(5),
+							resultSet.getBytes(6)
+						});
 					}
-				}
-				grouplessSql += "ORDER BY created_when DESC "
+				} while (resultSet.next());
+			}
+		} catch (SQLException e) {
+			throw new DataException("Unable to fetch latest group chat messages from repository", e);
+		}
+
+		// Step 3: Merge groups with their latest messages
+		List<GroupChat> groupChats = new ArrayList<>();
+		for (Map.Entry<Integer, String> entry : userGroups.entrySet()) {
+			int groupId = entry.getKey();
+			String groupName = entry.getValue();
+			Object[] msg = latestPerGroup.get(groupId);
+
+			if (msg != null) {
+				groupChats.add(new GroupChat(groupId, groupName, (Long) msg[0], (String) msg[1], (String) msg[2], (byte[]) msg[3], encoding, (byte[]) msg[4]));
+			} else {
+				groupChats.add(new GroupChat(groupId, groupName, null, null, null, null, encoding, null));
+			}
+		}
+
+		// Groupless chat (group 0) — separate query since it has special recipient IS NULL filter
+		String grouplessSql = "SELECT created_when, CT.sender, SenderNames.name, CT.signature, CT.data "
+				+ "FROM Transactions "
+				+ "JOIN ChatTransactions CT ON CT.signature = Transactions.signature "
+				+ "LEFT OUTER JOIN " + tableName + " AS SenderNames ON SenderNames.owner = CT.sender "
+				+ "WHERE type = " + TransactionType.CHAT.value + " "
+				+ "AND tx_group_id = 0 "
+				+ "AND created_when >= ? "
+				+ "AND CT.recipient IS NULL ";
+
+		if (hasChatReference != null) {
+			if (hasChatReference) {
+				grouplessSql += "AND CT.chat_reference IS NOT NULL ";
+			} else {
+				grouplessSql += "AND CT.chat_reference IS NULL ";
+			}
+		}
+		grouplessSql += "ORDER BY created_when DESC "
 				+ "LIMIT 1";
 
-		try (ResultSet resultSet = this.repository.checkedExecute(grouplessSql)) {
+		try (ResultSet resultSet = this.repository.checkedExecute(grouplessSql, cutoffTimestamp)) {
 			Long timestamp = null;
 			String sender = null;
 			String senderName = null;
@@ -307,7 +339,6 @@ public class HSQLDBChatRepository implements ChatRepository {
 			byte[] data = null;
 
 			if (resultSet != null) {
-				// We found a recipient-less, group-less CHAT message, so report its details
 				timestamp = resultSet.getLong(1);
 				sender = resultSet.getString(2);
 				senderName = resultSet.getString(3);
@@ -335,38 +366,47 @@ public class HSQLDBChatRepository implements ChatRepository {
 			tableName = "Names";
 		}
 
+		Long now = NTP.getTime();
+		if (now == null)
+			return new ArrayList<>();
+
+		long cutoffTimestamp = now - BlockChain.getInstance().getTransactionExpiryPeriod();
+
 		// Find chat messages involving address
 		String directSql = "SELECT other_address, name, latest_timestamp, sender, sender_name "
 				+ "FROM ("
 					+ "SELECT recipient FROM ChatTransactions "
-					+ "WHERE sender = ? AND recipient IS NOT NULL "
+					+ "JOIN Transactions USING (signature) "
+					+ "WHERE sender = ? AND recipient IS NOT NULL AND created_when >= ? "
 					+ "UNION "
 					+ "SELECT sender FROM ChatTransactions "
-					+ "WHERE recipient = ?"
+					+ "JOIN Transactions USING (signature) "
+					+ "WHERE recipient = ? AND created_when >= ?"
 				+ ") AS OtherParties (other_address) "
 				+ "CROSS JOIN LATERAL("
 					+ "SELECT created_when AS latest_timestamp, sender, name AS sender_name "
 					+ "FROM ChatTransactions "
 					+ "NATURAL JOIN Transactions "
 					+ "LEFT OUTER JOIN " + tableName + " AS SenderNames ON SenderNames.owner = sender "
-					+ "WHERE (sender = other_address AND recipient = ?) "
-					+ "OR (sender = ? AND recipient = other_address) ";
+					+ "WHERE ((sender = other_address AND recipient = ?) "
+					+ "OR (sender = ? AND recipient = other_address)) "
+					+ "AND created_when >= ? ";
 
 			    // Apply hasChatReference filter
-				if (hasChatReference != null) {
-					if (hasChatReference) {
-						directSql += "AND chat_reference IS NOT NULL ";
-					} else {
-						directSql += "AND chat_reference IS NULL ";
-					}
+			if (hasChatReference != null) {
+				if (hasChatReference) {
+					directSql += "AND chat_reference IS NOT NULL ";
+				} else {
+					directSql += "AND chat_reference IS NULL ";
 				}
-			
-				directSql += "ORDER BY created_when DESC "
-						+ "LIMIT 1"
-						+ ") AS LatestMessages "
-						+ "LEFT OUTER JOIN " + tableName + " ON owner = other_address";
+			}
+		
+			directSql += "ORDER BY created_when DESC "
+					+ "LIMIT 1"
+					+ ") AS LatestMessages "
+					+ "LEFT OUTER JOIN " + tableName + " ON owner = other_address";
 
-		Object[] bindParams = new Object[] { address, address, address, address };
+		Object[] bindParams = new Object[] { address, cutoffTimestamp, address, cutoffTimestamp, address, address, cutoffTimestamp };
 
 		List<DirectChat> directChats = new ArrayList<>();
 		try (ResultSet resultSet = this.repository.checkedExecute(directSql, bindParams)) {

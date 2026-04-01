@@ -3,28 +3,21 @@ package org.qortal.api.websocket;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.eclipse.jetty.websocket.api.Session;
-import org.eclipse.jetty.websocket.api.WebSocketException;
+import org.eclipse.jetty.websocket.api.WriteCallback;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketConnect;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketError;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
 import org.eclipse.jetty.websocket.api.annotations.WebSocket;
-import org.eclipse.jetty.websocket.servlet.WebSocketServletFactory;
-import org.qortal.api.ApiError;
-import org.qortal.controller.Controller;
+import org.eclipse.jetty.websocket.server.JettyWebSocketServletFactory;
 import org.qortal.data.arbitrary.DataMonitorInfo;
 import org.qortal.event.DataMonitorEvent;
 import org.qortal.event.Event;
 import org.qortal.event.EventBus;
 import org.qortal.event.Listener;
-import org.qortal.repository.DataException;
-import org.qortal.repository.Repository;
-import org.qortal.repository.RepositoryManager;
-import org.qortal.utils.Base58;
 
 import java.io.IOException;
 import java.io.StringWriter;
-import java.util.List;
 
 @WebSocket
 @SuppressWarnings("serial")
@@ -32,11 +25,15 @@ public class DataMonitorSocket extends ApiWebSocket implements Listener {
 
 	private static final Logger LOGGER = LogManager.getLogger(DataMonitorSocket.class);
 
+	/**
+	 * Updated for Jetty 10 using JettyWebSocketServletFactory.
+	 */
 	@Override
-	public void configure(WebSocketServletFactory factory) {
+	protected void configure(JettyWebSocketServletFactory factory) {
 		LOGGER.info("configure");
 
-		factory.register(DataMonitorSocket.class);
+		// Register this instance to handle websocket upgrades on the servlet path
+		factory.addMapping("/", (req, res) -> this);
 
 		EventBus.INSTANCE.addListener(this);
 	}
@@ -53,7 +50,6 @@ public class DataMonitorSocket extends ApiWebSocket implements Listener {
 	}
 
 	private DataMonitorInfo buildInfo(DataMonitorEvent dataMonitorEvent) {
-
 		return new DataMonitorInfo(
 			dataMonitorEvent.getTimestamp(),
 			dataMonitorEvent.getIdentifier(),
@@ -79,11 +75,15 @@ public class DataMonitorSocket extends ApiWebSocket implements Listener {
 
 	@OnWebSocketError
 	public void onWebSocketError(Session session, Throwable throwable) {
-		/* We ignore errors for now, but method here to silence log spam */
+		/* We ignore errors to silence log spam */
 	}
 
 	@OnWebSocketMessage
 	public void onWebSocketMessage(Session session, String message) {
+		if (java.util.Objects.equals(message, "ping") && session.isOpen()) {
+			session.getRemote().sendString("pong", WriteCallback.NOOP);
+			return;
+		}
 		LOGGER.info("onWebSocketMessage: message = " + message);
 	}
 
@@ -93,10 +93,12 @@ public class DataMonitorSocket extends ApiWebSocket implements Listener {
 		try {
 			marshall(stringWriter, dataMonitorInfo);
 
-			session.getRemote().sendStringByFuture(stringWriter.toString());
-		} catch (IOException | WebSocketException e) {
-			// No output this time
+			// Jetty 10 uses sendString with a WriteCallback for asynchronous delivery
+			if (session.isOpen()) {
+				session.getRemote().sendString(stringWriter.toString(), WriteCallback.NOOP);
+			}
+		} catch (IOException e) {
+			// No output this time. WebSocketException is no longer explicitly required here.
 		}
 	}
-
 }

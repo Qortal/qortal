@@ -21,16 +21,16 @@ public class ReticulumPeerAddress implements PeerAddress {
 
     byte[] dhash;
 
-	// Constructors
+	  // Constructors
 
-	// For JAXB
-	protected ReticulumPeerAddress() {
-	}
+	  // For JAXB
+	  protected ReticulumPeerAddress() {
+	  }
 
     @PeerAddressCtor("destination-hash")
-	public ReticulumPeerAddress(byte[] dhash) {
-      this.dhash = dhash;
-  }
+	  public ReticulumPeerAddress(byte[] dhash) {
+        this.dhash = dhash;
+    }
 
     @Override
     public byte[] getDestinationHash() { return dhash; }

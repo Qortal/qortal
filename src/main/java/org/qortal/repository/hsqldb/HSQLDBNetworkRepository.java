@@ -34,7 +34,7 @@ public class HSQLDBNetworkRepository implements NetworkRepository {
 			do {
 				String address = resultSet.getString(1);
 				//PeerAddress peerAddress = PeerAddress.fromString(address);
-                PeerAddress peerAddress = (PeerAddress) PeerAddressFactory.create("address", address);
+                PeerAddress peerAddress = (PeerAddress) PeerAddressFactory.create("uri", address);
 
 				Long lastConnected = resultSet.getLong(2);
 				if (lastConnected == 0 && resultSet.wasNull())

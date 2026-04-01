@@ -52,7 +52,7 @@ public class GroupApiTests extends ApiCommon {
 
 	@Test
 	public void testGetGroupsWithMember() {
-		assertNotNull(this.groupsResource.getGroupsWithMember(aliceAddress));
+		assertNotNull(this.groupsResource.getGroupsWithMember(aliceAddress, null, null));
 	}
 
 	@Test

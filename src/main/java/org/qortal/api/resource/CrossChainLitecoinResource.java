@@ -14,16 +14,10 @@ import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.Security;
 import org.qortal.api.model.crosschain.AddressRequest;
+import org.qortal.api.model.crosschain.ForeignCoinStatus;
 import org.qortal.api.model.crosschain.LitecoinSendRequest;
-import org.qortal.crosschain.AddressInfo;
-import org.qortal.crosschain.ChainableServer;
-import org.qortal.crosschain.ElectrumX;
-import org.qortal.crosschain.ForeignBlockchainException;
-import org.qortal.crosschain.Litecoin;
-import org.qortal.crosschain.ServerConnectionInfo;
-import org.qortal.crosschain.ServerInfo;
-import org.qortal.crosschain.SimpleTransaction;
-import org.qortal.crosschain.ServerConfigurationInfo;
+import org.qortal.crosschain.*;
+import org.qortal.settings.Settings;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.GET;
@@ -40,6 +34,70 @@ public class CrossChainLitecoinResource {
 
 	@Context
 	HttpServletRequest request;
+
+	@GET
+	@Path("/status")
+	@Operation(
+			summary = "Returns wallet status, connected server count and known server count",
+			description = "Returns the status of the wallet and the number of electrumX servers available/connected",
+			responses = {
+					@ApiResponse(
+							content = @Content(
+									schema = @Schema(
+											implementation = ForeignCoinStatus.class
+									)
+							)
+					)
+			}
+	)
+	public ForeignCoinStatus getWalletStatus() {
+		Litecoin litecoin = Litecoin.getInstance();
+		boolean isEnabled = litecoin != null;
+		int connections = 0;
+		int known = 0;
+		if (isEnabled && litecoin.getBlockchainProvider() instanceof ElectrumX) {
+			connections = ((ElectrumX) litecoin.getBlockchainProvider()).getConnectedServerCount();
+			known = ((ElectrumX) litecoin.getBlockchainProvider()).getKnownServerCount();
+
+		}
+
+		return new ForeignCoinStatus(isEnabled, connections, known);
+	}
+
+	@POST
+	@Path("/start")
+	@Operation(
+			summary = "Start Litecoin Electrum Connections",
+			description = "Start Litecoin Electrum Connections",
+			responses = {
+					@ApiResponse(
+							description = "true if Litecoin Wallet Started",
+							content = @Content(
+									schema = @Schema(
+											type = "string"
+									)
+							)
+					)
+			}
+	)
+	@SecurityRequirement(name = "apiKey")
+	public String startWalletSingleton(
+			@HeaderParam(Security.API_KEY_HEADER) String apiKey) {
+
+		Security.checkApiCallAllowed(request);
+		Settings.getInstance().enableWallet("LTC");
+		Litecoin litecoin = Litecoin.getInstance();
+
+		try {
+			Thread.sleep(100);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+
+		boolean started = litecoin != null;
+
+		return Boolean.toString(started);
+	}
 
 	@GET
 	@Path("/height")

@@ -9,6 +9,7 @@ import org.bouncycastle.math.ec.rfc8032.Ed25519;
 import org.qortal.account.Account;
 import org.qortal.utils.Base58;
 
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -69,9 +70,11 @@ public abstract class Crypto {
 	}
 
 	public static byte[] digestFileStream(File file) throws IOException {
-        try (InputStream fis = new FileInputStream(file)) {
+        // Buffer size: 256KB - reduces system calls significantly while remaining memory-friendly
+        final int BUFFER_SIZE = 256 * 1024;
+        try (BufferedInputStream fis = new BufferedInputStream(new FileInputStream(file), BUFFER_SIZE)) {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] buffer = new byte[8192]; // 8 KB buffer
+            byte[] buffer = new byte[BUFFER_SIZE];
             int bytesRead;
             while ((bytesRead = fis.read(buffer)) != -1) {
                 digest.update(buffer, 0, bytesRead);

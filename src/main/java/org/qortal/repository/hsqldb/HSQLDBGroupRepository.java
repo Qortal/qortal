@@ -288,6 +288,58 @@ public class HSQLDBGroupRepository implements GroupRepository {
 	}
 
 	@Override
+	public List<GroupData> getGroupsByAdmin(String address, Integer limit, Integer offset, Boolean reverse) throws DataException {
+		StringBuilder sql = new StringBuilder(512);
+
+		sql.append("SELECT group_id, owner, group_name, description, created_when, updated_when, reference, is_open, "
+				+ "approval_threshold, min_block_delay, max_block_delay, creation_group_id, reduced_group_name "
+				+ "FROM Groups JOIN GroupAdmins ON Groups.group_id = GroupAdmins.group_id "
+				+ "WHERE GroupAdmins.admin = ? ORDER BY group_name");
+
+		if (reverse != null && reverse)
+			sql.append(" DESC");
+
+		HSQLDBRepository.limitOffsetSql(sql, limit, offset);
+
+		List<GroupData> groups = new ArrayList<>();
+
+		try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), address)) {
+			if (resultSet == null)
+				return groups;
+
+			do {
+				int groupId = resultSet.getInt(1);
+				String owner = resultSet.getString(2);
+				String groupName = resultSet.getString(3);
+				String description = resultSet.getString(4);
+				long created = resultSet.getLong(5);
+
+				Long updated = resultSet.getLong(6);
+				if (updated == 0 && resultSet.wasNull())
+					updated = null;
+
+				byte[] reference = resultSet.getBytes(7);
+				boolean isOpen = resultSet.getBoolean(8);
+
+				ApprovalThreshold approvalThreshold = ApprovalThreshold.valueOf(resultSet.getInt(9));
+
+				int minBlockDelay = resultSet.getInt(10);
+				int maxBlockDelay = resultSet.getInt(11);
+
+				int creationGroupId = resultSet.getInt(12);
+				String reducedGroupName = resultSet.getString(13);
+
+				groups.add(new GroupData(groupId, owner, groupName, description, created, updated, isOpen,
+						approvalThreshold, minBlockDelay, maxBlockDelay, reference, creationGroupId, reducedGroupName));
+			} while (resultSet.next());
+
+			return groups;
+		} catch (SQLException e) {
+			throw new DataException("Unable to fetch admin's groups from repository", e);
+		}
+	}
+
+	@Override
 	public void save(GroupData groupData) throws DataException {
 		HSQLDBSaver saveHelper = new HSQLDBSaver("Groups");
 
@@ -737,6 +789,38 @@ public class HSQLDBGroupRepository implements GroupRepository {
 			return joinRequests;
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch group join requests from repository", e);
+		}
+	}
+
+	@Override
+	public List<GroupJoinRequestData> getJoinRequestsByGroupIds(List<Integer> groupIds) throws DataException {
+		if (groupIds == null || groupIds.isEmpty())
+			return new ArrayList<>();
+
+		StringBuilder sql = new StringBuilder(256);
+		sql.append("SELECT group_id, joiner, reference FROM GroupJoinRequests WHERE group_id IN (");
+		for (int i = 0; i < groupIds.size(); i++) {
+			if (i > 0) sql.append(", ");
+			sql.append("?");
+		}
+		sql.append(") ORDER BY group_id, joiner");
+
+		List<GroupJoinRequestData> joinRequests = new ArrayList<>();
+
+		try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), groupIds.toArray(new Integer[0]))) {
+			if (resultSet == null)
+				return joinRequests;
+
+			do {
+				int groupId = resultSet.getInt(1);
+				String joiner = resultSet.getString(2);
+				byte[] reference = resultSet.getBytes(3);
+				joinRequests.add(new GroupJoinRequestData(groupId, joiner, reference));
+			} while (resultSet.next());
+
+			return joinRequests;
+		} catch (SQLException e) {
+			throw new DataException("Unable to fetch join requests by group IDs from repository", e);
 		}
 	}
 

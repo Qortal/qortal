@@ -148,6 +148,32 @@ public class ArbitraryDataWriter {
         if (this.service.isValidationRequired()) {
             Service.ValidationResult result = this.service.validate(this.filePath);
             if (result != Service.ValidationResult.OK) {
+                if (result == Service.ValidationResult.EXCEEDS_SIZE_LIMIT) {
+                    long measuredSize = FilesystemUtils.getDirectorySize(this.filePath, true);
+                    long fileCount;
+                    try (Stream<Path> stream = Files.walk(this.filePath)) {
+                        fileCount = stream.filter(Files::isRegularFile).count();
+                    }
+
+                    LOGGER.warn("Service validation size failure for {}: path={}, exists={}, isFile={}, isDirectory={}, fileCount={}, measuredSize={}, maxSize={}",
+                            this.service,
+                            this.filePath,
+                            Files.exists(this.filePath),
+                            Files.isRegularFile(this.filePath),
+                            Files.isDirectory(this.filePath),
+                            fileCount,
+                            measuredSize,
+                            this.service.getMaxSize());
+
+                    throw new DataException(String.format("Validation of %s failed: %s (path=%s, measuredSize=%d, maxSize=%d, fileCount=%d)",
+                            this.service,
+                            result,
+                            this.filePath,
+                            measuredSize,
+                            this.service.getMaxSize(),
+                            fileCount));
+                }
+
                 throw new DataException(String.format("Validation of %s failed: %s", this.service, result.toString()));
             }
         }
@@ -203,8 +229,7 @@ public class ArbitraryDataWriter {
                 break;
 
             case PATCH:
-                this.processPatch();
-                break;
+                throw new DataException(String.format("Unsupported method specified: %s", method.toString()));
 
             default:
                 throw new DataException(String.format("Unknown method specified: %s", method.toString()));

@@ -1,14 +1,21 @@
 package org.qortal.test;
 
+import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.qortal.gui.SplashFrame;
 import org.qortal.gui.SysTray;
+import org.qortal.repository.DataException;
+import org.qortal.test.common.Common;
 
 import java.awt.TrayIcon.MessageType;
 
-@Ignore
 public class GuiTests {
+
+	@Before
+	public void beforeTest() throws DataException {
+		Common.useDefaultSettings();
+	}
 
 	@Test
 	public void testSplashFrame() throws InterruptedException {

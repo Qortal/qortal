@@ -1,9 +1,9 @@
 package org.qortal.api.websocket;
 
 import org.eclipse.jetty.websocket.api.Session;
-import org.eclipse.jetty.websocket.api.WebSocketException;
+import org.eclipse.jetty.websocket.api.WriteCallback;
 import org.eclipse.jetty.websocket.api.annotations.*;
-import org.eclipse.jetty.websocket.servlet.WebSocketServletFactory;
+import org.eclipse.jetty.websocket.server.JettyWebSocketServletFactory;
 import org.qortal.api.model.NodeStatus;
 import org.qortal.controller.Controller;
 import org.qortal.event.Event;
@@ -20,14 +20,18 @@ public class AdminStatusWebSocket extends ApiWebSocket implements Listener {
 
 	private static final AtomicReference<String> previousOutput = new AtomicReference<>(null);
 
+	/**
+	 * Jetty 10 uses JettyWebSocketServletFactory and requires manual mapping.
+	 */
 	@Override
-	public void configure(WebSocketServletFactory factory) {
-		factory.register(AdminStatusWebSocket.class);
+	protected void configure(JettyWebSocketServletFactory factory) {
+		// Register this instance to handle websocket upgrades on the servlet path
+		factory.addMapping("/", (req, res) -> this);
 
 		try {
 			previousOutput.set(buildStatusString());
 		} catch (IOException e) {
-			// How to fail properly?
+			// Fail silently or log; status will update on next event
 			return;
 		}
 
@@ -43,12 +47,12 @@ public class AdminStatusWebSocket extends ApiWebSocket implements Listener {
 		try {
 			newOutput = buildStatusString();
 		} catch (IOException e) {
-			// Ignore this time?
 			return;
 		}
 
-		if (previousOutput.getAndUpdate(currentValue -> newOutput).equals(newOutput))
-			// Output hasn't changed, so don't send anything
+		// Update atomic reference and check if content actually changed
+		String oldOutput = previousOutput.getAndSet(newOutput);
+		if (newOutput.equals(oldOutput))
 			return;
 
 		for (Session session : getSessions())
@@ -58,6 +62,7 @@ public class AdminStatusWebSocket extends ApiWebSocket implements Listener {
 	@OnWebSocketConnect
 	@Override
 	public void onWebSocketConnect(Session session) {
+		// Initial status push
 		this.sendStatus(session, previousOutput.get());
 
 		super.onWebSocketConnect(session);
@@ -71,12 +76,14 @@ public class AdminStatusWebSocket extends ApiWebSocket implements Listener {
 
 	@OnWebSocketError
 	public void onWebSocketError(Session session, Throwable throwable) {
-		/* We ignore errors for now, but method here to silence log spam */
+		/* We ignore errors to silence log spam */
 	}
 
 	@OnWebSocketMessage
 	public void onWebSocketMessage(Session session, String message) {
-		/* ignored */
+		if (java.util.Objects.equals(message, "ping") && session.isOpen()) {
+			session.getRemote().sendString("pong", WriteCallback.NOOP);
+		}
 	}
 
 	private static String buildStatusString() throws IOException {
@@ -87,11 +94,9 @@ public class AdminStatusWebSocket extends ApiWebSocket implements Listener {
 	}
 
 	private void sendStatus(Session session, String status) {
-		try {
-			session.getRemote().sendStringByFuture(status);
-		} catch (WebSocketException e) {
-			// No output this time?
+		if (session.isOpen() && status != null) {
+			// Using NOOP as we don't need to track the success of this specific push
+			session.getRemote().sendString(status, WriteCallback.NOOP);
 		}
 	}
-
 }

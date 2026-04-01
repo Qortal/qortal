@@ -33,12 +33,10 @@ public class ArbitraryDataBuilder {
 
     private boolean canRequestMissingFiles;
 
-    private List<ArbitraryTransactionData> transactions;
-    private ArbitraryTransactionData latestPutTransaction;
+    private ArbitraryTransactionData transaction;
     private final List<Path> paths;
     private byte[] latestSignature;
     private Path finalPath;
-    private int layerCount;
 
     public ArbitraryDataBuilder(String name, Service service, String identifier) {
         this.name = name;
@@ -75,118 +73,73 @@ public class ArbitraryDataBuilder {
     private void fetchTransactions() throws DataException {
         try (final Repository repository = RepositoryManager.getRepository()) {
 
-            // Get the most recent PUT
-            ArbitraryTransactionData latestPut = repository.getArbitraryRepository()
-                    .getLatestTransaction(this.name, this.service, Method.PUT, this.identifier);
-            if (latestPut == null) {
+            this.latestSignature
+                = repository.getArbitraryRepository().getLatestSignature(this.service, this.name, this.identifier);
+
+            if (this.latestSignature == null) {
                 String message = String.format("Couldn't find PUT transaction for name %s, service %s and identifier %s",
                         this.name, this.service, this.identifierString());
                 throw new DataNotPublishedException(message);
             }
-            this.latestPutTransaction = latestPut;
 
-            // Load all transactions since the latest PUT
-            List<ArbitraryTransactionData> transactionDataList = repository.getArbitraryRepository()
-                    .getArbitraryTransactions(this.name, this.service, this.identifier, latestPut.getTimestamp());
+            ArbitraryTransactionData latestTransaction
+                = repository.getArbitraryRepository().getSingleTransactionBySignature(this.latestSignature);
 
-            this.transactions = transactionDataList;
-            this.layerCount = transactionDataList.size();
+            this.transaction = latestTransaction;
         }
     }
 
     private void validateTransactions() throws DataException {
-        List<ArbitraryTransactionData> transactionDataList = new ArrayList<>(this.transactions);
-        ArbitraryTransactionData latestPut = this.latestPutTransaction;
-
-        if (latestPut == null) {
-            throw new DataException("Cannot PATCH without existing PUT. Deploy using PUT first.");
+        if (this.transaction == null) {
+            throw new DataException("Transaction not found");
         }
-        if (latestPut.getMethod() != Method.PUT) {
+        if (this.transaction.getMethod() != Method.PUT) {
             throw new DataException("Expected PUT but received PATCH");
-        }
-        if (transactionDataList.isEmpty()) {
-            throw new DataException(String.format("No transactions found for name %s, service %s, " +
-                            "identifier: %s, since %d", name, service, this.identifierString(), latestPut.getTimestamp()));
-        }
-
-        // Verify that the signature of the first transaction matches the latest PUT
-        ArbitraryTransactionData firstTransaction = transactionDataList.get(0);
-        if (!Arrays.equals(firstTransaction.getSignature(), latestPut.getSignature())) {
-            throw new DataException("First transaction did not match latest PUT transaction");
-        }
-
-        // Remove the first transaction, as it should be the only PUT
-        transactionDataList.remove(0);
-
-        for (ArbitraryTransactionData transactionData : transactionDataList) {
-            if (transactionData == null) {
-                throw new DataException("Transaction not found");
-            }
-            if (transactionData.getMethod() != Method.PATCH) {
-                throw new DataException("Expected PATCH but received PUT");
-            }
         }
     }
 
     private void processTransactions() throws IOException, DataException, MissingDataException {
-        List<ArbitraryTransactionData> transactionDataList = new ArrayList<>(this.transactions);
 
-        int count = 0;
-        for (ArbitraryTransactionData transactionData : transactionDataList) {
-            LOGGER.trace("Found arbitrary transaction {}", Base58.encode(transactionData.getSignature()));
-            count++;
+        LOGGER.trace("Found arbitrary transaction {}", Base58.encode(this.transaction.getSignature()));
 
-            // Build the data file, overwriting anything that was previously there
-            String sig58 = Base58.encode(transactionData.getSignature());
-            ArbitraryDataReader arbitraryDataReader = new ArbitraryDataReader(sig58, ResourceIdType.TRANSACTION_DATA,
-                    this.service, this.identifier);
-            arbitraryDataReader.setTransactionData(transactionData);
-            arbitraryDataReader.setCanRequestMissingFiles(this.canRequestMissingFiles);
-            boolean hasMissingData = false;
-            try {
-                arbitraryDataReader.loadSynchronously(true);
-            }
-            catch (MissingDataException e) {
-                hasMissingData = true;
-            }
-
-            // Handle missing data
-            if (hasMissingData) {
-                if (!this.canRequestMissingFiles) {
-                    throw new MissingDataException("Files are missing but were not requested.");
-                }
-                if (count == transactionDataList.size()) {
-                    // This is the final transaction in the list, so we need to fail
-                    throw new MissingDataException("Requesting missing files. Please wait and try again.");
-                }
-                // There are more transactions, so we should process them to give them the opportunity to request data
-                continue;
-            }
-
-            // By this point we should have all data needed to build the layers
-            Path path = arbitraryDataReader.getFilePath();
-            if (path == null) {
-                throw new DataException(String.format("Null path when building data from transaction %s", sig58));
-            }
-            if (!Files.exists(path)) {
-                throw new DataException(String.format("Path doesn't exist when building data from transaction %s", sig58));
-            }
-            paths.add(path);
+        // Build the data file, overwriting anything that was previously there
+        String sig58 = Base58.encode(this.transaction.getSignature());
+        ArbitraryDataReader arbitraryDataReader = new ArbitraryDataReader(sig58, ResourceIdType.TRANSACTION_DATA,
+                this.service, this.identifier);
+        arbitraryDataReader.setTransactionData(this.transaction);
+        arbitraryDataReader.setCanRequestMissingFiles(this.canRequestMissingFiles);
+        boolean hasMissingData = false;
+        try {
+            arbitraryDataReader.loadSynchronously(true);
         }
+        catch (MissingDataException e) {
+            hasMissingData = true;
+        }
+
+        // Handle missing data
+        if (hasMissingData) {
+            if (!this.canRequestMissingFiles) {
+                throw new MissingDataException("Files are missing but were not requested.");
+            }
+
+            throw new MissingDataException("Requesting missing files. Please wait and try again.");
+        }
+
+        // By this point we should have all data needed to build the layers
+        Path path = arbitraryDataReader.getFilePath();
+        if (path == null) {
+            throw new DataException(String.format("Null path when building data from transaction %s", sig58));
+        }
+        if (!Files.exists(path)) {
+            throw new DataException(String.format("Path doesn't exist when building data from transaction %s", sig58));
+        }
+        paths.add(path);
     }
 
     private void findLatestSignature() throws DataException {
-        if (this.transactions.isEmpty()) {
-            throw new DataException("Unable to find latest signature from empty transaction list");
+        if (this.latestSignature == null) {
+            throw new DataException("Unable to find latest signature");
         }
-
-        // Find the latest signature
-        ArbitraryTransactionData latestTransaction = this.transactions.get(this.transactions.size() - 1);
-        if (latestTransaction == null) {
-            throw new DataException("Unable to find latest signature from null transaction");
-        }
-
-        this.latestSignature = latestTransaction.getSignature();
     }
 
     private void validatePaths() throws DataException {
@@ -195,42 +148,18 @@ public class ArbitraryDataBuilder {
         }
     }
 
-    private void buildLatestState() throws IOException, DataException {
+    private void buildLatestState() throws DataException {
+        // assert there is no patching
         if (this.paths.size() == 1) {
-            // No patching needed
             this.finalPath = this.paths.get(0);
-            return;
         }
-
-        Path pathBefore = this.paths.get(0);
-        boolean validateAllLayers = Settings.getInstance().shouldValidateAllDataLayers();
-
-        // Loop from the second path onwards
-        for (int i=1; i<paths.size(); i++) {
-            String identifierPrefix = this.identifier != null ? String.format("[%s]", this.identifier) : "";
-            LOGGER.debug(String.format("[%s][%s]%s Applying layer %d...", this.service, this.name, identifierPrefix, i));
-
-            // Create an instance of ArbitraryDataCombiner
-            Path pathAfter = this.paths.get(i);
-            byte[] signatureBefore = this.transactions.get(i-1).getSignature();
-            ArbitraryDataCombiner combiner = new ArbitraryDataCombiner(pathBefore, pathAfter, signatureBefore);
-
-            // We only want to validate this layer's hash if it's the final layer, or if the settings
-            // indicate that we should validate interim layers too
-            boolean isFinalLayer = (i == paths.size() - 1);
-            combiner.setShouldValidateHashes(isFinalLayer || validateAllLayers);
-
-            // Now combine this layer with the last, and set the output path to the "before" path for the next cycle
-            combiner.combine();
-            combiner.cleanup();
-            pathBefore = combiner.getFinalPath();
+        else {
+            throw new DataException("Expected PUT but received PATCH");
         }
-        this.finalPath = pathBefore;
     }
 
     private void cacheLatestSignature() throws IOException, DataException {
-        byte[] latestTransactionSignature = this.transactions.get(this.transactions.size()-1).getSignature();
-        if (latestTransactionSignature == null) {
+        if (this.latestSignature == null) {
             throw new DataException("Missing latest transaction signature");
         }
         Long now = NTP.getTime();
@@ -239,7 +168,7 @@ public class ArbitraryDataBuilder {
         }
 
         ArbitraryDataMetadataCache cache = new ArbitraryDataMetadataCache(this.finalPath);
-        cache.setSignature(latestTransactionSignature);
+        cache.setSignature(this.latestSignature);
         cache.setTimestamp(NTP.getTime());
         cache.write();
     }
@@ -257,7 +186,7 @@ public class ArbitraryDataBuilder {
     }
 
     public int getLayerCount() {
-        return this.layerCount;
+        return 1;
     }
 
     /**

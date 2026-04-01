@@ -1,124 +1,603 @@
 <!DOCTYPE html>
-<html lang="en" >
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Loading...</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loading - Qortal Network</title>
   <style>
-    canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      z-index: 0;
-      max-width: 100%;
-    }
-    body {
-      font-family: Arial;
-      text-align: center;
-      color: black;
-    }
-    #panel-outer {
-      position: absolute;
-      width: 100%;
-      text-align: center;
-      z-index: 1000;
-      top: 50%;
-      -ms-transform: translateY(-50%);
-      transform: translate(-50% , -50%);
-      left: 50%;
-    }
-    #panel {
-      text-align: center;
-      background: white;
-      word-wrap: break-word;
-      width: 350px;
-      max-width: 100%;
-      margin: auto;
-      padding: 25px;
-      border-radius: 30px;
+    * {
+      margin: 0;
+      padding: 0;
       box-sizing: border-box;
     }
-    #status {
-      color: #03a9f4;
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      overflow: hidden;
+      position: relative;
+      min-height: 100vh;
     }
 
+    canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+    }
+
+    #panel-outer {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 20px;
+    }
+
+    #panel {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-radius: 24px;
+      padding: 40px;
+      max-width: 480px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15),
+                  0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+      text-align: center;
+      animation: slideUp 0.5s ease-out;
+    }
+
+    @keyframes slideUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .header-container {
+      display: none; /* Hidden by default, shown for WEBSITE/APP */
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .avatar-container {
+      flex-shrink: 0;
+      width: 56px;
+      height: 56px;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+
+    .avatar-container.loaded {
+      opacity: 1;
+    }
+
+    .avatar {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 3px solid rgba(3, 169, 244, 0.2);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    #username {
+      font-size: 24px;
+      font-weight: 600;
+      color: #1a1a1a;
+      letter-spacing: -0.3px;
+    }
+
+    #description {
+      font-size: 15px;
+      line-height: 1.6;
+      color: #666;
+      margin-bottom: 28px;
+    }
+
+    .spinner-container {
+      margin: 24px 0;
+      position: relative;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid rgba(3, 169, 244, 0.1);
+      border-top-color: #03a9f4;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    #status {
+      display: block;
+      font-size: 16px;
+      font-weight: 500;
+      color: #03a9f4;
+      margin-bottom: 12px;
+      min-height: 24px;
+      transition: color 0.3s ease;
+    }
+
+    #status.error {
+      color: #f44336;
+    }
+
+    #progress {
+      display: block;
+      font-size: 14px;
+      color: #999;
+      font-weight: 500;
+      min-height: 20px;
+    }
+
+    .progress-bar-container {
+      width: 100%;
+      height: 4px;
+      background: rgba(3, 169, 244, 0.1);
+      border-radius: 2px;
+      margin: 20px 0 16px;
+      overflow: hidden;
+      display: none;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #03a9f4, #0288d1);
+      border-radius: 2px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+
+    .qortal-logo {
+      margin-bottom: 20px;
+      opacity: 0.9;
+    }
+
+    #peer-info {
+      display: none;
+      font-size: 13px;
+      color: #666;
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: rgba(3, 169, 244, 0.06);
+      border-radius: 10px;
+      border: 1px solid rgba(3, 169, 244, 0.15);
+      transition: all 0.3s ease;
+      text-align: center;
+    }
+
+    #peer-info .peer-count {
+      font-weight: 600;
+      color: #03a9f4;
+      font-size: 14px;
+    }
+
+    /* Dark theme support */
+    body.dark-theme #panel {
+      background: rgba(30, 30, 30, 0.95);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5),
+                  0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+    }
+
+    body.dark-theme #username {
+      color: #f5f5f5;
+    }
+
+    body.dark-theme #description {
+      color: #aaa;
+    }
+
+    body.dark-theme #progress {
+      color: #777;
+    }
+
+    body.dark-theme .avatar {
+      border-color: rgba(3, 169, 244, 0.3);
+    }
+
+    body.dark-theme #peer-info {
+      color: #aaa;
+      background: rgba(3, 169, 244, 0.1);
+      border-color: rgba(3, 169, 244, 0.25);
+    }
+
+    body.dark-theme #peer-info .peer-count {
+      color: #4fc3f7;
+    }
+
+    /* Mobile optimization */
+    @media (max-width: 600px) {
+      #panel {
+        padding: 32px 24px;
+        border-radius: 20px;
+      }
+
+      #username {
+        font-size: 20px;
+      }
+
+      #description {
+        font-size: 14px;
+      }
+    }
   </style>
 
   <script>
+    // Cleanup tracking
+    let checkStatusTimer = null;
+    let animationFrameId = null;
+    let abortController = null;
+    
+    // Clean up all resources before page unload or reload
+    function cleanup() {
+      // Clear status check timer
+      if (checkStatusTimer) {
+        clearTimeout(checkStatusTimer);
+        checkStatusTimer = null;
+      }
+      
+      // Stop animation
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+      
+      // Abort any pending fetches
+      if (abortController) {
+        abortController.abort();
+        abortController = null;
+      }
+    }
+    
+    // Register cleanup handlers
+    window.addEventListener('beforeunload', cleanup);
+    window.addEventListener('pagehide', cleanup); // Better mobile support
+    
+    // Load avatar asynchronously without blocking
+    const loadAvatar = (name) => {
+      if (!name) return;
+      
+      const host = location.protocol + '//' + location.host;
+      const avatarUrl = host + '/arbitrary/THUMBNAIL/' + encodeURIComponent(name) + '/qortal_avatar';
+      
+      // Create image element
+      const img = new Image();
+      img.className = 'avatar';
+      img.alt = name + ' avatar';
+      
+      img.onload = () => {
+        const container = document.querySelector('.avatar-container');
+        if (container) {
+          container.appendChild(img);
+          // Trigger fade-in animation
+          setTimeout(() => container.classList.add('loaded'), 10);
+        }
+      };
+      
+      img.onerror = () => {
+        // Hide avatar container if avatar doesn't exist
+        const container = document.querySelector('.avatar-container');
+        if (container) {
+          container.style.display = 'none';
+        }
+        console.log('Avatar not available for ' + name);
+      };
+      
+      // Start loading (non-blocking)
+      img.src = avatarUrl;
+    };
+
+    // Fetch and display peer count information
+    const fetchPeerCount = async (service, name, identifier) => {
+      try {
+        const host = location.protocol + '//' + location.host;
+        
+        // Build URL based on whether identifier exists and is not "default"
+        let url;
+        if (identifier && identifier !== 'default' && identifier.trim() !== '') {
+          url = host + '/arbitrary/resource/request/peers/' + service + '/' + name + '/' + identifier;
+        } else {
+          // Use endpoint without identifier for default resources
+          url = host + '/arbitrary/resource/request/peers/' + service + '/' + name;
+        }
+        
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to fetch peer count');
+        }
+        
+        const peerData = await response.json();
+        
+        if (peerData.peerCount > 0) {
+          const peerInfoEl = document.getElementById("peer-info");
+          
+          // Simple display - just show peer count
+          let html = '<span class="peer-count">' + peerData.peerCount + ' peer' + (peerData.peerCount !== 1 ? 's' : '') + ' available</span>';
+          
+          peerInfoEl.innerHTML = html;
+          peerInfoEl.style.display = "block";
+        } else {
+          document.getElementById("peer-info").style.display = "none";
+        }
+      } catch (e) {
+        console.log("Error fetching peer count:", e);
+        // Don't show peer info if fetch fails
+        document.getElementById("peer-info").style.display = "none";
+      }
+    };
+
     const checkStatus = async () => {
       var host = location.protocol + '//' + location.host;
       var service = "%%SERVICE%%"
       var name = "%%NAME%%"
       var identifier = "%%IDENTIFIER%%"
 
-      var url = host + '/arbitrary/resource/status/' + service + '/' + name + '/' + identifier + '?build=true';
+      // Track state and timing
+      if (typeof checkStatus.state === 'undefined') {
+        checkStatus.state = {
+          lastBuildCall: 0,
+          buildCallInterval: 10000, // Retry ?build=true every 10 seconds if stuck
+          downloadedBuildTriggered: false,
+          buildAttemptCount: 0,
+          maxBuildAttempts: 10,
+          buildInProgress: false, // Track if a build call is pending
+          avatarLoaded: false,
+          lastPeerCountFetch: 0,  // Track last peer count fetch time
+          peerCountFetchInterval: 5000  // Fetch peer count every 5 seconds
+        };
+        
+        // Only show avatar/name for WEBSITE or APP services
+        if (service === "WEBSITE" || service === "APP") {
+          // Show header with avatar and name
+          document.querySelector('.header-container').style.display = 'flex';
+          
+          // Load avatar immediately (non-blocking)
+          loadAvatar(name);
+          
+          // Set username in UI
+          const usernameEl = document.getElementById("username");
+          if (usernameEl && name) {
+            usernameEl.textContent = name;
+          }
+        } else {
+          // Hide header for non-app/website services
+          document.querySelector('.header-container').style.display = 'none';
+        }
+      }
+
+      var baseUrl = host + '/arbitrary/resource/status/' + service + '/' + name + '/' + identifier;
+      var useBuild = false;
       var textStatus = "Loading...";
       var textProgress = "";
       var retryInterval = 2500;
+      var now = Date.now();
 
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
+      // Check if we've exceeded max build attempts
+      if (checkStatus.state.buildAttemptCount >= checkStatus.state.maxBuildAttempts) {
+        document.getElementById("description").innerHTML = "The resource could not be loaded after multiple attempts.";
+        document.getElementById("status").innerHTML = "Unable to Load. Please try again later.";
+        document.getElementById("status").className = "error";
+        document.getElementById("progress").innerHTML = "";
+        document.querySelector(".spinner").style.display = "none";
+        document.getElementById("c").style.opacity = "0.3";
+        return; // Stop retrying
+      }
+
+      // Determine if we should use ?build=true (only if not already in progress)
+      var timeSinceLastBuild = now - checkStatus.state.lastBuildCall;
+      
+      if (!checkStatus.state.buildInProgress) {
+        // Always use ?build=true on first call
+        if (checkStatus.state.lastBuildCall === 0) {
+          useBuild = true;
         }
-      });
-      const status = await response.json();
+        // Retry ?build=true periodically if not in an active state
+        else if (timeSinceLastBuild > checkStatus.state.buildCallInterval) {
+          useBuild = true;
+        }
+      }
 
-      console.log("status: " + status.id);
+      if (useBuild) {
+        checkStatus.state.lastBuildCall = now;
+        checkStatus.state.buildAttemptCount++;
+        checkStatus.state.buildInProgress = true;
+        console.log("Build attempt " + checkStatus.state.buildAttemptCount + " of " + checkStatus.state.maxBuildAttempts);
+      }
+
+      var url = baseUrl + (useBuild ? '?build=true' : '');
+
+      // Create abort controller for this fetch
+      abortController = new AbortController();
+      
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          signal: abortController.signal
+        });
+        const status = await response.json();
+        abortController = null; // Clear after successful fetch
+
+        // If we just made a build call, mark it as complete
+        if (useBuild) {
+          checkStatus.state.buildInProgress = false;
+          
+          // Immediately check if status is READY and reload
+          if (status.id == "READY") {
+            console.log("Build completed - reloading...");
+            cleanup(); // Clean up before reload
+            window.location.reload();
+            return;
+          }
+        }
+
+        console.log("status: " + status.id + (useBuild ? " (with build trigger)" : ""));
 
       if (status.id == "UNSUPPORTED") {
         textStatus = status.description;
-        document.getElementById("status").style.color = "red";
+        document.getElementById("status").className = "error";
       }
       else if (status.id == "BLOCKED") {
         textStatus = name + " is blocked so content cannot be served";
         retryInterval = 5000;
-        document.getElementById("status").style.color = "red";
+        document.getElementById("status").className = "error";
       }
       else if (status.id == "READY") {
         textStatus = status.description;
+        cleanup(); // Clean up before reload
         window.location.reload();
       }
       else if (status.id == "BUILDING") {
-        textStatus = status.description;
+        textStatus = "Building resource...";
         retryInterval = 2000;
+        // Reset build call timer - we're actively building
+        checkStatus.state.lastBuildCall = now;
       }
       else if (status.id == "BUILD_FAILED") {
         textStatus = status.description;
+        document.getElementById("status").className = "error";
       }
       else if (status.id == "NOT_STARTED") {
-        textStatus = status.description;
+        textStatus = "Initializing...";
         retryInterval = 2000;
       }
       else if (status.id == "DOWNLOADING") {
-        textStatus = status.description;
+        textStatus = "Downloading from network...";
         retryInterval = 2000;
+        // Reset build call timer - we're actively downloading
+        checkStatus.state.lastBuildCall = now;
       }
       else if (status.id == "MISSING_DATA") {
-        textStatus = status.description;
+        textStatus = "Waiting for data from peers...";
         retryInterval = 10000;
-        document.getElementById("status").style.color = "red";
-        document.getElementById("c").style.opacity = "0.5";
+        document.getElementById("status").className = "error";
+        document.getElementById("c").style.opacity = "0.3";
       }
       else if (status.id == "DOWNLOADED") {
-        textStatus = status.description;
+        textStatus = "Files downloaded, preparing...";
+        
+        // Trigger build once when first encountering DOWNLOADED status
+        if (!checkStatus.state.downloadedBuildTriggered && !checkStatus.state.buildInProgress) {
+          checkStatus.state.downloadedBuildTriggered = true;
+          checkStatus.state.buildAttemptCount++;
+          checkStatus.state.buildInProgress = true;
+          console.log("Files downloaded - triggering build (attempt " + checkStatus.state.buildAttemptCount + ")...");
+          
+          // Make immediate call with build=true to trigger the build phase
+          fetch(baseUrl + '?build=true', {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          }).then(response => response.json())
+            .then(buildStatus => {
+              checkStatus.state.lastBuildCall = Date.now();
+              checkStatus.state.buildInProgress = false;
+              
+              // If build completed immediately, reload
+              if (buildStatus.id == "READY") {
+                console.log("Build completed - reloading...");
+                cleanup(); // Clean up before reload
+                window.location.reload();
+              }
+            })
+            .catch(e => {
+              console.log("Build trigger error:", e);
+              checkStatus.state.buildInProgress = false;
+              // Don't log aborted fetches as errors
+              if (e.name !== 'AbortError') {
+                console.error("Fetch error:", e);
+              }
+            });
+        }
+        retryInterval = 2000;
       }
       else if (status.id == "NOT_PUBLISHED") {
-        document.getElementById("title").innerHTML = "File not found";
-        document.getElementById("description").innerHTML = "";
-        document.getElementById("c").style.opacity = "0.5";
-        textStatus = status.description;
+        document.getElementById("description").innerHTML = "This resource has not been published to the network.";
+        document.querySelector(".spinner").style.display = "none";
+        document.getElementById("c").style.opacity = "0.3";
+        textStatus = "Not Found";
+        document.getElementById("status").className = "error";
       }
 
+      // Update progress bar if we have chunk counts
       if (status.localChunkCount != null && status.totalChunkCount != null && status.totalChunkCount > 0) {
-        textProgress = "Files downloaded: " + status.localChunkCount + " / " + status.totalChunkCount;
+        textProgress = status.localChunkCount + " / " + status.totalChunkCount + " files";
+        var progressPercent = (status.localChunkCount / status.totalChunkCount) * 100;
+        document.querySelector(".progress-bar-container").style.display = "block";
+        document.querySelector(".progress-bar").style.width = progressPercent + "%";
+        
+        // Don't show if READY, DOWNLOADED, or BUILDING
+        if (status.id == "DOWNLOADING" || status.id == "MISSING_DATA") {
+          const now = Date.now();
+          const timeSinceLastPeerFetch = now - checkStatus.state.lastPeerCountFetch;
+          
+          // Only fetch if it's been more than 5 seconds since last fetch
+          if (timeSinceLastPeerFetch > checkStatus.state.peerCountFetchInterval) {
+            checkStatus.state.lastPeerCountFetch = now;
+            fetchPeerCount(service, name, identifier);
+          }
+        } else {
+          document.getElementById("peer-info").style.display = "none";
+        }
+      } else {
+        document.getElementById("peer-info").style.display = "none";
       }
 
-      document.getElementById("status").innerHTML = textStatus;
-      document.getElementById("progress").innerHTML = textProgress;
+        document.getElementById("status").innerHTML = textStatus;
+        document.getElementById("progress").innerHTML = textProgress;
 
-      setTimeout(checkStatus, retryInterval);
+        checkStatusTimer = setTimeout(checkStatus, retryInterval);
+      } catch (e) {
+        // Handle fetch errors (including aborts)
+        if (e.name === 'AbortError') {
+          console.log("Fetch aborted");
+          return; // Don't retry if aborted
+        }
+        console.error("Error checking status:", e);
+        // Retry on error
+        checkStatusTimer = setTimeout(checkStatus, 5000);
+      }
     }
-    checkStatus();
+    
+    // Wait for DOM to be ready before starting
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', checkStatus);
+    } else {
+      checkStatus();
+    }
   </script>
 
 </head>
@@ -136,61 +615,58 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 -->
 
-<!-- partial:index.partial.html -->
 <canvas id="c"></canvas>
-<!-- partial -->
+
 <script>
   var theme = "%%THEME%%";
+
+  // Apply theme class to body for consistent styling
+  if (theme === "dark") {
+    document.body.classList.add('dark-theme');
+  }
 
   var w = c.width = window.innerWidth,
       h = c.height = window.innerHeight,
       ctx = c.getContext( '2d' ),
 
       opts = {
-
-        len: 40, // Size
+        len: 40,
         count: 250,
         baseTime: 40,
         addedTime: 10,
-        dieChance: .05, // Lifetime
+        dieChance: .05,
         spawnChance: 1,
-        sparkChance: 0, //.1,
+        sparkChance: 0,
         sparkDist: 10,
         sparkSize: 2,
-
         color: 'hsl(hue,100%,light%)',
         baseLight: 50,
-        addedLight: 10, // [50-10,50+10]
+        addedLight: 10,
         shadowToTimePropMult: 1,
         baseLightInputMultiplier: .01,
         addedLightInputMultiplier: .02,
-
-        cx: w / 2, // X pos
-        cy: h / 2, // Y pos
+        cx: w / 2,
+        cy: h / 2,
         repaintAlpha: .04,
-        startColor: 210, // Initial color
-        hueChange: 0.001 // Color increment
+        startColor: 210,
+        hueChange: 0.001
       },
 
       tick = 0,
       lines = [],
       dieX = w / 2 / opts.len,
       dieY = h / 2 / opts.len,
-
       baseRad = Math.PI * 2 / 6;
 
   if (theme === "dark") {
     ctx.fillStyle = 'black';
-  }
-  else {
+  } else {
     ctx.fillStyle = 'white';
   }
   ctx.fillRect( 0, 0, w, h );
 
   function loop() {
-
-    window.requestAnimationFrame( loop );
-
+    animationFrameId = window.requestAnimationFrame( loop );
     ++tick;
 
     ctx.globalCompositeOperation = 'source-over';
@@ -200,8 +676,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
       ctx.fillStyle = 'rgba(0,0,0,alp)'.replace('alp', opts.repaintAlpha);
       ctx.fillRect( 0, 0, w, h );
       ctx.globalCompositeOperation = 'lighter';
-    }
-    else {
+    } else {
       ctx.fillStyle = 'rgba(230,230,230,alp)'.replace('alp', opts.repaintAlpha);
       ctx.fillRect( 0, 0, w, h );
       ctx.globalCompositeOperation = 'darker';
@@ -212,34 +687,28 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
     lines.map( function( line ){ line.step(); } );
   }
-  function Line(){
 
+  function Line(){
     this.reset();
   }
-  Line.prototype.reset = function(){
 
+  Line.prototype.reset = function(){
     this.x = 0;
     this.y = 0;
     this.addedX = 0;
     this.addedY = 0;
-
     this.rad = Math.PI / 2;
-
     this.lightInputMultiplier = opts.baseLightInputMultiplier + opts.addedLightInputMultiplier * Math.random();
-
     this.color = opts.color.replace( 'hue', tick * opts.hueChange + opts.startColor );
     this.cumulativeTime = 0;
-
     this.beginPhase();
   }
-  Line.prototype.beginPhase = function(){
 
+  Line.prototype.beginPhase = function(){
     this.x += this.addedX;
     this.y += this.addedY;
-
     this.time = 0;
     this.targetTime = ( opts.baseTime + opts.addedTime * Math.random() ) |0;
-
     this.rad += baseRad * ( Math.random() < .5 ? 1 : -1 );
     this.addedX = Math.cos( this.rad );
     this.addedY = Math.sin( this.rad );
@@ -247,8 +716,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     if( Math.random() < opts.dieChance || this.x > dieX || this.x < -dieX || this.y > dieY || this.y < -dieY )
       this.reset();
   }
-  Line.prototype.step = function(){
 
+  Line.prototype.step = function(){
     ++this.time;
     ++this.cumulativeTime;
 
@@ -267,33 +736,40 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     if( Math.random() < opts.sparkChance )
       ctx.fillRect( opts.cx + ( this.x + x ) * opts.len + Math.random() * opts.sparkDist * ( Math.random() < .5 ? 1 : -1 ) - opts.sparkSize / 2, opts.cy + ( this.y + y ) * opts.len + Math.random() * opts.sparkDist * ( Math.random() < .5 ? 1 : -1 ) - opts.sparkSize / 2, opts.sparkSize, opts.sparkSize )
   }
+
   loop();
 
   window.addEventListener( 'resize', function(){
-
     w = c.width = window.innerWidth;
     h = c.height = window.innerHeight;
-    ctx.fillStyle = 'black';
+    ctx.fillStyle = theme === "dark" ? 'black' : 'white';
     ctx.fillRect( 0, 0, w, h );
-
     opts.cx = w / 2;
     opts.cy = h / 2;
-
     dieX = w / 2 / opts.len;
     dieY = h / 2 / opts.len;
   });
-
 </script>
 
 <div id="panel-outer">
   <div id="panel">
-    <h2 id="title">Loading</h2>
+    <div class="header-container">
+      <div class="avatar-container"></div>
+      <h1 id="username"></h1>
+    </div>
     <p id="description">
-      Files are being retrieved from the Qortal Data Network.
-      This page will refresh automatically when the content becomes available.
+      Retrieving content from the Qortal Data Network.
+      This page will refresh automatically when ready.
     </p>
-    <p><span id="status">Loading...</span></p>
-    <p><span id="progress"></span></p>
+    <div class="spinner-container">
+      <div class="spinner"></div>
+    </div>
+    <span id="status">Initializing...</span>
+    <div class="progress-bar-container">
+      <div class="progress-bar"></div>
+    </div>
+    <span id="progress"></span>
+    <div id="peer-info"></div>
   </div>
 </div>
 

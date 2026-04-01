@@ -2,7 +2,9 @@ package org.qortal.repository;
 
 import org.qortal.data.naming.NameData;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 public interface NameRepository {
@@ -40,6 +42,9 @@ public interface NameRepository {
 	public void removePrimaryName(String address) throws DataException;
 
 	public Optional<String> getPrimaryName(String address) throws DataException;
+
+	/** Returns map of owner address -> primary name for the given addresses. Batched in chunks of 500. Missing entries mean no primary name. */
+	public Map<String, String> getPrimaryNamesByOwners(Collection<String> addresses) throws DataException;
 
 	public int clearPrimaryNames() throws DataException;
 

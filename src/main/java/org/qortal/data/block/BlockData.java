@@ -1,8 +1,11 @@
 package org.qortal.data.block;
 
 import com.google.common.primitives.Bytes;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.qortal.account.Account;
 import org.qortal.block.BlockChain;
+import org.qortal.controller.Controller;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
@@ -46,6 +49,7 @@ public class BlockData implements Serializable {
 	private Long onlineAccountsTimestamp;
 	private byte[] onlineAccountsSignatures;
 
+    private static final Logger LOGGER = LogManager.getLogger(BlockData.class);
 	// Constructors
 
 	// necessary for JAX-RS serialization
@@ -232,7 +236,8 @@ public class BlockData implements Serializable {
 		long onlineAccountSignaturesTrimmedTimestamp = NTP.getTime() - BlockChain.getInstance().getOnlineAccountSignaturesMaxLifetime();
 		long currentTrimmableTimestamp = NTP.getTime() - Settings.getInstance().getAtStatesMaxLifetime();
 		long blockTimestamp = this.getTimestamp();
-		return blockTimestamp < onlineAccountSignaturesTrimmedTimestamp && blockTimestamp < currentTrimmableTimestamp;
+
+        return blockTimestamp < onlineAccountSignaturesTrimmedTimestamp && blockTimestamp < currentTrimmableTimestamp;
 	}
 
 	public String getMinterAddressFromPublicKey() {

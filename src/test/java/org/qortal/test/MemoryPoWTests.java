@@ -10,7 +10,7 @@ import java.util.Random;
 
 import static org.junit.Assert.*;
 
-@Ignore
+@Ignore (value="Tests Work Fine - VERY Long Run time (1hr+)")
 public class MemoryPoWTests {
 
 	private static final int workBufferLength = 8 * 1024 * 1024;
@@ -26,16 +26,16 @@ public class MemoryPoWTests {
 
 		long startTime = System.currentTimeMillis();
 
-		int nonce = MemoryPoW.compute2(data, workBufferLength, difficulty);
+		Integer	nonce = MemoryPoW.compute2(data, workBufferLength, difficulty);
 
 		long finishTime = System.currentTimeMillis();
 
 		assertNotNull(nonce);
 
-		System.out.println(String.format("Memory-hard PoW (buffer size: %dKB, leading zeros: %d) took %dms, nonce: %d", workBufferLength / 1024,
+		System.out.printf("Memory-hard PoW (buffer size: %dKB, leading zeros: %d) took %dms, nonce: %d%n", workBufferLength / 1024,
 				difficulty,
 				finishTime - startTime,
-				nonce));
+				nonce);
 
 		assertTrue(MemoryPoW.verify2(data, workBufferLength, difficulty, nonce));
 	}
@@ -73,12 +73,12 @@ public class MemoryPoWTests {
 
 			double stddev = (double) Math.sqrt( (sampleSize * timesS2 - timesS1 * timesS1) / stddevDivisor );
 
-			System.out.println(String.format("Difficulty: %d, %d timings, mean: %d ms, stddev: %.2f ms, max nonce: %d",
+			System.out.printf("Difficulty: %d, %d timings, mean: %d ms, stddev: %.2f ms, max nonce: %d%n",
 					difficulty,
 					sampleSize,
 					timesS1 / sampleSize,
 					stddev,
-					maxNonce));
+					maxNonce);
 		}
 	}
 
@@ -97,7 +97,7 @@ public class MemoryPoWTests {
 		expectedNonce = 11032;
 		nonce = MemoryPoW.compute2(data, workBufferLength, difficulty);
 
-		System.out.println(String.format("Difficulty %d, nonce: %d", difficulty, nonce));
+		System.out.printf("Difficulty %d, nonce: %d%n", difficulty, nonce);
 		assertEquals(expectedNonce, nonce);
 	}
 

@@ -7,6 +7,7 @@ import org.qortal.arbitrary.misc.Service;
 import org.qortal.data.PaymentData;
 import org.qortal.data.account.AccountData;
 import org.qortal.data.group.GroupApprovalData;
+import org.qortal.data.group.GroupKickSummaryData;
 import org.qortal.data.transaction.BaseTransactionData;
 import org.qortal.data.transaction.GroupApprovalTransactionData;
 import org.qortal.data.transaction.TransactionData;
@@ -199,7 +200,9 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 				BaseTransactionData baseTransactionData = new BaseTransactionData(timestamp, txGroupId, reference, creatorPublicKey, fee, approvalStatus, blockHeight, approvalHeight, signature);
 
-				list.add( fromBase(type, baseTransactionData) );
+				TransactionData data = fromBase(type, baseTransactionData);
+				if (data != null)
+					list.add(data);
 			} while( resultSet.next());
 
 			return list;
@@ -908,9 +911,12 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 				TransactionData transactionData = this.fromSignature(signature);
 
-				if (transactionData == null)
-					// Something inconsistent with the repository
-					throw new DataException("Unable to fetch name-related transaction from repository?");
+				if (transactionData == null) {
+					// Transaction was deleted concurrently (e.g., expired transaction cleanup)
+					// This is not an error - just skip this transaction
+					LOGGER.trace(() -> String.format("Skipping name-related transaction %s - no longer in repository (likely deleted concurrently)", Base58.encode(signature)));
+					continue;
+				}
 
 				transactions.add(transactionData);
 			} while (resultSet.next());
@@ -992,9 +998,12 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 				TransactionData transactionData = this.fromSignature(signature);
 
-				if (transactionData == null)
-					// Something inconsistent with the repository
-					throw new DataException("Unable to fetch asset-related transaction from repository?");
+				if (transactionData == null) {
+					// Transaction was deleted concurrently (e.g., expired transaction cleanup)
+					// This is not an error - just skip this transaction
+					LOGGER.trace(() -> String.format("Skipping asset-related transaction %s - no longer in repository (likely deleted concurrently)", Base58.encode(signature)));
+					continue;
+				}
 
 				transactions.add(transactionData);
 			} while (resultSet.next());
@@ -1066,6 +1075,50 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 			return assetTransfers;
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch asset-transfer transactions from repository", e);
+		}
+	}
+
+	@Override
+	public List<GroupKickSummaryData> getGroupKicks(String memberAddress, Integer groupId,
+			Long before, Long after, Integer limit, Integer offset, Boolean reverse) throws DataException {
+		List<Object> bindParams = new ArrayList<>(6);
+		bindParams.add(memberAddress);
+		StringBuilder sql = new StringBuilder(320);
+		sql.append("SELECT gk.address, gk.group_id, gk.reason, t.created_when FROM GroupKickTransactions gk ");
+		sql.append("INNER JOIN Transactions t ON gk.signature = t.signature ");
+		sql.append("WHERE gk.address = ? AND t.block_height IS NOT NULL ");
+		if (groupId != null) {
+			sql.append("AND gk.group_id = ? ");
+			bindParams.add(groupId);
+		}
+		if (before != null) {
+			sql.append("AND t.created_when < ? ");
+			bindParams.add(before);
+		}
+		if (after != null) {
+			sql.append("AND t.created_when > ? ");
+			bindParams.add(after);
+		}
+		sql.append("ORDER BY t.created_when ");
+		sql.append((reverse != null && reverse) ? "DESC" : "ASC");
+		sql.append(", gk.signature ");
+		sql.append((reverse != null && reverse) ? "DESC" : "ASC");
+		HSQLDBRepository.limitOffsetSql(sql, limit, offset);
+
+		List<GroupKickSummaryData> results = new ArrayList<>();
+		try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), bindParams.toArray())) {
+			if (resultSet == null)
+				return results;
+			do {
+				String member = resultSet.getString(1);
+				int gid = resultSet.getInt(2);
+				String reason = resultSet.getString(3);
+				long timestamp = resultSet.getLong(4);
+				results.add(new GroupKickSummaryData(member, gid, reason, timestamp));
+			} while (resultSet.next());
+			return results;
+		} catch (SQLException e) {
+			throw new DataException("Unable to fetch group kicks from repository", e);
 		}
 	}
 
@@ -1372,23 +1425,20 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 		List<String> whereClauses = new ArrayList<>();
 		List<Object> bindParams = new ArrayList<>();
 
-		boolean hasCreatorPublicKey = creatorPublicKey != null;
 		boolean hasTxTypes = txTypes != null && !txTypes.isEmpty();
 
 		if (creatorPublicKey != null) {
-			whereClauses.add("Transactions.creator = ?");
+			whereClauses.add("t.creator = ?");
 			bindParams.add(creatorPublicKey);
 		}
 
 		StringBuilder sql = new StringBuilder(256);
-		sql.append("SELECT signature FROM UnconfirmedTransactions");
-		if (hasCreatorPublicKey || hasTxTypes) {
-			sql.append(" JOIN Transactions USING (signature) ");
-		}
+		sql.append("SELECT t.signature, t.type, t.reference, t.creator, t.created_when, t.fee, t.tx_group_id, t.block_height, t.approval_status, t.approval_height "
+				+ "FROM UnconfirmedTransactions u JOIN Transactions t USING (signature)");
 
 		if (hasTxTypes) {
 			StringBuilder txTypesIn = new StringBuilder(256);
-			txTypesIn.append("Transactions.type IN (");
+			txTypesIn.append("t.type IN (");
 
 			// ints are safe enough to use literally
 			final int txTypesSize = txTypes.size();
@@ -1416,11 +1466,11 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 			}
 		}
 
-		sql.append(" ORDER BY created_when");
+		sql.append(" ORDER BY t.created_when");
 		if (reverse != null && reverse)
 			sql.append(" DESC");
 
-		sql.append(", signature");
+		sql.append(", t.signature");
 		if (reverse != null && reverse)
 			sql.append(" DESC");
 
@@ -1428,19 +1478,43 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 		List<TransactionData> transactions = new ArrayList<>();
 
-		// Find transactions with no corresponding row in BlockTransactions
 		try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), bindParams.toArray())) {
 			if (resultSet == null)
 				return transactions;
 
 			do {
 				byte[] signature = resultSet.getBytes(1);
+				TransactionType type = TransactionType.valueOf(resultSet.getInt(2));
+				byte[] reference = resultSet.getBytes(3);
+				byte[] creatorPublicKey2 = resultSet.getBytes(4);
+				long timestamp = resultSet.getLong(5);
 
-				TransactionData transactionData = this.fromSignature(signature);
+				Long fee = resultSet.getLong(6);
+				if (fee == 0 && resultSet.wasNull())
+					fee = null;
 
-				if (transactionData == null)
-					// Something inconsistent with the repository
-					throw new DataException(String.format("Unable to fetch unconfirmed transaction %s from repository?", Base58.encode(signature)));
+				int txGroupId = resultSet.getInt(7);
+
+				Integer blockHeight = resultSet.getInt(8);
+				if (blockHeight == 0 && resultSet.wasNull())
+					blockHeight = null;
+
+				ApprovalStatus approvalStatus = ApprovalStatus.valueOf(resultSet.getInt(9));
+				Integer approvalHeight = resultSet.getInt(10);
+				if (approvalHeight == 0 && resultSet.wasNull())
+					approvalHeight = null;
+
+				BaseTransactionData baseTransactionData = new BaseTransactionData(timestamp, txGroupId, reference,
+						creatorPublicKey2, fee, approvalStatus, blockHeight, approvalHeight, signature);
+
+				TransactionData transactionData = this.fromBase(type, baseTransactionData);
+
+				if (transactionData == null) {
+					// Transaction was deleted concurrently (e.g., expired transaction cleanup)
+					// This is not an error - just skip this transaction
+					LOGGER.trace(() -> String.format("Skipping unconfirmed transaction %s - no longer in repository (likely deleted concurrently)", Base58.encode(signature)));
+					continue;
+				}
 
 				transactions.add(transactionData);
 			} while (resultSet.next());
@@ -1457,20 +1531,20 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 			throw new IllegalArgumentException("At least one of txType or creatorPublicKey must be non-null");
 
 		StringBuilder sql = new StringBuilder(1024);
-		sql.append("SELECT signature FROM UnconfirmedTransactions ");
-		sql.append("JOIN Transactions USING (signature) ");
+		sql.append("SELECT t.signature, t.type, t.reference, t.creator, t.created_when, t.fee, t.tx_group_id, t.block_height, t.approval_status, t.approval_height ");
+		sql.append("FROM UnconfirmedTransactions u JOIN Transactions t USING (signature) ");
 		sql.append("WHERE ");
 
 		List<String> whereClauses = new ArrayList<>();
 		List<Object> bindParams = new ArrayList<>();
 
 		if (txType != null) {
-			whereClauses.add("type = ?");
+			whereClauses.add("t.type = ?");
 			bindParams.add(Integer.valueOf(txType.value));
 		}
 
 		if (creatorPublicKey != null) {
-			whereClauses.add("creator = ?");
+			whereClauses.add("t.creator = ?");
 			bindParams.add(creatorPublicKey);
 		}
 
@@ -1482,7 +1556,7 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 			sql.append(whereClauses.get(wci));
 		}
 
-		sql.append("ORDER BY created_when, signature");
+		sql.append("ORDER BY t.created_when, t.signature");
 
 		List<TransactionData> transactions = new ArrayList<>();
 
@@ -1492,12 +1566,37 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 			do {
 				byte[] signature = resultSet.getBytes(1);
+				TransactionType type = TransactionType.valueOf(resultSet.getInt(2));
+				byte[] reference = resultSet.getBytes(3);
+				byte[] creatorPublicKey2 = resultSet.getBytes(4);
+				long timestamp = resultSet.getLong(5);
 
-				TransactionData transactionData = this.fromSignature(signature);
+				Long fee = resultSet.getLong(6);
+				if (fee == 0 && resultSet.wasNull())
+					fee = null;
 
-				if (transactionData == null)
-					// Something inconsistent with the repository
-					throw new DataException(String.format("Unable to fetch unconfirmed transaction %s from repository?", Base58.encode(signature)));
+				int txGroupId = resultSet.getInt(7);
+
+				Integer blockHeight = resultSet.getInt(8);
+				if (blockHeight == 0 && resultSet.wasNull())
+					blockHeight = null;
+
+				ApprovalStatus approvalStatus = ApprovalStatus.valueOf(resultSet.getInt(9));
+				Integer approvalHeight = resultSet.getInt(10);
+				if (approvalHeight == 0 && resultSet.wasNull())
+					approvalHeight = null;
+
+				BaseTransactionData baseTransactionData = new BaseTransactionData(timestamp, txGroupId, reference,
+						creatorPublicKey2, fee, approvalStatus, blockHeight, approvalHeight, signature);
+
+				TransactionData transactionData = this.fromBase(type, baseTransactionData);
+
+				if (transactionData == null) {
+					// Transaction was deleted concurrently (e.g., expired transaction cleanup)
+					// This is not an error - just skip this transaction
+					LOGGER.trace(() -> String.format("Skipping unconfirmed transaction %s - no longer in repository (likely deleted concurrently)", Base58.encode(signature)));
+					continue;
+				}
 
 				transactions.add(transactionData);
 			} while (resultSet.next());
@@ -1547,9 +1646,12 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 				TransactionData transactionData = this.fromSignature(signature);
 
-				if (transactionData == null)
-					// Something inconsistent with the repository
-					throw new DataException(String.format("Unable to fetch unconfirmed transaction %s from repository?", Base58.encode(signature)));
+				if (transactionData == null) {
+					// Transaction was deleted concurrently (e.g., expired transaction cleanup)
+					// This is not an error - just skip this transaction
+					LOGGER.trace(() -> String.format("Skipping unconfirmed transaction %s - no longer in repository (likely deleted concurrently)", Base58.encode(signature)));
+					continue;
+				}
 
 				transactions.add(transactionData);
 			} while (resultSet.next());
@@ -1557,6 +1659,55 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 			return transactions;
 		} catch (SQLException | DataException e) {
 			throw new DataException("Unable to fetch unconfirmed transactions from repository", e);
+		}
+	}
+
+	@Override
+	public List<TransactionData> getUnconfirmedTransactionsCreatedBefore(long timestamp) throws DataException {
+		String sql = "SELECT t.signature, t.type, t.reference, t.creator, t.created_when, t.fee, t.tx_group_id, t.block_height, t.approval_status, t.approval_height "
+				+ "FROM UnconfirmedTransactions u JOIN Transactions t USING (signature) "
+				+ "WHERE t.created_when < ? "
+				+ "ORDER BY t.created_when, t.signature";
+
+		List<TransactionData> transactions = new ArrayList<>();
+
+		try (ResultSet resultSet = this.repository.checkedExecute(sql, timestamp)) {
+			if (resultSet == null)
+				return transactions;
+
+			do {
+				byte[] signature = resultSet.getBytes(1);
+				TransactionType type = TransactionType.valueOf(resultSet.getInt(2));
+				byte[] reference = resultSet.getBytes(3);
+				byte[] creatorPublicKey = resultSet.getBytes(4);
+				long ts = resultSet.getLong(5);
+
+				Long fee = resultSet.getLong(6);
+				if (fee == 0 && resultSet.wasNull())
+					fee = null;
+
+				int txGroupId = resultSet.getInt(7);
+
+				Integer blockHeight = resultSet.getInt(8);
+				if (blockHeight == 0 && resultSet.wasNull())
+					blockHeight = null;
+
+				ApprovalStatus approvalStatus = ApprovalStatus.valueOf(resultSet.getInt(9));
+				Integer approvalHeight = resultSet.getInt(10);
+				if (approvalHeight == 0 && resultSet.wasNull())
+					approvalHeight = null;
+
+				BaseTransactionData baseTransactionData = new BaseTransactionData(ts, txGroupId, reference,
+						creatorPublicKey, fee, approvalStatus, blockHeight, approvalHeight, signature);
+				TransactionData transactionData = this.fromBase(type, baseTransactionData);
+
+				if (transactionData != null)
+					transactions.add(transactionData);
+			} while (resultSet.next());
+
+			return transactions;
+		} catch (SQLException | DataException e) {
+			throw new DataException("Unable to fetch unconfirmed transactions created before timestamp from repository", e);
 		}
 	}
 
@@ -1684,8 +1835,12 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 				TransactionData transactionData = this.fromSignature(signature);
 
-				if (transactionData == null)
-					throw new DataException(String.format("Unable to fetch payment transaction %s from repository?", Base58.encode(signature)));
+				if (transactionData == null) {
+					// Transaction was deleted concurrently (e.g., expired transaction cleanup)
+					// This is not an error - just skip this transaction
+					LOGGER.trace(() -> String.format("Skipping payment transaction %s - no longer in repository (likely deleted concurrently)", Base58.encode(signature)));
+					continue;
+				}
 
 				transactions.add(transactionData);
 			} while (resultSet.next());
@@ -1693,6 +1848,53 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 			return transactions;
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch payment transactions between addresses from repository", e);
+		}
+	}
+
+	@Override
+	public List<String[]> getReceivedPaymentsForNotifications(String recipient, Long after, int limit) throws DataException {
+		// Single indexed query — no per-row hydration.
+		// Uses PaymentTransactionsRecipientIndex on PT.recipient and
+		// the primary key join to Transactions for created_when / creator.
+		StringBuilder sql = new StringBuilder(256);
+		sql.append("SELECT PT.recipient, PT.amount, T.creator, T.created_when, T.signature ");
+		sql.append("FROM PaymentTransactions PT ");
+		sql.append("JOIN Transactions T ON T.signature = PT.signature ");
+		sql.append("WHERE PT.recipient = ? AND T.block_height IS NOT NULL");
+
+		List<Object> params = new ArrayList<>();
+		params.add(recipient);
+
+		if (after != null) {
+			sql.append(" AND T.created_when > ?");
+			params.add(after);
+		}
+
+		sql.append(" ORDER BY T.created_when DESC");
+		HSQLDBRepository.limitOffsetSql(sql, limit, null);
+
+		List<String[]> results = new ArrayList<>();
+
+		try (ResultSet rs = this.repository.checkedExecute(sql.toString(), params.toArray())) {
+			if (rs == null) return results;
+			do {
+				String recipientAddr = rs.getString(1);
+				long amount          = rs.getLong(2);
+				byte[] creatorKey    = rs.getBytes(3);
+				long timestamp       = rs.getLong(4);
+				byte[] sig           = rs.getBytes(5);
+
+				String sender      = org.qortal.crypto.Crypto.toAddress(creatorKey);
+				String amountStr   = org.qortal.utils.Amounts.prettyAmount(amount);
+				String tsStr       = String.valueOf(timestamp);
+				String sigStr      = sig != null ? org.qortal.utils.Base58.encode(sig) : null;
+
+				results.add(new String[]{sender, recipientAddr, amountStr, tsStr, sigStr});
+			} while (rs.next());
+
+			return results;
+		} catch (java.sql.SQLException e) {
+			throw new DataException("Unable to fetch payment notifications history", e);
 		}
 	}
 

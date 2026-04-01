@@ -203,8 +203,11 @@ public class CrossChainResource {
 			// Sort the trades by timestamp
 			crossChainTrades.sort((a, b) -> Longs.compare(a.creationTimestamp, b.creationTimestamp));
 
-			// Remove trades that haven't failed
-			crossChainTrades.removeIf(t -> !TradeBot.getInstance().isFailedTrade(repository, t));
+			// Keep only failed trades by batching the failed-trade check once.
+			Set<String> nonFailedTradeAddresses = TradeBot.getInstance().removeFailedTrades(repository, crossChainTrades).stream()
+					.map(crossChainTradeData -> crossChainTradeData.qortalAtAddress)
+					.collect(Collectors.toSet());
+			crossChainTrades.removeIf(crossChainTradeData -> nonFailedTradeAddresses.contains(crossChainTradeData.qortalAtAddress));
 
 			crossChainTrades.stream().forEach(CrossChainResource::decorateTradeDataWithPresence);
 

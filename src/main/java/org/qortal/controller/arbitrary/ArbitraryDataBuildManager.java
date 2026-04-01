@@ -40,12 +40,15 @@ public class ArbitraryDataBuildManager extends Thread {
         Thread.currentThread().setName("Arbitrary Data Build Manager");
 
         try {
-            // Use a fixed thread pool to execute the arbitrary data build actions (currently just a single thread)
-            // This can be expanded to have multiple threads processing the build queue when needed
+            // Use a fixed thread pool to execute the arbitrary data build actions
+            // Combined approach: 1 thread reserved for large files + 4 threads with priority aging
+            // This prevents small files from being blocked while ensuring large files don't starve
             int threadCount = 5;
             ExecutorService arbitraryDataBuildExecutor = Executors.newFixedThreadPool(threadCount);
             for (int i = 0; i < threadCount; i++) {
-                arbitraryDataBuildExecutor.execute(new ArbitraryDataBuilderThread());
+                // Thread 0 is reserved for large files, threads 1-4 use priority aging
+                boolean isLargeFileThread = (i == 0);
+                arbitraryDataBuildExecutor.execute(new ArbitraryDataBuilderThread(isLargeFileThread));
             }
 
             while (!isStopping) {
@@ -194,7 +197,7 @@ public class ArbitraryDataBuildManager extends Thread {
         }
 
         if (queueItem.isHighPriority()) {
-            LOGGER.info(message);
+            LOGGER.trace(message);
         }
         else {
             LOGGER.debug(message);

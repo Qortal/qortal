@@ -27,15 +27,22 @@
 
 package org.qortal.utils;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 
 import org.qortal.controller.Controller;
+import org.qortal.crypto.AES;
 
+import javax.crypto.SecretKey;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Paths;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import javax.crypto.NoSuchPaddingException;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
@@ -96,10 +103,20 @@ public class ZipUtils {
         fis.close();
     }
 
+    /**
+     * Unzips a file from the given source path to the destination path.
+     * 
+     * @param sourcePath Path to the ZIP file
+     * @param destPath Destination directory for extracted files
+     * @throws IOException If extraction fails
+     */
     public static void unzip(String sourcePath, String destPath) throws IOException {
         final File destDir = new File(destPath);
-        final byte[] buffer = new byte[65536];
-        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(sourcePath))) {
+        // Buffer size: 512KB - optimized for large files (reduces syscalls)
+        final int BUFFER_SIZE = 512 * 1024;
+        final byte[] buffer = new byte[BUFFER_SIZE];
+        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(sourcePath), BUFFER_SIZE);
+             ZipInputStream zis = new ZipInputStream(bis)) {
             ZipEntry zipEntry = zis.getNextEntry();
             while (zipEntry != null) {
                 final File newFile = ZipUtils.newFile(destDir, zipEntry);
@@ -113,7 +130,7 @@ public class ZipUtils {
                         throw new IOException("Failed to create directory " + parent);
                     }
     
-                    try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(newFile), buffer.length)) {
+                    try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(newFile), BUFFER_SIZE)) {
                         int len;
                         while ((len = zis.read(buffer)) > 0) {
                             bos.write(buffer, 0, len);
@@ -125,13 +142,127 @@ public class ZipUtils {
             zis.closeEntry();
         }
     }
+
+    /**
+     * Unzips from an InputStream directly to the destination path.
+     * This is useful for streaming operations where the ZIP data comes from a stream.
+     * 
+     * @param zipInputStream The ZipInputStream to read from
+     * @param destPath Destination directory for extracted files
+     * @throws IOException If extraction fails
+     */
+    public static void unzipFromStream(ZipInputStream zipInputStream, String destPath) throws IOException {
+        final File destDir = new File(destPath);
+        // Buffer size: 512KB - optimized for large files
+        final int BUFFER_SIZE = 512 * 1024;
+        final byte[] buffer = new byte[BUFFER_SIZE];
+        
+        ZipEntry zipEntry = zipInputStream.getNextEntry();
+        while (zipEntry != null) {
+            final File newFile = ZipUtils.newFile(destDir, zipEntry);
+            if (zipEntry.isDirectory()) {
+                if (!newFile.isDirectory() && !newFile.mkdirs()) {
+                    throw new IOException("Failed to create directory " + newFile);
+                }
+            } else {
+                File parent = newFile.getParentFile();
+                if (!parent.isDirectory() && !parent.mkdirs()) {
+                    throw new IOException("Failed to create directory " + parent);
+                }
+
+                try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(newFile), BUFFER_SIZE)) {
+                    int len;
+                    while ((len = zipInputStream.read(buffer)) > 0) {
+                        bos.write(buffer, 0, len);
+                    }
+                }
+            }
+            zipEntry = zipInputStream.getNextEntry();
+        }
+        zipInputStream.closeEntry();
+    }
+
+    /**
+     * Decrypts and unzips an encrypted ZIP file in a single streaming pass.
+     * This eliminates the need for an intermediate decrypted file, significantly
+     * improving performance by reducing disk I/O.
+     * 
+     * @param algorithm The encryption algorithm (e.g., "AES/CBC/PKCS5Padding")
+     * @param key The secret key for decryption
+     * @param encryptedFilePath Path to the encrypted ZIP file
+     * @param destPath Destination directory for extracted files
+     * @throws IOException If decryption or extraction fails
+     * @throws NoSuchPaddingException If the padding scheme is not available
+     * @throws NoSuchAlgorithmException If the algorithm is not available
+     * @throws InvalidAlgorithmParameterException If the IV is invalid
+     * @throws InvalidKeyException If the key is invalid
+     */
+    public static void decryptAndUnzip(String algorithm, SecretKey key, String encryptedFilePath, 
+            String destPath) throws IOException, NoSuchPaddingException, NoSuchAlgorithmException, 
+            InvalidAlgorithmParameterException, InvalidKeyException {
+        
+        // Buffer size: 256KB - good balance between performance and memory for all machines
+        // Matches AES.decryptFile() for consistency. 512KB provides marginal performance gain
+        // but uses 2x memory, which is significant with 5 concurrent builds (1.25MB vs 2.5MB)
+        final int BUFFER_SIZE = 256 * 1024;
+        
+        try (BufferedInputStream encryptedStream = new BufferedInputStream(
+                new FileInputStream(encryptedFilePath), BUFFER_SIZE);
+             javax.crypto.CipherInputStream decryptingStream = AES.createDecryptingInputStream(
+                algorithm, key, encryptedStream);
+             ZipInputStream zipStream = new ZipInputStream(decryptingStream)) {
+            
+            unzipFromStream(zipStream, destPath);
+        }
+    }
     
 
     /**
+     * Sanitizes a zip entry name for safe extraction on all supported OS/filesystems.
+     * Removes characters that are invalid on Windows, Linux, and common FS (e.g. exFAT),
+     * and trims leading/trailing whitespace from each path segment. Preserves path structure
+     * (ZIP uses forward slash). Normal names are unchanged; only invalid chars are removed.
+     *
+     * @param entryName The raw name from the zip entry (e.g. "data/ | file.mp4")
+     * @return A safe path for extraction (e.g. "data/file.mp4")
+     */
+    private static String sanitizeZipEntryName(String entryName) {
+        if (entryName == null || entryName.isEmpty()) {
+            return "_";
+        }
+        // ZIP spec uses forward slash as path separator
+        String[] segments = entryName.split("/", -1);
+        boolean trailingSlash = entryName.endsWith("/");
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < segments.length; i++) {
+            if (i > 0) {
+                out.append('/');
+            }
+            String segment = segments[i];
+            // Skip empty trailing segment (directory entry like "data/")
+            if (segment.isEmpty() && i == segments.length - 1 && trailingSlash) {
+                out.setLength(out.length() - 1); // remove the trailing '/' we just added
+                break;
+            }
+            // Same invalid-char set as StringUtils.sanitizeString: invalid on Windows and common FS
+            String sanitized = segment.replaceAll("[<>:\"/\\\\|?*]", "");
+            // Trim leading/trailing whitespace (e.g. " | file.mp4" -> "file.mp4" after pipe removed)
+            sanitized = sanitized.replaceAll("^\\s+|\\s+$", "");
+            if (sanitized.isEmpty()) {
+                sanitized = "_";
+            }
+            out.append(sanitized);
+        }
+        return out.toString();
+    }
+
+    /**
      * See: https://snyk.io/research/zip-slip-vulnerability
+     * Zip entry names are sanitized so extraction works on all OS/filesystems (e.g. names with | or :).
      */
     public static File newFile(File destinationDir, ZipEntry zipEntry) throws IOException {
-        File destFile = new File(destinationDir, zipEntry.getName());
+        String safeName = sanitizeZipEntryName(zipEntry.getName());
+        File destFile = new File(destinationDir, safeName);
 
         String destDirPath = destinationDir.getCanonicalPath();
         String destFilePath = destFile.getCanonicalPath();
