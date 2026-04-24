@@ -100,9 +100,7 @@ public class GroupKickTransaction extends Transaction {
 				if (!this.needsGroupApproval())
 					return ValidationResult.GROUP_APPROVAL_REQUIRED;
 			}
-			// Can't kick if not group's current owner
-			else if (!admin.getAddress().equals(groupData.getOwner()))
-				return ValidationResult.INVALID_GROUP_OWNER;
+			// For regular groups, any admin can kick regular members (owner/admin protections checked above)
 		}
 
 		// Check creator has enough funds

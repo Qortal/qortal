@@ -88,8 +88,7 @@ public class GroupBanTransaction extends Transaction {
 				if (!this.needsGroupApproval())
 					return ValidationResult.GROUP_APPROVAL_REQUIRED;
 			}
-			else if (!admin.getAddress().equals(groupData.getOwner()))
-				return ValidationResult.INVALID_GROUP_OWNER;
+			// For regular groups, any admin can ban regular members (owner/admin protections checked below)
 		}
 
 		Account offender = getOffender();
