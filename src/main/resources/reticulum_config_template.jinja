@@ -3,9 +3,11 @@
 #
 # Qortal settings (settins.json) used for generation of this config:
 # "reticulumHasServerInterface": node has gateway interface [boolean]
-# "reticulumDesiredClientInterfaces": how many TCP server interfaces
+# "reticulumDesiredClientInterfaces": how many Backbone server interfaces
 #                                      to generate [integer] (deafault: 1)
-# "reticulumTcpGatewayServers": list of TCP Gateway node fqdn[:port] strings
+# "reticulumTCPGatewayServers": list of TCP Gateway node fqdn[:port] strings
+#                               (port optional) [json list]
+# "reticulumBackboneGatewayServers": list of Backbone Gateway node fqdn[:port] strings
 #                               (port optional) [json list]
 # "reticulumUsePythonRNS": there is a Python shared rnsd on on the node [boolean]
 #                          Note: the rnsd instance must have a gateway interface
@@ -13,10 +15,15 @@
 
 reticulum:
 
-  # Unless we have a native gateway interface we don't need routing
+{% if use_python_rns %}
+  # If a local Python RNS routes we don't have to
   enable_transport: false
+{% elif is_reticulum_gateway %}
+  # This Qortal instance is configured as a Reticulum gateway
+  enable_transport: true
+{% endif %}
 
-  share_instance: false
+  share_instance: true
 
   # default used by RNS
   #shared_instance_port: 37428
@@ -38,17 +45,45 @@ interfaces:
     type: AutoInterface
     enabled: true
 
+{% if is_reticulum_gateway %}
+  # full gateway node with BackboneServerInterface
+  "Backbone Server Interface qortal local":
+    type: BackboneServerInterface
+    enabled: true
+    listen_ip: 0.0.0.0
+    listen_port: {{ python_rns_if_port }}
+    network_name: {{ qortal_network_name }}
+{% endif %}
 {% if use_python_rns %}
   # gateway node: client to local Python RNS instance
-  "TCP Client Interface qortal local":
-    type: TCPClientInterface
+  "Backbone Client Interface qortal local":
+    type: BackboneClientInterface
     enabled: true
     target_host: localhost
     target_port: {{ python_rns_if_port }}
     network_name: {{ qortal_network_name }}
 {% endif %}
-{%- set gateway_servers = tcp_gateway_servers|split(' ')|shuffle -%}
-{%- for item in gateway_servers -%}
+{%- set b_gateway_servers = backbone_gateway_servers|split(' ')|shuffle -%}
+{%- for item in b_gateway_servers -%}
+  {%- set fqdn_port_list = item|split(':') -%}
+  {%- if fqdn_port_list|length > 1 -%}
+    {%- set item_fqdn = fqdn_port_list[0] -%}
+    {%- set item_target_port = fqdn_port_list[1] -%}
+  {%- else -%}
+    {%- set item_fqdn = item -%}
+    {%- set item_target_port = target_port -%}
+  {%- endif -%}
+  {% if (loop.index <= num_client_interfaces) and (item_fqdn != host_fqdn) %}
+  "Backbone Client Interface qortal {{ item_fqdn }}":
+    type: BackboneClientInterface
+    enabled: true
+    target_host: {{ item_fqdn }}
+    target_port: {{ item_target_port }}
+    network_name: {{ qortal_network_name }}
+  {% endif %}
+{%- endfor -%}
+{%- set t_gateway_servers = tcp_gateway_servers|split(' ')|shuffle -%}
+{%- for item in t_gateway_servers -%}
   {%- set fqdn_port_list = item|split(':') -%}
   {%- if fqdn_port_list|length > 1 -%}
     {%- set item_fqdn = fqdn_port_list[0] -%}

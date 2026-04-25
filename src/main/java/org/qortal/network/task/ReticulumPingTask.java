@@ -41,7 +41,7 @@ public class ReticulumPingTask implements Task {
 
         // Approach 1: getResponse()
         Message message = peer.getResponse(pingMessage);
-        if (message == null || message.getType() != MessageType.PONG) {
+        if (message == null || message.getType() != MessageType.PONG) {https://www.geeksforgeeks.org/java/integrating-java-with-python/
             LOGGER.debug("[{}] Didn't receive reply from {} for PING ID {}",
                     peer.getPeerConnectionId(), peer, pingMessage.getId());
             // for Reticulum, ping is a keep-alive, not to steer connectivity.

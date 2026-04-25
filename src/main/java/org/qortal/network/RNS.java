@@ -148,7 +148,7 @@ public class RNS {
     // replicating a feature from Network.class needed in for base Message.java,
     // just in case the classic TCP/IP Networking is turned off.
     private static final byte[] MAINNET_MESSAGE_MAGIC = new byte[]{0x51, 0x4f, 0x52, 0x54}; // QORT
-    private static final byte[] TESTNET_MESSAGE_MAGIC = new byte[]{0x71, 0x6f, 0x72, 0x54}; // qorT
+    private static final byte[] TESTNET_MESSAGE_MAGIC = new byte[]{0x71, 0x6f, 0x72, 0x54}; // qort
     private static final int BROADCAST_CHAIN_TIP_DEPTH = 7; // (~1440 bytes)
     /**
      * How long between informational broadcasts to all ACTIVE peers, in milliseconds.
@@ -287,7 +287,9 @@ public class RNS {
         var isReticulumGateway = Settings.getInstance().getReticulumIsGateway();
         var reticulumDesiredClientInterfaces =  Settings.getInstance().getReticulumDesiredClientInterfaces();
         var reticulumTcpGatewayServers = Arrays.stream(Settings.getInstance().getReticulumTcpGatewayServers()).collect(Collectors.toList());
+        var reticulumBackboneGatewayServers = Arrays.stream(Settings.getInstance().getReticulumBackboneGatewayServers()).collect(Collectors.toList());
         reticulumTcpGatewayServers.remove(fqdn);
+        reticulumBackboneGatewayServers.remove(fqdn);
         Map<String, Object> context = Maps.newHashMap();
 
         //log.info("fqdn: {}, reticulumTcpGatewayServers: {}", fqdn, reticulumTcpGatewayServers);
@@ -296,19 +298,22 @@ public class RNS {
             try {
                 // jinjava variables set in context:
                 // * tcp_gateway_servers: list of nodes with a TCPServerInterface
+                // * tcp_backbone_servers: list of nodes with a BackboneServerInterface
                 // * num_client_interfaces: number of client interfaces to gateways be configured
                 // * host_fqdn: host FQDN
                 // * qortal_network_name: either "qortal" or "qortaltest" (from isTestnet)
                 // * is_reticulum_gateway: one of the instances (Qortal core or RNS) has
                 //                         at least one Gateway interface
                 // * is_test_net: String "true" or "false" (from isTestNet)
-                // * target_port: target port for TCPServerInterface (only)
+                // * target_port: target port for TCPServerInterface or BackboneServerInterface (only)
                 // * use_python_rns: use local shared python rnsd (has to provide a gateway interface)
                 // * python_rns_if_port: rnsd TCPServerInterface port (if rnsd gateway is a TCPServerInterface)
                 var jnj = new Jinjava();
-                var reticulumGateways = StringUtils.join(reticulumTcpGatewayServers, " ");
-                log.info("reticulumGateways: {}", reticulumGateways);
-                context.put("tcp_gateway_servers",  reticulumGateways);
+                var reticulumTcpGateways = StringUtils.join(reticulumTcpGatewayServers, " ");
+                var reticulumBackboneGateways = StringUtils.join(reticulumBackboneGatewayServers, " ");
+                log.info("reticulumTcpGateways: {}, reticulumBackboneGateways", reticulumTcpGateways);
+                context.put("tcp_gateway_servers",  reticulumTcpGateways);
+                context.put("backbone_gateway_servers",  reticulumBackboneGateways);
                 context.put("num_client_interfaces", reticulumDesiredClientInterfaces);
                 context.put("host_fqdn", fqdn);
                 context.put("qortal_network_name",  APP_NAME);

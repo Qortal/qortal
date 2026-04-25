@@ -684,8 +684,11 @@ public class Settings {
 	private boolean reticulumHasServerInterface = false;
 	/** Number of desired client Interfaces (taken from core server list) */
 	private int reticulumDesiredClientInterfaces = 1;
-	/** Array of core Reticulum server hostnames. TCP only */
+	/** Array of core Reticulum server hostname[:port], TCP or Backbone only */
 	private String[] reticulumTcpGatewayServers = new String[]{
+			""
+	};
+	private String[] reticulumBackboneGatewayServers = new String[]{
 			"phantom.mobilefabrik.com:4242"
 	};
 	/** There is a Python rnsd running on the node with a gateway inteface to use */
@@ -1561,6 +1564,9 @@ public class Settings {
 
 	public String[] getReticulumTcpGatewayServers() {
 		return this.reticulumTcpGatewayServers;
+	}
+	public String[] getReticulumBackboneGatewayServers() {
+		return this.reticulumBackboneGatewayServers;
 	}
 
 	public boolean getReticulumUsePythonRNS() { return this.reticulumUsePythonRNS; }
