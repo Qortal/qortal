@@ -65,7 +65,7 @@ public class Group {
 	// Useful constants
 	public static final int NO_GROUP = 0;
 
-	// Null owner address corresponds with public key "11111111111111111111111111111111"
+	// Null owner address corresponds with public key "00000000000000000000000000000000"
 	public static String NULL_OWNER_ADDRESS = "QdSnUy6sUiEnaN87dWmE92g1uQjrvPgrWG";
 
 	public static final int MIN_NAME_SIZE = 3;
