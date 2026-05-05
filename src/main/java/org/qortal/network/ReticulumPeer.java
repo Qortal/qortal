@@ -155,7 +155,6 @@ public class ReticulumPeer implements Peer {
     private LinkedBlockingQueue<Message> pendingMessages;
     private boolean syncInProgress = false;
     private final Object peerInfoLock = new Object();
-    //private String peersNodeId;
     private PeerData peerData;
     private PeerCapabilities peerCapabilities;
     private long linkEstablishedTime = -1L; // equivalent of (tcpip) Peer 'handshakeComplete'
@@ -164,11 +163,12 @@ public class ReticulumPeer implements Peer {
             + "(\\d{1,3})\\.(\\d{1,5})\\.(\\d{1,5})");
     /* Pending signature requests */
     private List<byte[]> pendingSignatureRequests = Collections.synchronizedList(new ArrayList<>());
-    private TransferQueue<Message> sendQueue;
+    // Note: Reticulum uses Buffer for send, not a bounded queue. These fields satisfy the Peer interface.
     /**
      * Latest block info as reported by peer.
      */
     private List<BlockSummaryData> peersChainTipData = Collections.emptyList();
+    private int peerType = Peer.NETWORK;
     /**
      * Our common block with this peer
      */
@@ -375,6 +375,11 @@ public class ReticulumPeer implements Peer {
     }
 
     public BufferedRWPair getOrInitPeerBuffer() {
+        if (this.peerLink == null || this.peerLink.getStatus() != ACTIVE) {
+            log.debug("getOrInitPeerBuffer - skipping: link not ACTIVE (status: {})",
+                this.peerLink != null ? this.peerLink.getStatus() : "null");
+            return null;
+        }
         channel = this.peerLink.getChannel();
         //var network = Network.getInstance();
         var rns = RNS.getInstance();
@@ -415,6 +420,12 @@ public class ReticulumPeer implements Peer {
             this.peerData.setLastConnected(ntpNow);
             this.startPings();
             makePeerAvailable();
+            // Send our chain tip so the remote peer knows our height and can trigger sync.
+            // This mirrors the TCP/IP handshake's chain-tip exchange on connection completion.
+            Message chainTipMessage = RNS.getInstance().buildHeightOrChainTipInfo(this);
+            if (chainTipMessage != null) {
+                sendMessage(chainTipMessage);
+            }
         }
         return getPeerBuffer();
     }
@@ -519,13 +530,20 @@ public class ReticulumPeer implements Peer {
     /** Link callbacks */
     public void linkEstablished(Link link) {
         this.linkEstablishedTime = System.currentTimeMillis();
+        this.lastAccessTimestamp = Instant.now(); // reset from link-creation time to link-active time
         link.setLinkClosedCallback(this::linkClosed);
-        log.info("peerLink {} established (link: {}) with peer: hash - {}, link destination hash: {}", 
+        log.info("peerLink {} established (link: {}) with peer: hash - {}, link destination hash: {}",
             encodeHexString(peerLink.getLinkId()), encodeHexString(link.getLinkId()), encodeHexString(destinationHash),
             encodeHexString(link.getDestination().getHash()));
         var ntpNow = NTP.getTime();
         this.peerData.setLastConnected(ntpNow);
-        //this.peerData.setLastAttempted(ntpNow);
+
+        // For initiator peers: create buffer and add to Network lists now that the link is ACTIVE.
+        // Without this, no buffer is ever created (the lazy path in sendMessage() is never reached
+        // because the peer isn't yet in the Network lists to receive any requests).
+        if (Boolean.TRUE.equals(isInitiator)) {
+            getOrInitPeerBuffer();
+        }
     }
     
     public void linkClosed(Link link) {
@@ -680,9 +698,8 @@ public class ReticulumPeer implements Peer {
 
                     default:
                         log.trace("default - type {} message received ({} bytes)", message.getType(), data.length);
-                        // Bump up to controller for possible action
-                        //addToQueue(message);
-                        Controller.getInstance().onNetworkMessage(this, message);
+                        // Route through pendingMessages for async processing (avoids blocking the Reticulum callback thread)
+                        addToQueue(message);
                         break;
                 }
             } catch (MessageException e) {
@@ -989,23 +1006,19 @@ public class ReticulumPeer implements Peer {
         }
     }
 
-    /**
-     * Get the current size of the send queue.
-     *
-     * @return number of messages currently queued for sending
-     */
     public int getSendQueueSize() {
-        return this.sendQueue.size();
+        return 0; // Reticulum uses Buffer for I/O, not a bounded queue
     }
 
-    /**
-     * Get the capacity of the send queue.
-     *
-     * @return maximum number of messages that can be queued
-     */
     public int getSendQueueCapacity() {
-        return this.sendQueue.remainingCapacity() + this.sendQueue.size();
+        return Integer.MAX_VALUE; // Buffer has no fixed capacity limit
     }
+
+    @Override
+    public int getPeerType() { return this.peerType; }
+
+    @Override
+    public void setPeerType(int peerType) { this.peerType = peerType; }
 
     //public boolean sendMessageWithTimeoutNow(Message message, int timeout) {
     //    if (nonNull(this.peerLink)) {
@@ -1118,13 +1131,17 @@ public class ReticulumPeer implements Peer {
     }
 
     public void startPings() {
-        log.debug("[{}] Enabling pings for peer (link id) {}",
-                peerLink.getDestination().getHexHash(), this.toString());
         this.lastPingSent = NTP.getTime();
-        log.debug("[{}] now: {}, lastPingSent: {}", this.lastPingSent );
+        log.debug("[{}] Enabling pings for peer (link id) {}, lastPingSent: {}",
+                peerLink.getDestination().getHexHash(), this.toString(), this.lastPingSent);
     }
 
     public Task getPingTask(Long now) {
+        // Only initiator peers send application-level pings; non-initiators reply to them.
+        if (!Boolean.TRUE.equals(isInitiator)) {
+            return null;
+        }
+
         // Pings not enabled yet?
         if (now == null || this.lastPingSent == null) {
             return null;

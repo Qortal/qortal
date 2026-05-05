@@ -352,9 +352,19 @@ public class RNS {
     // "main" loop for baseDestination (chain tasks)
     private void runBaseLoop() {
         while (!isShuttingDown && !Thread.currentThread().isInterrupted()) {
-            final List<ReticulumPeer> peersThisRound = this.getActiveImmutableLinkedPeers().stream()
-                    .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.BASE)
-                    .collect(Collectors.toList());
+            // Drain messages from both initiator peers (linkedPeers) and
+            // non-initiator/incoming peers (incomingPeers) so that requests
+            // received by either side are processed.
+            final List<ReticulumPeer> peersThisRound = Stream.concat(
+                    this.getActiveImmutableLinkedPeers().stream()
+                            .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.BASE),
+                    this.getImmutableIncomingPeers().stream()
+                            .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.BASE)
+                            .filter(p -> {
+                                var pl = p.getPeerLink();
+                                return nonNull(pl) && pl.getStatus() == ACTIVE;
+                            })
+            ).collect(Collectors.toList());
 
             for (ReticulumPeer peer : peersThisRound) {
                 ExecuteProduceConsume.Task task;
@@ -371,17 +381,14 @@ public class RNS {
                             }
                         });
                     } catch (java.util.concurrent.RejectedExecutionException e) {
-                        // Worker pool is full or shutting down - log and continue
-                        // Message will be lost but system remains stable
                         log.warn("[{}] Reticulum worker pool rejected message task (pool full or shutting down)",
                                 peer.getPeerConnectionId());
-                        break; // Stop draining this peer's queue
+                        break;
                     }
                 }
             }
 
-            // Sleep unconditionally at the end of every cycle to cap the loop
-            // at ~100 iterations/sec.
+            // Sleep unconditionally at the end of every cycle to cap the loop at ~100 iterations/sec.
             if (!isShuttingDown && !Thread.currentThread().isInterrupted()) {
                 try {
                     Thread.sleep(10);
@@ -656,7 +663,7 @@ public class RNS {
             ReticulumPeer newPeer = new ReticulumPeer(destinationHash);
             newPeer.setServerIdentity(announcedIdentity);
             newPeer.setIsInitiator(true);
-            if (getAspectFilter() == "qortal.qdn") {
+            if ("qortal.qdn".equals(getAspectFilter())) {
                 // data peer
                 newPeer.setPeerAspect(RNSCommon.PeerAspect.DATA);
                 newPeer.setIsDataPeer(true);
@@ -838,10 +845,7 @@ public class RNS {
             peer.shutdownChannel();
             peer.getPeerBuffer().close();
         }
-        //if (nonNull(peer.getPeerLink())) {
-        //    peer.getPeerLink().teardown();
-        //}
-        var p = this.linkedPeers.remove(this.linkedPeers.indexOf(peer)); // thread safe
+        this.linkedPeers.remove(peer); // single synchronized operation on the list
         this.immutableLinkedPeers = List.copyOf(this.linkedPeers);
         //var network = Network.getInstance();
         //network.removeHandshakedPeer(peer);
@@ -867,10 +871,7 @@ public class RNS {
             peer.shutdownChannel();
             peer.getPeerBuffer().close();
         }
-        //if (nonNull(peer.getPeerLink())) {
-        //    peer.getPeerLink().teardown();
-        //}
-        var p = this.incomingPeers.remove(this.incomingPeers.indexOf(peer));
+        this.incomingPeers.remove(peer); // single synchronized operation on the list
         this.immutableIncomingPeers = List.copyOf(this.incomingPeers);
     }
 
