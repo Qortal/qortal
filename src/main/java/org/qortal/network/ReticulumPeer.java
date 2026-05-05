@@ -1133,6 +1133,14 @@ public class ReticulumPeer implements Peer {
         return downloadSpeedTracker;
     }
 
+    @Override
+    public Handshake getHandshakeStatus() {
+        // Reticulum link establishment IS the handshake. Once the buffer is ready
+        // and the peer is in Network's peer lists, all messages should be routed
+        // as post-handshake (i.e. to Controller.onNetworkMessage).
+        return Handshake.COMPLETED;
+    }
+
     public void startPings() {
         Long ntpTime = NTP.getTime();
         this.lastPingSent = (ntpTime != null) ? ntpTime : System.currentTimeMillis();
