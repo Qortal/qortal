@@ -424,7 +424,10 @@ public class ReticulumPeer implements Peer {
             // This mirrors the TCP/IP handshake's chain-tip exchange on connection completion.
             Message chainTipMessage = RNS.getInstance().buildHeightOrChainTipInfo(this);
             if (chainTipMessage != null) {
+                log.info("[{}] Sending chain tip ({}) to {}", getPeerConnectionId(), chainTipMessage.getType(), this);
                 sendMessage(chainTipMessage);
+            } else {
+                log.info("[{}] No chain tip available to send to {} (blockchain not ready yet)", getPeerConnectionId(), this);
             }
         }
         return getPeerBuffer();
@@ -1131,8 +1134,9 @@ public class ReticulumPeer implements Peer {
     }
 
     public void startPings() {
-        this.lastPingSent = NTP.getTime();
-        log.debug("[{}] Enabling pings for peer (link id) {}, lastPingSent: {}",
+        Long ntpTime = NTP.getTime();
+        this.lastPingSent = (ntpTime != null) ? ntpTime : System.currentTimeMillis();
+        log.info("[{}] Enabling pings for peer {}, lastPingSent: {}",
                 peerLink.getDestination().getHexHash(), this.toString(), this.lastPingSent);
     }
 
@@ -1166,7 +1170,7 @@ public class ReticulumPeer implements Peer {
         // Not strictly true, but prevents this peer from being immediately chosen again
         this.lastPingSent = now;
 
-        log.debug("Ping ReticulumPeer {}", peerLink.getDestination().getHexHash());
+        log.info("[{}] Scheduling ping to {}", getPeerConnectionId(), peerLink.getDestination().getHexHash());
         return new ReticulumPingTask(this, now);
     }
 

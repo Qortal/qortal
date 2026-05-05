@@ -972,8 +972,11 @@ public class RNS {
                 }
                 if (pLink.getStatus() == PENDING) {
                     p.makePeerUnavailable();
-                    //p.shutdownChannel();
-                    pLink.teardown();
+                    try {
+                        pLink.teardown();
+                    } catch (Exception e) {
+                        log.warn("Exception tearing down PENDING link for {}: {}", p, e.getMessage());
+                    }
                     p.setIsPeerAvailable(false);
                     removeLinkedPeer(p);
                     continue;
@@ -994,9 +997,12 @@ public class RNS {
         for (ReticulumPeer p: inaps) {
             pLink = p.getPeerLink();
             if (nonNull(pLink)) {
-                // could be eg. PENDING
                 if (pLink.getStatus() != ACTIVE) {
-                    pLink.teardown();
+                    try {
+                        pLink.teardown();
+                    } catch (Exception e) {
+                        log.warn("Exception tearing down non-ACTIVE incoming link for {}: {}", p, e.getMessage());
+                    }
                 }
             }
             removeIncomingPeer(p);

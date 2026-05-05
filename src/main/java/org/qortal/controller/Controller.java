@@ -1011,14 +1011,16 @@ public class Controller extends Thread {
 				}
 
                 // Prune mesh peers
-				if (now >= pruneRNSPeersTimestamp + pruneRNSPeersInterval) {
+				if (now >= pruneRNSPeersTimestamp) {
 					pruneRNSPeersTimestamp = now + pruneRNSPeersInterval;
 
 					try {
 						LOGGER.debug("Pruning Reticulum peers...");
 						RNS.getInstance().prunePeers();
 					} catch (DataException e) {
-						LOGGER.warn(String.format("Repository issue when trying to prune Reticulum peers: %s", e.getMessage()));
+						LOGGER.warn("Repository issue when trying to prune Reticulum peers: {}", e.getMessage());
+					} catch (Exception e) {
+						LOGGER.error("Unexpected exception pruning Reticulum peers", e);
 					}
 				}
 
