@@ -1674,12 +1674,12 @@ public class Network {
     }
 
     public boolean connectPeer(Peer newPeer) throws InterruptedException {
-        // Also checked before creating PeerConnectTask
-        var iOHP = getImmutableHandshakedPeers().stream()
-                                                .filter(peer -> peer.getHandshakeStatus() == Handshake.COMPLETED
-                                                && peer.getPeerMetaType() == PeerMetaType.IP)
-                                                .collect(Collectors.toList());
-        if (iOHP.size() >= minOutboundPeers) {
+        // Count outbound IP peers only — Reticulum peers are in the outbound list too
+        // so we must filter by type, and we must count only outbound to match master semantics.
+        long outboundIPCount = getImmutableOutboundHandshakedPeers().stream()
+                .filter(peer -> peer.getPeerMetaType() == PeerMetaType.IP)
+                .count();
+        if (outboundIPCount >= minOutboundPeers) {
             return false;
         }
 

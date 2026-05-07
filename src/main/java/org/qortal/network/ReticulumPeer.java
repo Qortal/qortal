@@ -1300,12 +1300,13 @@ public class ReticulumPeer implements Peer {
      * legacy Peer compatibility
      */
     public Long getPeersVersion() {
-        // set to the highest value we can find in legacy stack
-        return 0x300060001L;
+        // Must be >= minPeerVersion (default "6.1.0" = 0x600010000L) so the
+        // Synchronizer's hasOldVersion predicate does not filter out Reticulum peers.
+        return 0x600010000L; // 6.1.0
     }
 
     public String getPeersVersionString() {
-        return "0x300060001L";
+        return "6.1.0";
     }
 
     public void setPeersVersion(String versionString, long version) {
