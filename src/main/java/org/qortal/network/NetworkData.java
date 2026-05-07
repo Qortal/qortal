@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import static java.util.Objects.nonNull;
 
 // For managing arbitrary data between peers
 public class NetworkData {
@@ -2344,7 +2345,7 @@ public class NetworkData {
         synchronized (this.allKnownPeers) {
             // if All Known Peers  already has this host. return;
             boolean alreadyKnown = allKnownPeers.stream()
-                    .anyMatch(pd -> pd.getAddress().getHost().equals(remoteHost));
+                    .anyMatch(pd -> nonNull(pd.getAddress()) && pd.getAddress().getHost().equals(remoteHost));
             if (alreadyKnown)
                 return;
 
