@@ -1014,7 +1014,7 @@ public class RNS {
         log.info("number of links (linkedPeers (active) / incomingPeers (active) after prunig: {} ({}), {} ({})",
                 initiatorPeerList.size(), getActiveImmutableLinkedPeers().size(),
                 incomingPeerList.size(), numActiveIncomingPeers);
-        maybeAnnounce(getBaseDestination(), RNSCommon.PeerAspect.BASE);
+        maybeAnnounce(this.baseDestination, RNSCommon.PeerAspect.BASE);
         //maybeAnnounce(getDataDestination(), RNSCommon.PeerAspect.DATA);
     }
 
@@ -1031,7 +1031,12 @@ public class RNS {
         }
         if ((corePeerCount <= MIN_DESIRED_CORE_PEERS) && (pa == RNSCommon.PeerAspect.BASE)) {
             log.info("Active core peers ({}) <= desired core peers ({}). Announcing", corePeerCount, MIN_DESIRED_CORE_PEERS);
-            d.announce();
+            if (nonNull(d)) {
+                d.announce();
+            } else {
+                // TODO: Shouldn't happen
+                log.error("Cannot announce - destination is null");
+            }
         }
         //if ((dataPeerCount <= MIN_DESIRED_DATA_PEERS) && (pa == RNSCommon.PeerAspect.DATA)) {
         //    log.info("Active qdn peers ({}) <= desired data peers ({}). Announcing", dataPeerCount, MIN_DESIRED_CORE_PEERS);

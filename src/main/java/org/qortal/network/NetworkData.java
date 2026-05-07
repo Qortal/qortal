@@ -1465,25 +1465,27 @@ public class NetworkData {
             return false;
         }
 
+        String peerAddress = newPeer.getPeerData().getAddress().toString();
+        LOGGER.info("[QDN] Attempting outbound connection to {}", peerAddress);
         SocketChannel socketChannel = newPeer.connect(Peer.NETWORKDATA);
         if (socketChannel == null) {
+            LOGGER.info("[QDN] Outbound connection failed to {} (TCP refused/timeout)", peerAddress);
             // Record outbound failure for reachability fallback
             try {
-                String peerAddress = newPeer.getPeerData().getAddress().toString();
-                
                 // Try to get nodeId from cache for more accurate tracking
                 String nodeId = null;
                 CachedNodeIdInfo cachedInfo = addressToNodeIdCache.get(peerAddress);
                 if (cachedInfo != null) {
                     nodeId = cachedInfo.nodeId;
                 }
-                
+
                 recordOutboundFailure(peerAddress, nodeId);
             } catch (Exception e) {
                 LOGGER.debug("Failed to record outbound failure: {}", e.getMessage());
             }
             return false;
         }
+        LOGGER.info("[QDN] TCP connected to {}, starting handshake", peerAddress);
 
         if (Thread.currentThread().isInterrupted()) {
             LOGGER.debug("Thread is interrupted");
@@ -1995,8 +1997,7 @@ public class NetworkData {
     }
     
     protected void onHandshakeCompleted(Peer peer) {
-        LOGGER.trace("[NetworkData: {}] Handshake completed with peer {} on {}", peer.getPeerConnectionId(), peer,
-                peer.getPeersVersionString());
+        LOGGER.info("[QDN] Handshake completed with peer {} (version {})", peer, peer.getPeersVersionString());
 
         // Clear any outbound failure records for this peer's IP since connection succeeded
         // Also update address→nodeId cache and clear direction mismatch for inbound
@@ -2322,7 +2323,7 @@ public class NetworkData {
         
         // Skip peers that don't advertise QDN capability
         if (qdnCapability == null) {
-            LOGGER.debug("Peer {} does not advertise QDN capability, skipping NetworkData registration", remoteHost);
+            LOGGER.info("[QDN] Peer {} has no QDN capability in HELLO_V2 — skipping", remoteHost);
             return;
         }
         
@@ -2370,7 +2371,7 @@ public class NetworkData {
                     "INIT");
             allKnownPeers.add(pd);
             
-            LOGGER.debug("Added QDN peer {} (port {}) from Network connection", remoteHost, remoteHostQDNPort);
+            LOGGER.info("[QDN] Registered peer {}:{} for data connections", remoteHost, remoteHostQDNPort);
             
             // CRITICAL FIX: Update cache to map QDN listen address to nodeId
             // This allows getConnectablePeer() to identify this peer even if we're
