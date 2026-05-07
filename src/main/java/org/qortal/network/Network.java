@@ -843,7 +843,7 @@ public class Network {
                             // Add this signature to the list of pending requests for this peer
                             LOGGER.debug("Making connection to peer {} to request files for signature {}...", peerAddressString, Base58.encode(signature));
                             //Peer peer = new Peer(peerData, Peer.NETWORK);
-                            Peer peer = PeerFactory.create("peer-data", peerData);
+                            Peer peer = PeerFactory.create("peer-data", peerData, Peer.NETWORK);
                             peer.setIsDataPeer(true);
                             peer.addPendingSignatureRequest(signature);
                             return this.connectPeer(peer);
@@ -1648,7 +1648,7 @@ public class Network {
 
             // Pick candidate
             PeerData peerData = peers.get(peerIndex);
-            Peer newPeer = PeerFactory.create("peer-data", Peer.NETWORK);
+            Peer newPeer = PeerFactory.create("peer-data", peerData, Peer.NETWORK);
             newPeer.setIsDataPeer(false);
 
             // Update connection attempt info
