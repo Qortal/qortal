@@ -2342,10 +2342,18 @@ public class NetworkData {
             return;
         }
 
+        if (remoteHostQDNPort == 0) {
+            LOGGER.debug("Peer {} advertises QDN disabled (port 0), skipping NetworkData registration", remoteHost);
+            return;
+        }
+
         synchronized (this.allKnownPeers) {
-            // if All Known Peers  already has this host. return;
+            // Deduplicate by host:port (not host-only) so multiple nodes on the same host
+            // (e.g. localhost test clusters) can each register their distinct QDN port.
             boolean alreadyKnown = allKnownPeers.stream()
-                    .anyMatch(pd -> nonNull(pd.getAddress()) && pd.getAddress().getHost().equals(remoteHost));
+                    .anyMatch(pd -> nonNull(pd.getAddress())
+                            && pd.getAddress().getHost().equals(remoteHost)
+                            && pd.getAddress().getPort() == remoteHostQDNPort);
             if (alreadyKnown)
                 return;
 

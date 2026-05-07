@@ -1533,13 +1533,6 @@ public class Network {
                 peers.removeIf(isSelfPeer);
             }
 
-            // Don't consider any non-IP peers (eg. ReticulumPeer)
-            Predicate<PeerData> isNotIPPeer = peerData -> {
-                PeerMetaType peerMetaType = peerData.getPeerMetaType();
-                return this.getImmutableConnectedPeers().stream().anyMatch(peer -> peerMetaType != PeerMetaType.IP);
-            };
-            peers.removeIf(isNotIPPeer);
-
             // CRITICAL FIX: Don't consider peers we're already connected to by nodeId
             // This handles cases where we have an inbound connection on an ephemeral port
             // but allKnownPeers has the listen port (common with peer discovery/persistence)
