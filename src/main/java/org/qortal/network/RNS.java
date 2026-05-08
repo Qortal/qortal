@@ -407,21 +407,24 @@ public class RNS {
     //}
 
     public void broadcast(Function<ReticulumPeer, Message> peerMessageBuilder) {
-        for (ReticulumPeer peer : getActiveImmutableLinkedPeers()) {
+        List<ReticulumPeer> allPeers = Stream.concat(
+                getActiveImmutableLinkedPeers().stream(),
+                getImmutableIncomingPeers().stream()
+                        .filter(p -> nonNull(p.getPeerLink()) && p.getPeerLink().getStatus() == ACTIVE)
+        ).collect(Collectors.toList());
+
+        for (ReticulumPeer peer : allPeers) {
             if (this.isShuttingDown) {
                 return;
             }
-    
+
             Message message = peerMessageBuilder.apply(peer);
-    
+
             if (message == null) {
                 continue;
             }
-    
-            var pl = peer.getPeerLink();
-            if (nonNull(pl) && (pl.getStatus() == ACTIVE)) {
-                peer.sendMessage(message);
-            }
+
+            peer.sendMessage(message);
         }
     }
 

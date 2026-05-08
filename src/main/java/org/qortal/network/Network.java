@@ -2557,6 +2557,10 @@ public class Network {
                     ? latestBlockSummariesMessage
                     : heightMessage
             );
+
+            // Reticulum peers bypass PeerSendManager (no TCP socket); broadcast directly.
+            final Message rnsMessage = latestBlockSummariesMessage;
+            RNS.getInstance().broadcast(reticulumPeer -> rnsMessage);
         } catch (DataException e) {
             LOGGER.warn("Couldn't broadcast our chain tip info", e);
         }
@@ -2971,6 +2975,10 @@ public class Network {
         for (Peer peer : getImmutableHandshakedPeers()) {
             if (this.isShuttingDown)
                 return;
+
+            // Reticulum peers have no TCP socket — skip PeerSendManager; RNS.broadcast() handles them.
+            if (peer.hasActivePeerLink())
+                continue;
 
             Message message = peerMessageBuilder.apply(peer);
 
