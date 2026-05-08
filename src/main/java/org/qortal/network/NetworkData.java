@@ -1277,7 +1277,7 @@ public class NetworkData {
 
                             int qdnPort;
                             if (qdnCapability == null) {
-                                qdnPort = Settings.getInstance().getQDNListenPort();
+                                qdnPort = Settings.getInstance().getDefaultQDNListenPort();
                             } else {
                                 try {
                                     if (qdnCapability instanceof Integer) {
@@ -2337,7 +2337,7 @@ public class NetworkData {
         // Determine QDN port: use capability if advertised, else assume default (pre-HELLO_V2 mainnet nodes)
         int remoteHostQDNPort;
         if (qdnCapability == null) {
-            remoteHostQDNPort = Settings.getInstance().getQDNListenPort();
+            remoteHostQDNPort = Settings.getInstance().getDefaultQDNListenPort();
             LOGGER.debug("[QDN] Peer {} has no QDN capability (pre-HELLO_V2), assuming default port {}", remoteHost, remoteHostQDNPort);
         } else {
             try {
