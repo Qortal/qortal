@@ -1264,31 +1264,33 @@ public class NetworkData {
                         String addedBy = "Network-fallback";
                         int peersAdded = 0;
                         
-                        // Only use peers that advertise QDN capability
+                        // Add all handshaked Network peers using their advertised QDN port,
+                        // or the default QDN port for pre-HELLO_V2 peers that don't advertise one.
                         for (Peer networkPeer : connectedNetworkPeers) {
                             Object qdnCapability = networkPeer.getPeerCapability("QDN");
-                            
-                            // Skip peers without QDN capability
-                            if (qdnCapability == null) {
-                                continue;
-                            }
-                            
-                            // Get the actual QDN port from peer's capability
+
                             int qdnPort;
-                            try {
-                                if (qdnCapability instanceof Integer) {
-                                    qdnPort = (Integer) qdnCapability;
-                                } else if (qdnCapability instanceof Long) {
-                                    qdnPort = ((Long) qdnCapability).intValue();
-                                } else {
-                                    LOGGER.debug("Peer {} has invalid QDN capability type: {}", 
-                                            networkPeer.getPeerData().getAddress(), qdnCapability.getClass());
+                            if (qdnCapability == null) {
+                                qdnPort = Settings.getInstance().getQDNListenPort();
+                            } else {
+                                try {
+                                    if (qdnCapability instanceof Integer) {
+                                        qdnPort = (Integer) qdnCapability;
+                                    } else if (qdnCapability instanceof Long) {
+                                        qdnPort = ((Long) qdnCapability).intValue();
+                                    } else {
+                                        LOGGER.debug("Peer {} has invalid QDN capability type: {}",
+                                                networkPeer.getPeerData().getAddress(), qdnCapability.getClass());
+                                        continue;
+                                    }
+                                } catch (Exception e) {
+                                    LOGGER.debug("Failed to parse QDN port for peer {}: {}",
+                                            networkPeer.getPeerData().getAddress(), e.getMessage());
                                     continue;
                                 }
-                            } catch (Exception e) {
-                                LOGGER.debug("Failed to parse QDN port for peer {}: {}", 
-                                        networkPeer.getPeerData().getAddress(), e.getMessage());
-                                continue;
+                                if (qdnPort == 0) {
+                                    continue;
+                                }
                             }
                             
                             String host = networkPeer.getPeerData().getAddress().getHost();
@@ -2326,31 +2328,29 @@ public class NetworkData {
         String remoteHost = p.getPeerData().getAddress().getHost();
         Object qdnCapability = p.getPeerCapability("QDN");
         
-        // Skip peers that don't advertise QDN capability
-        if (qdnCapability == null) {
-            LOGGER.info("[QDN] Peer {} has no QDN capability in HELLO_V2 — skipping", remoteHost);
-            return;
-        }
-        
-        // Parse QDN port from capability (handle both Integer and Long types)
+        // Determine QDN port: use capability if advertised, else assume default (pre-HELLO_V2 mainnet nodes)
         int remoteHostQDNPort;
-        try {
-            if (qdnCapability instanceof Integer) {
-                remoteHostQDNPort = (Integer) qdnCapability;
-            } else if (qdnCapability instanceof Long) {
-                remoteHostQDNPort = ((Long) qdnCapability).intValue();
-            } else {
-                LOGGER.warn("Peer {} has invalid QDN capability type: {}, skipping", remoteHost, qdnCapability.getClass());
+        if (qdnCapability == null) {
+            remoteHostQDNPort = Settings.getInstance().getQDNListenPort();
+            LOGGER.debug("[QDN] Peer {} has no QDN capability (pre-HELLO_V2), assuming default port {}", remoteHost, remoteHostQDNPort);
+        } else {
+            try {
+                if (qdnCapability instanceof Integer) {
+                    remoteHostQDNPort = (Integer) qdnCapability;
+                } else if (qdnCapability instanceof Long) {
+                    remoteHostQDNPort = ((Long) qdnCapability).intValue();
+                } else {
+                    LOGGER.warn("Peer {} has invalid QDN capability type: {}, skipping", remoteHost, qdnCapability.getClass());
+                    return;
+                }
+            } catch (Exception e) {
+                LOGGER.warn("Failed to parse QDN capability for peer {}: {}", remoteHost, e.getMessage());
                 return;
             }
-        } catch (Exception e) {
-            LOGGER.warn("Failed to parse QDN capability for peer {}: {}", remoteHost, e.getMessage());
-            return;
-        }
-
-        if (remoteHostQDNPort == 0) {
-            LOGGER.debug("Peer {} advertises QDN disabled (port 0), skipping NetworkData registration", remoteHost);
-            return;
+            if (remoteHostQDNPort == 0) {
+                LOGGER.debug("Peer {} advertises QDN disabled (port 0), skipping NetworkData registration", remoteHost);
+                return;
+            }
         }
 
         synchronized (this.allKnownPeers) {
