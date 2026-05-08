@@ -1353,15 +1353,14 @@ public class NetworkData {
                 .collect(Collectors.toList());
         }
 
-        peers.removeIf(peerData -> peerData.getLastAttempted() != null
-            && (peerData.getLastConnected() == null ));
-        LOGGER.info("[QDN] after attempted-not-connected filter: {} remain", peers.size());
-
+        // Remove peers attempted recently (within backoff window) that haven't yet successfully connected.
+        // "Recently attempted and not connected" = either never connected, or last attempt was after last connection.
+        // Peers attempted long ago (outside the backoff window) are eligible for retry.
         peers.removeIf(peerData ->
             peerData.getLastAttempted() != null
-            && peerData.getLastConnected() != null
-            && peerData.getLastConnected() < peerData.getLastAttempted()
-            && peerData.getLastAttempted() > lastAttemptedThreshold);
+            && peerData.getLastAttempted() > lastAttemptedThreshold
+            && (peerData.getLastConnected() == null
+                || peerData.getLastConnected() < peerData.getLastAttempted()));
         LOGGER.info("[QDN] after backoff filter: {} remain", peers.size());
 
         // Don't consider peers that we know loop back to self
@@ -2370,9 +2369,9 @@ public class NetworkData {
             PeerAddress pa = PeerAddress.fromString(target);
             PeerData pd = new PeerData(
                     pa,
-                    0L,
-                    0L,
-                    0L,
+                    null,
+                    null,
+                    null,
                     System.currentTimeMillis(),
                     "INIT");
             allKnownPeers.add(pd);

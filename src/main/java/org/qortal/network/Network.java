@@ -2385,6 +2385,8 @@ public class Network {
         // Push to NetworkData for ALL peers (inbound or outbound)
         // We want to discover all QDN-capable peers regardless of who initiated Network connection
         // Duplicate detection and direction invariant enforcement handle any race conditions
+        LOGGER.info("[QDN] onHandshakeCompleted: peer={} version={} outbound={} isAtLeastV6={}",
+                peer, peer.getPeersVersionString(), peer.isOutbound(), peer.isAtLeastVersion("6.0.0"));
         if (peer.isAtLeastVersion("6.0.0"))
             NetworkData.getInstance().addPeer(peer);
 
