@@ -1009,7 +1009,6 @@ public class NetworkData {
                             }
                         });
                     } catch (java.util.concurrent.RejectedExecutionException e) {
-                        // Worker pool is full or shutting down - skip this task
                         LOGGER.debug("NetworkData worker pool rejected scheduler task (pool full or shutting down)");
                     }
                 } else {
@@ -1018,6 +1017,13 @@ public class NetworkData {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
+            } catch (Exception e) {
+                LOGGER.error("NetworkData scheduler loop caught unexpected exception — continuing", e);
+                // Don't die; sleep briefly and retry
+                try { Thread.sleep(100); } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
             }
         }
         LOGGER.debug("NetworkData scheduler loop exiting");
