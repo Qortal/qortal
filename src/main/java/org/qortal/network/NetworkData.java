@@ -1248,7 +1248,9 @@ public class NetworkData {
 
     private Peer getConnectablePeer(final Long now) throws InterruptedException {
         List<PeerData> peers = this.getAllKnownPeers();
-            
+        LOGGER.info("[QDN] getConnectablePeer start: {} known, {} outbound handshaked",
+                peers.size(), getImmutableOutboundHandshakedPeers().size());
+
         // Fallback: If NetworkData has no peers, try to get peers from Network
         // Only use peers that actually advertise QDN capability
         if (peers.isEmpty()) {
@@ -1353,20 +1355,24 @@ public class NetworkData {
 
         peers.removeIf(peerData -> peerData.getLastAttempted() != null
             && (peerData.getLastConnected() == null ));
+        LOGGER.info("[QDN] after attempted-not-connected filter: {} remain", peers.size());
 
         peers.removeIf(peerData ->
             peerData.getLastAttempted() != null
             && peerData.getLastConnected() != null
             && peerData.getLastConnected() < peerData.getLastAttempted()
             && peerData.getLastAttempted() > lastAttemptedThreshold);
+        LOGGER.info("[QDN] after backoff filter: {} remain", peers.size());
 
         // Don't consider peers that we know loop back to self
         synchronized (this.selfPeers) {
             peers.removeIf(isSelfPeer);
         }
+        LOGGER.info("[QDN] after self filter: {} remain", peers.size());
 
         // Don't consider already connected peers (simple address match)
         peers.removeIf(isConnectedPeer);
+        LOGGER.info("[QDN] after connected filter: {} remain", peers.size());
 
         // Don't consider peers we're already connected to by nodeId
         // This handles cases where we have an inbound connection on an ephemeral port
