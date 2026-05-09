@@ -121,7 +121,7 @@ public class ReticulumPeer implements Peer {
     @Setter(AccessLevel.PACKAGE) private Boolean peerTimedOut = false;
 
     // for qortal networking
-    private static final int RESPONSE_TIMEOUT = 3000; // [ms]
+    private static final int RESPONSE_TIMEOUT = 10_000; // [ms]
     ///**
     // * Maximum time to wait for a message to be added to sendQueue (ms)
     // */
@@ -546,6 +546,8 @@ public class ReticulumPeer implements Peer {
         // because the peer isn't yet in the Network lists to receive any requests).
         if (Boolean.TRUE.equals(isInitiator)) {
             getOrInitPeerBuffer();
+            // Arm the ping timer: schedule first ping one interval from now.
+            this.lastPingSent = ntpNow;
         }
     }
     

@@ -366,6 +366,7 @@ public class RNS {
                             })
             ).collect(Collectors.toList());
 
+            final Long now = NTP.getTime();
             for (ReticulumPeer peer : peersThisRound) {
                 ExecuteProduceConsume.Task task;
                 while ((task = peer.getMessageTask(Peer.NETWORK)) != null) {
@@ -384,6 +385,25 @@ public class RNS {
                         log.warn("[{}] Reticulum worker pool rejected message task (pool full or shutting down)",
                                 peer.getPeerConnectionId());
                         break;
+                    }
+                }
+
+                // Send keepalive ping if due (initiator peers only, every 55s)
+                ExecuteProduceConsume.Task pingTask = peer.getPingTask(now);
+                if (pingTask != null) {
+                    final ExecuteProduceConsume.Task pt = pingTask;
+                    try {
+                        rnsWorkerPool.execute(() -> {
+                            try {
+                                pt.perform();
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            } catch (Exception e) {
+                                log.warn("Reticulum ping task threw: {}", e.getMessage(), e);
+                            }
+                        });
+                    } catch (java.util.concurrent.RejectedExecutionException e) {
+                        log.warn("[{}] Reticulum worker pool rejected ping task", peer.getPeerConnectionId());
                     }
                 }
             }
@@ -1017,7 +1037,7 @@ public class RNS {
         log.info("number of links (linkedPeers (active) / incomingPeers (active) after prunig: {} ({}), {} ({})",
                 initiatorPeerList.size(), getActiveImmutableLinkedPeers().size(),
                 incomingPeerList.size(), numActiveIncomingPeers);
-        maybeAnnounce(this.baseDestination, RNSCommon.PeerAspect.BASE);
+        maybeAnnounce(getBaseDestination(), RNSCommon.PeerAspect.BASE);
         //maybeAnnounce(getDataDestination(), RNSCommon.PeerAspect.DATA);
     }
 
