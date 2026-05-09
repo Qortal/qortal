@@ -64,6 +64,7 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 import java.io.File;
 import java.util.*;
+import java.util.HashSet;
 //import java.util.Random;
 //import java.util.Scanner;
 import java.util.concurrent.TimeUnit;
@@ -124,6 +125,11 @@ public class RNS {
     public Destination baseDestination;
     public Destination dataDestination;
     private volatile boolean isShuttingDown = false;
+    private volatile boolean meshStarted = false;
+
+    // Destination hashes of all peers we have ever initiated a link to.
+    // Retained across peer removal so we can request fresh paths after reconnect.
+    private final Set<String> knownPeerHashes = Collections.synchronizedSet(new HashSet<>());
 
     /**
      * Maintain two lists for each subset of peers
@@ -273,6 +279,13 @@ public class RNS {
         //this.rnsDataThread = new Thread(this::runDataLoop, "rnsMesh-DATA");
         //this.rnsDataThread.setDaemon(false);
         //this.rnsDataThread.start();
+
+        this.meshStarted = true;
+        log.info("RNS mesh started, baseDestination: {}", encodeHexString(baseDestination.getHash()));
+    }
+
+    public boolean isMeshStarted() {
+        return meshStarted;
     }
 
     private void initConfig(String configDir) throws IOException {
@@ -655,7 +668,11 @@ public class RNS {
                                     encodeHexString(p.getPeerLink().getLinkId()), p.getPeerLink().getStatus());
                         }
                         peerExists = true;
-                        if (nonNull(p.getPeerLink()) && (p.getPeerLink().getStatus() != ACTIVE)) {
+                        if (nonNull(p.getPeerLink()) && (p.getPeerLink().getStatus() == CLOSED)) {
+                            // Only re-initiate for CLOSED links. PENDING links are already
+                            // connecting — creating a second link would race with the first
+                            // and the first's TIMEOUT callback would set peerTimedOut=true,
+                            // poisoning the peer and triggering premature pruning.
                             p.getOrInitPeerLink();
                         }
                         break;
@@ -840,6 +857,8 @@ public class RNS {
     public void addLinkedPeer(ReticulumPeer peer) {
         this.linkedPeers.add(peer);
         this.immutableLinkedPeers = List.copyOf(this.linkedPeers); // thread safe
+        // Remember hash for path recovery after backbone reconnect
+        this.knownPeerHashes.add(encodeHexString(peer.getDestinationHash()));
         //// Note: moved to ReticulumPeer linkEstablished
         //var network = Network.getInstance();
         //network.addConnectedPeer(peer);
@@ -994,14 +1013,9 @@ public class RNS {
                     continue;
                 }
                 if (pLink.getStatus() == PENDING) {
-                    p.makePeerUnavailable();
-                    try {
-                        pLink.teardown();
-                    } catch (Exception e) {
-                        log.warn("Exception tearing down PENDING link for {}: {}", p, e.getMessage());
-                    }
-                    p.setIsPeerAvailable(false);
-                    removeLinkedPeer(p);
+                    // Leave PENDING links alone — they will either establish (ACTIVE)
+                    // or time out (CLOSED) naturally. Tearing them down here races
+                    // with QAnnounceHandler and prevents reconnection.
                     continue;
                 }
             }
@@ -1039,6 +1053,28 @@ public class RNS {
                 incomingPeerList.size(), numActiveIncomingPeers);
         maybeAnnounce(getBaseDestination(), RNSCommon.PeerAspect.BASE);
         //maybeAnnounce(getDataDestination(), RNSCommon.PeerAspect.DATA);
+
+        // If we have no active linked peers but know peer hashes from previous connections,
+        // request fresh paths to them. This recovers from backbone reconnects that clear
+        // the routing table, which would otherwise leave the node stuck at 0/0.
+        List<ReticulumPeer> currentLinked = getImmutableLinkedPeers();
+        int currentActiveLinked = getActiveImmutableLinkedPeers().size();
+        if (currentActiveLinked == 0 && !knownPeerHashes.isEmpty()) {
+            log.info("No active linked peers; requesting paths to {} previously known peers", knownPeerHashes.size());
+            for (String hashHex : knownPeerHashes) {
+                try {
+                    byte[] dhash = org.apache.commons.codec.binary.Hex.decodeHex(hashHex);
+                    boolean alreadyTracked = currentLinked.stream()
+                            .anyMatch(p -> Arrays.equals(p.getDestinationHash(), dhash));
+                    if (!alreadyTracked) {
+                        Transport.getInstance().requestPath(dhash);
+                        log.debug("Requested path to known peer {}", hashHex);
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to request path to {}: {}", hashHex, e.getMessage());
+                }
+            }
+        }
     }
 
     public void maybeAnnounce(Destination d, RNSCommon.PeerAspect pa) {

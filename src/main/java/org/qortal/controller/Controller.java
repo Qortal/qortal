@@ -136,7 +136,7 @@ public class Controller extends Thread {
 	private long repositoryMaintenanceTimestamp = startTime; // ms
 	private long repositoryCheckpointTimestamp = startTime; // ms
 	private long prunePeersTimestamp = startTime + 120000; // ms
-  private long pruneRNSPeersTimestamp = startTime + 60000; // ms
+  private long pruneRNSPeersTimestamp = startTime + 120000; // ms - allow backbone to connect before first prune
 	private long ntpCheckTimestamp = startTime; // ms
 	private long deleteExpiredTimestamp = startTime + DELETE_EXPIRED_INTERVAL; // ms
 
@@ -1015,8 +1015,13 @@ public class Controller extends Thread {
 					pruneRNSPeersTimestamp = now + pruneRNSPeersInterval;
 
 					try {
-						LOGGER.debug("Pruning Reticulum peers...");
-						RNS.getInstance().prunePeers();
+						RNS rns = RNS.getInstance();
+						if (rns.isMeshStarted()) {
+							LOGGER.debug("Pruning Reticulum peers...");
+							rns.prunePeers();
+						} else {
+							LOGGER.debug("Skipping Reticulum prune — mesh not yet started");
+						}
 					} catch (DataException e) {
 						LOGGER.warn("Repository issue when trying to prune Reticulum peers: {}", e.getMessage());
 					} catch (Exception e) {
