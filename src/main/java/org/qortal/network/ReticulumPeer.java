@@ -372,6 +372,13 @@ public class ReticulumPeer implements Peer {
             channel.shutdown();
             this.channel = null;
         }
+        // Null out peerBuffer so GC can collect it. Do NOT call peerBuffer.close() here
+        // or anywhere else: reader.close() → removeMessageHandler() holds Reader.lock then
+        // waits for synchronized(channel), while Channel.receive() → runCallbacks() →
+        // handleMessage() holds synchronized(channel) and waits for Reader.lock — deadlock.
+        // channel.shutdown() already removes all message handlers from the Channel; the
+        // reader/writer objects will be collected when the peer is removed from linkedPeers.
+        this.peerBuffer = null;
     }
 
     public BufferedRWPair getOrInitPeerBuffer() {
@@ -396,14 +403,9 @@ public class ReticulumPeer implements Peer {
                 }
             } catch (IllegalStateException e) {
                 // Exception thrown by Reticulum if the buffer is unusable (Channel, Link, etc)
-                // This is a chance to correct links status when doing a ReticulumPingTask
                 log.warn("can't establish Channel/Buffer (remote peer down?), closing link: {}");
-                ////shutdownChannel();
-                this.peerBuffer.close();
+                shutdownChannel();  // clears channel callbacks and nulls peerBuffer; no close() to avoid deadlock
                 //this.peerLink.teardown();
-                //log.error("(handled) IllegalStateException - can't establish Channel/Buffer: {}", e);
-                //network.removeOutboundHandshakedPeer(this);
-                //network.removeConnectedPeer(this);
                 this.peerData.setLastAttempted(ntpNow);
                 this.peerData.setLastMisbehaved(ntpNow);
             }
@@ -595,10 +597,7 @@ public class ReticulumPeer implements Peer {
             }
             if (Arrays.equals(destinationHash, targetPeerHash)) {
                 log.info("closing link: {}", peerLink.getDestination().getHexHash());
-                if (nonNull(this.peerBuffer)) {
-                    shutdownChannel();
-                    this.peerBuffer.close();
-                }
+                shutdownChannel();
                 //this.peerLink.teardown();
             }
             // Link status CLOSED means network ignores it until pruned
@@ -621,8 +620,12 @@ public class ReticulumPeer implements Peer {
      * :param readyBytes: The number of bytes ready to read
      */
     public void peerBufferReady(Integer readyBytes) {
+        // Capture peerBuffer locally — shutdownChannel() can null it from another thread
+        // (listener threads are started asynchronously by handleMessage() → new Thread(...))
+        var buf = this.peerBuffer;
+        if (buf == null) return;
         // get the message data
-        byte[] data = this.peerBuffer.read(readyBytes);
+        byte[] data = buf.read(readyBytes);
         ByteBuffer bb = ByteBuffer.wrap(data);
         //log.info("data length: {}, MAGIC: {}, data: {}, ByteBuffer: {}", data.length, this.messageMagic, data, bb);
         //log.info("data length: {}, MAGIC: {}, ByteBuffer: {}", data.length, this.messageMagic, bb);
@@ -882,12 +885,13 @@ public class ReticulumPeer implements Peer {
     // Note: This keeps Buffer,Channel and Link alive and from timing out.
     private void onPingMessage(ReticulumPeer peer, Message message) {
         PingMessage pingMessage = (PingMessage) message;
-    
+        var buf = this.peerBuffer;
+        if (buf == null) return;
         try {
             PongMessage pongMessage = new PongMessage();
             pongMessage.setId(message.getId());  // use the ping message id (for ping getResponse)
-            this.peerBuffer.write(pongMessage.toBytes());
-            this.peerBuffer.flush();
+            buf.write(pongMessage.toBytes());
+            buf.flush();
             this.lastAccessTimestamp = Instant.now();
             setLastPingSent(Instant.now().toEpochMilli());
         } catch (MessageException e) {

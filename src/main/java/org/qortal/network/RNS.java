@@ -883,10 +883,7 @@ public class RNS {
     //}
 
     public void removeLinkedPeer(ReticulumPeer peer) {
-        if (nonNull(peer.getPeerBuffer())) {
-            peer.shutdownChannel();
-            peer.getPeerBuffer().close();
-        }
+        peer.shutdownChannel(); // clears channel + nulls peerBuffer; no close() to avoid deadlock
         this.linkedPeers.remove(peer); // single synchronized operation on the list
         this.immutableLinkedPeers = List.copyOf(this.linkedPeers);
         //var network = Network.getInstance();
@@ -909,10 +906,7 @@ public class RNS {
     }
 
     public void removeIncomingPeer(ReticulumPeer peer) {
-        if (nonNull(peer.getPeerBuffer())) {
-            peer.shutdownChannel();
-            peer.getPeerBuffer().close();
-        }
+        peer.shutdownChannel(); // clears channel + nulls peerBuffer; no close() to avoid deadlock
         this.incomingPeers.remove(peer); // single synchronized operation on the list
         this.immutableIncomingPeers = List.copyOf(this.incomingPeers);
     }
