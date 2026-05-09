@@ -1013,9 +1013,24 @@ public class RNS {
                     continue;
                 }
                 if (pLink.getStatus() == PENDING) {
-                    // Leave PENDING links alone — they will either establish (ACTIVE)
-                    // or time out (CLOSED) naturally. Tearing them down here races
-                    // with QAnnounceHandler and prevents reconnection.
+                    // Give PENDING links 60s to establish before removing them.
+                    // Removing too early races with QAnnounceHandler (which creates a
+                    // new link and then finds peerTimedOut=true from the old teardown).
+                    // Keeping them forever blocks QAnnounceHandler (peerExists=true,
+                    // status != CLOSED, so the announce is silently ignored).
+                    long pendingSeconds = java.time.Duration.between(
+                            p.getCreationTimestamp(), Instant.now()).getSeconds();
+                    if (pendingSeconds > 60) {
+                        log.info("Removing PENDING link stuck for {}s: {}", pendingSeconds, p);
+                        p.makePeerUnavailable();
+                        try {
+                            pLink.teardown();
+                        } catch (Exception e) {
+                            log.warn("Exception tearing down stuck PENDING link: {}", e.getMessage());
+                        }
+                        p.setIsPeerAvailable(false);
+                        removeLinkedPeer(p);
+                    }
                     continue;
                 }
             }
