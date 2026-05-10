@@ -695,6 +695,8 @@ public class Settings {
 	private boolean reticulumUsePythonRNS = false;
 	/** Specify the port if reticulumUsePythonRNS=true and rnsd has a TCPServerInterface */
 	private int reticulumPythonRNSGatewayPort = 4242;
+	/** Shared IFAC passphrase for backbone interface isolation. Empty string = no passphrase. */
+	private String reticulumPassphrase = "";
 
 	// Constructors
 
@@ -1572,6 +1574,8 @@ public class Settings {
 	public boolean getReticulumUsePythonRNS() { return this.reticulumUsePythonRNS; }
 
 	public int getReticulumPythonRNSGatewayPort() { return this.reticulumPythonRNSGatewayPort; }
+
+	public String getReticulumPassphrase() { return this.reticulumPassphrase; }
 
 	public int getBuildArbitraryResourcesBatchSize() {
 		return buildArbitraryResourcesBatchSize;

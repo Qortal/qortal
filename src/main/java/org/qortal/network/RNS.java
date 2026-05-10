@@ -346,6 +346,7 @@ public class RNS {
                 //context.put("is_test_net", Settings.getInstance().isTestNet() ? "true" : "false");
                 context.put("use_python_rns", Settings.getInstance().getReticulumUsePythonRNS() ? "true" : "false");
                 context.put("python_rns_if_port", Settings.getInstance().getReticulumPythonRNSGatewayPort());
+                context.put("passphrase", Settings.getInstance().getReticulumPassphrase());
 
                 // render config.yml from template
                 log.info("Rendering new Reticulum configuration file from resource {}", RNSCommon.jinjaConfigTemplateName  );
@@ -707,7 +708,10 @@ public class RNS {
             // compare; skip announces that belong to other apps/aspects.
             var expectedHash = hashFromNameAndIdentity(this.aspectFilter, announcedIdentity);
             if (!Arrays.equals(destinationHash, expectedHash)) {
-                log.debug("Announce hash mismatch — not a {} announce, skipping", this.aspectFilter);
+                log.info("Announce hash mismatch — identity={}, dest={}, expected={}",
+                        announcedIdentity != null ? encodeHexString(announcedIdentity.getHash()) : "null",
+                        encodeHexString(destinationHash),
+                        encodeHexString(expectedHash));
                 return;
             }
 
