@@ -456,7 +456,7 @@ public class RNS {
                         }
                     }
                 } catch (Exception e) {
-                    log.warn("Exception in base loop announce/path-recovery: {}", e.getMessage());
+                    log.warn("Exception in base loop announce/path-recovery: {}", e.getMessage(), e);
                 }
             }
 
