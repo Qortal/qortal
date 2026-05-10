@@ -368,16 +368,13 @@ public class ReticulumPeer implements Peer {
     }
 
     public void shutdownChannel() {
-        if (nonNull(channel)) {
-            channel.shutdown();
-            this.channel = null;
-        }
-        // Null out peerBuffer so GC can collect it. Do NOT call peerBuffer.close() here
-        // or anywhere else: reader.close() → removeMessageHandler() holds Reader.lock then
-        // waits for synchronized(channel), while Channel.receive() → runCallbacks() →
-        // handleMessage() holds synchronized(channel) and waits for Reader.lock — deadlock.
-        // channel.shutdown() already removes all message handlers from the Channel; the
-        // reader/writer objects will be collected when the peer is removed from linkedPeers.
+        // Do NOT call channel.shutdown() — it deadlocks with Channel.receive():
+        //   shutdown()  acquires synchronized(channel) first, then lock
+        //   receive()   acquires lock first, then synchronized(channel) via runCallbacks()
+        // Inverted lock order → ABBA deadlock between rnsWorkerPool and Reticulum receive thread.
+        // The Reticulum library cleans up the Channel when the Link closes; we just drop our
+        // references. peerBufferReady() has a null guard to safely ignore any late callbacks.
+        this.channel = null;
         this.peerBuffer = null;
     }
 
