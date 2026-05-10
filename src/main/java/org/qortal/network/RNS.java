@@ -165,6 +165,13 @@ public class RNS {
      */
     private static final long LINK_PING_INTERVAL = 55 * 1000L; // ms
     private static final long LINK_UNREACHABLE_TIMEOUT = 3 * LINK_PING_INTERVAL;
+    /**
+     * How often runBaseLoop() triggers maybeAnnounce() and path recovery, independent
+     * of prunePeers(). This ensures announces fire even when the Controller scheduler is
+     * slow/blocked (e.g., prunePeers() waiting on a lock inside the Reticulum library).
+     */
+    private static final long BASE_LOOP_ANNOUNCE_INTERVAL_MS = 30_000L; // 30 seconds
+    private long lastBaseLoopAnnounceMs = 0;
 
     //private static final Logger logger = LoggerFactory.getLogger(RNS.class);
     
@@ -418,6 +425,38 @@ public class RNS {
                     } catch (java.util.concurrent.RejectedExecutionException e) {
                         log.warn("[{}] Reticulum worker pool rejected ping task", peer.getPeerConnectionId());
                     }
+                }
+            }
+
+            // Periodic announce + path recovery — runs here in runBaseLoop so it fires
+            // independently of prunePeers() in the Controller scheduler. This keeps
+            // announces flowing even when prunePeers() is slow due to Reticulum library
+            // lock contention, preventing the long 0/0 recovery gaps.
+            long nowMs = System.currentTimeMillis();
+            if (nowMs - lastBaseLoopAnnounceMs >= BASE_LOOP_ANNOUNCE_INTERVAL_MS) {
+                lastBaseLoopAnnounceMs = nowMs;
+                try {
+                    maybeAnnounce(getBaseDestination(), RNSCommon.PeerAspect.BASE);
+                    // Path recovery: if no active linked peers, ask backbone for fresh routes
+                    List<ReticulumPeer> currentLinked = getImmutableLinkedPeers();
+                    if (getActiveImmutableLinkedPeers().isEmpty() && !knownPeerHashes.isEmpty()) {
+                        log.info("No active linked peers (base loop); requesting paths to {} known peers",
+                                knownPeerHashes.size());
+                        for (String hashHex : knownPeerHashes) {
+                            try {
+                                byte[] dhash = org.apache.commons.codec.binary.Hex.decodeHex(hashHex);
+                                boolean tracked = currentLinked.stream()
+                                        .anyMatch(p -> Arrays.equals(p.getDestinationHash(), dhash));
+                                if (!tracked) {
+                                    Transport.getInstance().requestPath(dhash);
+                                }
+                            } catch (Exception e) {
+                                log.warn("Path request failed for {}: {}", hashHex, e.getMessage());
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("Exception in base loop announce/path-recovery: {}", e.getMessage());
                 }
             }
 
@@ -1017,11 +1056,10 @@ public class RNS {
                     if (pendingSeconds > 60) {
                         log.info("Removing PENDING link stuck for {}s: {}", pendingSeconds, p);
                         p.makePeerUnavailable();
-                        try {
-                            pLink.teardown();
-                        } catch (Exception e) {
-                            log.warn("Exception tearing down stuck PENDING link: {}", e.getMessage());
-                        }
+                        // Don't call pLink.teardown() — it acquires synchronized(link) which
+                        // can block the Controller scheduler if the Reticulum library is
+                        // processing on this link. The library's own keepalive/watchdog cleans
+                        // up stale PENDING links on its own schedule.
                         p.setIsPeerAvailable(false);
                         removeLinkedPeer(p);
                     }
@@ -1041,16 +1079,9 @@ public class RNS {
         //    }
         //}
         for (ReticulumPeer p: inaps) {
-            pLink = p.getPeerLink();
-            if (nonNull(pLink)) {
-                if (pLink.getStatus() != ACTIVE) {
-                    try {
-                        pLink.teardown();
-                    } catch (Exception e) {
-                        log.warn("Exception tearing down non-ACTIVE incoming link for {}: {}", p, e.getMessage());
-                    }
-                }
-            }
+            // Don't call pLink.teardown() — synchronized(link) can block the Controller
+            // scheduler if the Reticulum library is processing on this link. The library
+            // handles non-active link cleanup via its own keepalive/watchdog mechanism.
             removeIncomingPeer(p);
         }
         initiatorPeerList = getImmutableLinkedPeers();
