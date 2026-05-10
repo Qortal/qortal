@@ -270,7 +270,7 @@ public class RNS {
         log.debug("announceHandlers: {}", Transport.getInstance().getAnnounceHandlers());
         // do a first announce (across all configured interfaces)
         baseDestination.announce();
-        log.debug("Sent initial announce from {} ({})", encodeHexString(baseDestination.getHash()), baseDestination.getName());
+        log.info("Sent initial announce from {} ({})", encodeHexString(baseDestination.getHash()), baseDestination.getName());
         // announce QDN destination (across all configured interfaces)
         //dataDestination.announce();
         //log.debug("Sent initial announce from {} ({})", encodeHexString(dataDestination.getHash()), dataDestination.getName());
@@ -1129,11 +1129,12 @@ public class RNS {
             }
         }
         if ((corePeerCount <= MIN_DESIRED_CORE_PEERS) && (pa == RNSCommon.PeerAspect.BASE)) {
-            log.info("Active core peers ({}) <= desired core peers ({}). Announcing", corePeerCount, MIN_DESIRED_CORE_PEERS);
+            log.info("Active core peers ({}) <= desired core peers ({}). Announcing (dest={})",
+                    corePeerCount, MIN_DESIRED_CORE_PEERS, d != null ? encodeHexString(d.getHash()) : "null");
             if (nonNull(d)) {
                 d.announce();
+                log.info("Announce sent successfully");
             } else {
-                // TODO: Shouldn't happen
                 log.error("Cannot announce - destination is null");
             }
         }

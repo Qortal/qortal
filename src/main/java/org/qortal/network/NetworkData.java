@@ -1254,7 +1254,7 @@ public class NetworkData {
 
     private Peer getConnectablePeer(final Long now) throws InterruptedException {
         List<PeerData> peers = this.getAllKnownPeers();
-        LOGGER.info("[QDN] getConnectablePeer start: {} known, {} outbound handshaked",
+        LOGGER.debug("[QDN] getConnectablePeer start: {} known, {} outbound handshaked",
                 peers.size(), getImmutableOutboundHandshakedPeers().size());
 
         // Fallback: If NetworkData has no peers, try to get peers from Network
@@ -1369,17 +1369,17 @@ public class NetworkData {
             && peerData.getLastAttempted() > lastAttemptedThreshold
             && (peerData.getLastConnected() == null
                 || peerData.getLastConnected() < peerData.getLastAttempted()));
-        LOGGER.info("[QDN] after backoff filter: {} remain", peers.size());
+        LOGGER.debug("[QDN] after backoff filter: {} remain", peers.size());
 
         // Don't consider peers that we know loop back to self
         synchronized (this.selfPeers) {
             peers.removeIf(isSelfPeer);
         }
-        LOGGER.info("[QDN] after self filter: {} remain", peers.size());
+        LOGGER.debug("[QDN] after self filter: {} remain", peers.size());
 
         // Don't consider already connected peers (simple address match)
         peers.removeIf(isConnectedPeer);
-        LOGGER.info("[QDN] after connected filter: {} remain", peers.size());
+        LOGGER.debug("[QDN] after connected filter: {} remain", peers.size());
 
         // Don't consider peers we're already connected to by nodeId
         // This handles cases where we have an inbound connection on an ephemeral port
@@ -1479,10 +1479,10 @@ public class NetworkData {
         }
 
         String peerAddress = newPeer.getPeerData().getAddress().toString();
-        LOGGER.info("[QDN] Attempting outbound connection to {}", peerAddress);
+        LOGGER.debug("[QDN] Attempting outbound connection to {}", peerAddress);
         SocketChannel socketChannel = newPeer.connect(Peer.NETWORKDATA);
         if (socketChannel == null) {
-            LOGGER.info("[QDN] Outbound connection failed to {} (TCP refused/timeout)", peerAddress);
+            LOGGER.debug("[QDN] Outbound connection failed to {} (TCP refused/timeout)", peerAddress);
             // Record outbound failure for reachability fallback
             try {
                 // Try to get nodeId from cache for more accurate tracking
@@ -1498,7 +1498,7 @@ public class NetworkData {
             }
             return false;
         }
-        LOGGER.info("[QDN] TCP connected to {}, starting handshake", peerAddress);
+        LOGGER.debug("[QDN] TCP connected to {}, starting handshake", peerAddress);
 
         if (Thread.currentThread().isInterrupted()) {
             LOGGER.debug("Thread is interrupted");
