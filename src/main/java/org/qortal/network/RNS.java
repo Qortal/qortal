@@ -29,6 +29,7 @@ import static io.reticulum.link.LinkStatus.PENDING;
 //import static io.reticulum.packet.PacketContextType.LINKCLOSE;
 //import static io.reticulum.identity.IdentityKnownDestination.recall;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
+import static io.reticulum.utils.DestinationUtils.hashFromNameAndIdentity;
 //import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
 import static io.reticulum.constant.ReticulumConstant.CONFIG_FILE_NAME;
 import lombok.Data;
@@ -680,8 +681,12 @@ public class RNS {
 
         @Override
         public String getAspectFilter() {
-            //return "qortal.core";
-            return this.aspectFilter;
+            // Return null so Transport fires this handler for ALL received announces.
+            // Transport's hash-based filter (hashFromNameAndIdentity(aspectFilter, recall(hash)))
+            // fails whenever recall() returns null for the incoming announce identity — the
+            // computed hash (no identity component) never matches the actual destination hash,
+            // so receivedAnnounce() is never called. We filter by name inside the handler instead.
+            return null;
         }
 
         @Override
@@ -696,6 +701,15 @@ public class RNS {
             //var network = Network.getInstance();
 
             log.info("Received an announce from {}", encodeHexString(destinationHash));
+
+            // Since getAspectFilter() returns null (match-all), we must verify manually.
+            // Recompute the expected hash for "qortal.core" + the announced identity and
+            // compare; skip announces that belong to other apps/aspects.
+            var expectedHash = hashFromNameAndIdentity(this.aspectFilter, announcedIdentity);
+            if (!Arrays.equals(destinationHash, expectedHash)) {
+                log.debug("Announce hash mismatch — not a {} announce, skipping", this.aspectFilter);
+                return;
+            }
 
             if (nonNull(appData)) {
                 log.debug("The announce contained the following app data: {}", new String(appData, UTF_8));
@@ -754,7 +768,7 @@ public class RNS {
             ReticulumPeer newPeer = new ReticulumPeer(destinationHash);
             newPeer.setServerIdentity(announcedIdentity);
             newPeer.setIsInitiator(true);
-            if ("qortal.qdn".equals(getAspectFilter())) {
+            if ("qortal.qdn".equals(this.aspectFilter)) {
                 // data peer
                 newPeer.setPeerAspect(RNSCommon.PeerAspect.DATA);
                 newPeer.setIsDataPeer(true);
