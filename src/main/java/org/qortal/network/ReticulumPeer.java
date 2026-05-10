@@ -1103,6 +1103,10 @@ public class ReticulumPeer implements Peer {
                     log.trace("Sending {} message with ID {} to peer {}",
                             message.getType().name(), message.getId(), encodeHexString(getDestinationHash()));
                     var peerBuffer = getOrInitPeerBuffer();
+                    if (peerBuffer == null) {
+                        log.debug("sendMessage - buffer not available for {}", this);
+                        return false;
+                    }
                     peerBuffer.write(message.toBytes());
                     peerBuffer.flush();
                     //return true;  // done at end of method
