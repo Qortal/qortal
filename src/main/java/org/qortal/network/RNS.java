@@ -271,6 +271,9 @@ public class RNS {
         // do a first announce (across all configured interfaces)
         baseDestination.announce();
         log.info("Sent initial announce from {} ({})", encodeHexString(baseDestination.getHash()), baseDestination.getName());
+        // Seed the base-loop announce timer so it fires 30s after the initial announce,
+        // not immediately (both would race and likely miss if backbone isn't ready yet).
+        this.lastBaseLoopAnnounceMs = System.currentTimeMillis();
         // announce QDN destination (across all configured interfaces)
         //dataDestination.announce();
         //log.debug("Sent initial announce from {} ({})", encodeHexString(dataDestination.getHash()), dataDestination.getName());
@@ -281,7 +284,7 @@ public class RNS {
         // Start up "main" thread, one for each destination to handle aspects separately.
         // Note: Each such thread is equivalent to the peerTypes "NETWORK" and "NETWORKDATA".
         this.rnsBaseThread = new Thread(this::runBaseLoop, "rnsMesh-BASE");
-        this.rnsBaseThread.setDaemon(false);
+        this.rnsBaseThread.setDaemon(true); // daemon so SIGTERM doesn't hang JVM exit
         this.rnsBaseThread.start();
         //this.rnsDataThread = new Thread(this::runDataLoop, "rnsMesh-DATA");
         //this.rnsDataThread.setDaemon(false);
@@ -578,6 +581,15 @@ public class RNS {
             //}
         }
         log.debug("Shutdown of linkedPeers completed");
+        // Shut down worker pool so its threads don't prevent JVM exit
+        this.rnsWorkerPool.shutdown();
+        try {
+            if (!this.rnsWorkerPool.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS))
+                this.rnsWorkerPool.shutdownNow();
+        } catch (InterruptedException e) {
+            this.rnsWorkerPool.shutdownNow();
+        }
+
         reticulum.exitHandler();
         log.info("shutdown of Reticulum complete");
     }
