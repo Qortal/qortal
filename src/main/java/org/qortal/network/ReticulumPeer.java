@@ -384,8 +384,10 @@ public class ReticulumPeer implements Peer {
                 this.peerLink != null ? this.peerLink.getStatus() : "null");
             return null;
         }
-        channel = this.peerLink.getChannel();
-        //var network = Network.getInstance();
+        // Do NOT call getChannel() here unconditionally. getChannel() is synchronized(link),
+        // and the Reticulum receive path holds synchronized(link) while waiting for Channel.lock.
+        // Our send path may hold Channel.lock while wanting synchronized(link) → ABBA deadlock.
+        // Only fetch the channel when we actually need to create the buffer (else branch below).
         var rns = RNS.getInstance();
         var ntpNow = NTP.getTime();
         if (nonNull(this.peerBuffer)) {
@@ -408,6 +410,7 @@ public class ReticulumPeer implements Peer {
             }
         }
         else {
+            channel = this.peerLink.getChannel();
             log.info("creating buffer - peerLink status: {}, channel: {}", this.peerLink.getStatus(), channel);
             //// multi-destination: we might need to use different stream IDs from other destination (default is 0) (?)
             //if (destinationType == RNSCommon.RNSDestinationType.DATA) {
