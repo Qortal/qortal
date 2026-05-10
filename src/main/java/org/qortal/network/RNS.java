@@ -241,14 +241,14 @@ public class RNS {
             "core"
         );
         log.info("Destination {} {} running", encodeHexString(baseDestination.getHash()), baseDestination.getName());
-        //dataDestination = new Destination(
-        //    serverIdentity,
-        //    Direction.IN,
-        //    DestinationType.SINGLE,
-        //    APP_NAME,
-        //    "qdn"
-        //);
-        //log.info("Destination {} {} running", encodeHexString(dataDestination.getHash()), dataDestination.getName());
+        dataDestination = new Destination(
+            serverIdentity,
+            Direction.IN,
+            DestinationType.SINGLE,
+            APP_NAME,
+            "qdn"
+        );
+        log.info("Destination {} {} running", encodeHexString(dataDestination.getHash()), dataDestination.getName());
    
         baseDestination.setProofStrategy(ProofStrategy.PROVE_ALL);
         baseDestination.setAcceptLinkRequests(true);
