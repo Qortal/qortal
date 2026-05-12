@@ -378,60 +378,62 @@ public class ReticulumPeer implements Peer {
         this.peerBuffer = null;
     }
 
+    /**
+     * Creates the RNS Channel and Buffer for this peer link.
+     * Must only be called once per link, from linkEstablished() (initiator) or
+     * baseClientConnected() (non-initiator). Never call this on the send/broadcast path —
+     * getChannel() acquires synchronized(link) and multiple concurrent callers pile up if
+     * the Reticulum library holds that lock during link setup (bug: blocked Network-Workers).
+     */
+    public void createPeerBuffer() {
+        var ntpNow = NTP.getTime();
+        channel = this.peerLink.getChannel();
+        log.info("creating buffer - peerLink status: {}, channel: {}", this.peerLink.getStatus(), channel);
+        this.peerBuffer = Buffer.createBidirectionalBuffer(receiveStreamId, sendStreamId, channel, this::peerBufferReady);
+        this.peerData.setLastAttempted(ntpNow);
+        this.peerData.setLastConnected(ntpNow);
+        this.startPings();
+        makePeerAvailable();
+        // Send our chain tip so the remote peer knows our height and can trigger sync.
+        // This mirrors the TCP/IP handshake's chain-tip exchange on connection completion.
+        Message chainTipMessage = RNS.getInstance().buildHeightOrChainTipInfo(this);
+        if (chainTipMessage != null) {
+            log.info("[{}] Sending chain tip ({}) to {}", getPeerConnectionId(), chainTipMessage.getType(), this);
+            sendMessage(chainTipMessage);
+        } else {
+            log.info("[{}] No chain tip available to send to {} (blockchain not ready yet)", getPeerConnectionId(), this);
+        }
+    }
+
     public BufferedRWPair getOrInitPeerBuffer() {
         if (this.peerLink == null || this.peerLink.getStatus() != ACTIVE) {
             log.debug("getOrInitPeerBuffer - skipping: link not ACTIVE (status: {})",
                 this.peerLink != null ? this.peerLink.getStatus() : "null");
             return null;
         }
-        // Do NOT call getChannel() here unconditionally. getChannel() is synchronized(link),
-        // and the Reticulum receive path holds synchronized(link) while waiting for Channel.lock.
-        // Our send path may hold Channel.lock while wanting synchronized(link) → ABBA deadlock.
-        // Only fetch the channel when we actually need to create the buffer (else branch below).
         var rns = RNS.getInstance();
         var ntpNow = NTP.getTime();
         if (nonNull(this.peerBuffer)) {
-            //log.info("peerBuffer exists: {}, link status: {}", this.peerBuffer, this.peerLink.getStatus());
             try {
                 log.trace("peerBuffer exists: {}, link status: {}", this.peerBuffer, this.peerLink.getStatus());
                 if (rns.isUnreachable(this)) {
                     makePeerUnavailable();
                     shutdownChannel();
-                    //peerLink.teardown();
                     return null;
                 }
             } catch (IllegalStateException e) {
                 // Exception thrown by Reticulum if the buffer is unusable (Channel, Link, etc)
                 log.warn("can't establish Channel/Buffer (remote peer down?), closing link: {}");
-                shutdownChannel();  // clears channel callbacks and nulls peerBuffer; no close() to avoid deadlock
-                //this.peerLink.teardown();
+                shutdownChannel();
                 this.peerData.setLastAttempted(ntpNow);
                 this.peerData.setLastMisbehaved(ntpNow);
             }
         }
-        else {
-            channel = this.peerLink.getChannel();
-            log.info("creating buffer - peerLink status: {}, channel: {}", this.peerLink.getStatus(), channel);
-            //// multi-destination: we might need to use different stream IDs from other destination (default is 0) (?)
-            //if (destinationType == RNSCommon.RNSDestinationType.DATA) {
-            //    this.receiveStreamId = 1;
-            //    this.sendStreamId = 1;
-            //}
-            this.peerBuffer = Buffer.createBidirectionalBuffer(receiveStreamId, sendStreamId, channel, this::peerBufferReady);
-            this.peerData.setLastAttempted(ntpNow);
-            this.peerData.setLastConnected(ntpNow);
-            this.startPings();
-            makePeerAvailable();
-            // Send our chain tip so the remote peer knows our height and can trigger sync.
-            // This mirrors the TCP/IP handshake's chain-tip exchange on connection completion.
-            Message chainTipMessage = RNS.getInstance().buildHeightOrChainTipInfo(this);
-            if (chainTipMessage != null) {
-                log.info("[{}] Sending chain tip ({}) to {}", getPeerConnectionId(), chainTipMessage.getType(), this);
-                sendMessage(chainTipMessage);
-            } else {
-                log.info("[{}] No chain tip available to send to {} (blockchain not ready yet)", getPeerConnectionId(), this);
-            }
-        }
+        // Buffer is null: either createPeerBuffer() hasn't fired yet, or shutdownChannel() was
+        // called. Never call getChannel() here — synchronized(link) contention causes multiple
+        // broadcast/send threads to pile up when the Reticulum library holds that lock.
+        // Return null; the next send attempt will succeed once the buffer is created by the
+        // link-establishment callback (createPeerBuffer).
         return getPeerBuffer();
     }
 
@@ -544,10 +546,11 @@ public class ReticulumPeer implements Peer {
         this.peerData.setLastConnected(ntpNow);
 
         // For initiator peers: create buffer and add to Network lists now that the link is ACTIVE.
-        // Without this, no buffer is ever created (the lazy path in sendMessage() is never reached
-        // because the peer isn't yet in the Network lists to receive any requests).
+        // Use createPeerBuffer() directly — not getOrInitPeerBuffer() — to avoid the case where
+        // concurrent broadcast threads also call getOrInitPeerBuffer() and race to call getChannel(),
+        // piling up on synchronized(link) while the Reticulum library holds it during link setup.
         if (Boolean.TRUE.equals(isInitiator)) {
-            getOrInitPeerBuffer();
+            createPeerBuffer();
             // Arm the ping timer: schedule first ping one interval from now.
             this.lastPingSent = ntpNow;
         }

@@ -27,7 +27,7 @@ import static io.reticulum.link.LinkStatus.CLOSED;
 import static io.reticulum.link.LinkStatus.PENDING;
 //import static io.reticulum.link.LinkStatus.HANDSHAKE;
 //import static io.reticulum.packet.PacketContextType.LINKCLOSE;
-//import static io.reticulum.identity.IdentityKnownDestination.recall;
+import static io.reticulum.identity.IdentityKnownDestination.recall;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 import static io.reticulum.utils.DestinationUtils.hashFromNameAndIdentity;
 //import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
@@ -461,6 +461,16 @@ public class RNS {
                                         .anyMatch(p -> Arrays.equals(p.getDestinationHash(), dhash));
                                 if (!tracked) {
                                     Transport.getInstance().requestPath(dhash);
+                                    // If identity is cached, reconnect proactively rather than
+                                    // waiting for the next announce from this peer.
+                                    Identity cachedIdentity = recall(dhash);
+                                    if (cachedIdentity != null) {
+                                        log.info("Proactively reconnecting to known peer {}", hashHex);
+                                        ReticulumPeer reconnectPeer = new ReticulumPeer(dhash);
+                                        reconnectPeer.setPeerAspect(RNSCommon.PeerAspect.BASE);
+                                        reconnectPeer.setMessageMagic(getMessageMagic());
+                                        addLinkedPeer(reconnectPeer);
+                                    }
                                 }
                             } catch (Exception e) {
                                 log.warn("Path request failed for {}: {}", hashHex, e.getMessage());
@@ -643,8 +653,9 @@ public class RNS {
         newPeer.setPeerLinkHash(link.getHash());
         newPeer.setPeerAspect(RNSCommon.PeerAspect.BASE);
         newPeer.setMessageMagic(getMessageMagic());
-        // make sure the peer has a channel and buffer
-        newPeer.getOrInitPeerBuffer();
+        // createPeerBuffer() rather than getOrInitPeerBuffer() — avoids synchronized(link)
+        // contention on the broadcast path (see ReticulumPeer.createPeerBuffer javadoc).
+        newPeer.createPeerBuffer();
         addIncomingPeer(newPeer);
         log.info("***> Base client connected, base link: {}", encodeHexString(link.getLinkId()));
     }
@@ -657,8 +668,7 @@ public class RNS {
         newPeer.setPeerLinkHash(link.getHash());
         newPeer.setPeerAspect(RNSCommon.PeerAspect.DATA);
         newPeer.setMessageMagic(getMessageMagic());
-        // make sure the peer has a channel and buffer
-        newPeer.getOrInitPeerBuffer();
+        newPeer.createPeerBuffer();
         addIncomingPeer(newPeer);
         log.info("***> Data Client connected, data link: {}", encodeHexString(link.getLinkId()));
     }
@@ -1145,7 +1155,16 @@ public class RNS {
                             .anyMatch(p -> Arrays.equals(p.getDestinationHash(), dhash));
                     if (!alreadyTracked) {
                         Transport.getInstance().requestPath(dhash);
-                        log.debug("Requested path to known peer {}", hashHex);
+                        // If identity is cached, reconnect proactively rather than
+                        // waiting for the next announce from this peer.
+                        Identity cachedIdentity = recall(dhash);
+                        if (cachedIdentity != null) {
+                            log.info("Proactively reconnecting to known peer {} (prunePeers)", hashHex);
+                            ReticulumPeer reconnectPeer = new ReticulumPeer(dhash);
+                            reconnectPeer.setPeerAspect(RNSCommon.PeerAspect.BASE);
+                            reconnectPeer.setMessageMagic(getMessageMagic());
+                            addLinkedPeer(reconnectPeer);
+                        }
                     }
                 } catch (Exception e) {
                     log.warn("Failed to request path to {}: {}", hashHex, e.getMessage());
