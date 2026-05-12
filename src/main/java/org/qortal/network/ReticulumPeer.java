@@ -651,6 +651,10 @@ public class ReticulumPeer implements Peer {
             try {
                 //log.info("***> creating message from {} bytes", data.length);
                 Message message = Message.fromByteBuffer(bb);
+                if (message == null) {
+                    log.warn("peerBufferReady - null message from {} bytes (unrecognised magic/type?), skipping", data.length);
+                    return;
+                }
                 log.debug("*=> type {} message received ({} bytes, id: {})", message.getType(), data.length, message.getId());
 
                 // Handle message based on type
