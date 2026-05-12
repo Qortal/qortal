@@ -17,7 +17,7 @@ public class HSQLDBGroupInviteTransactionRepository extends HSQLDBTransactionRep
 	}
 
 	TransactionData fromBase(BaseTransactionData baseTransactionData) throws DataException {
-		String sql = "SELECT group_id, invitee, time_to_live, join_reference, previous_group_id FROM GroupInviteTransactions WHERE signature = ?";
+		String sql = "SELECT group_id, invitee, time_to_live, join_reference, previous_group_id, join_fee FROM GroupInviteTransactions WHERE signature = ?";
 
 		try (ResultSet resultSet = this.repository.checkedExecute(sql, baseTransactionData.getSignature())) {
 			if (resultSet == null)
@@ -32,7 +32,9 @@ public class HSQLDBGroupInviteTransactionRepository extends HSQLDBTransactionRep
 			if (previousGroupId == 0 && resultSet.wasNull())
 				previousGroupId = null;
 
-			return new GroupInviteTransactionData(baseTransactionData, groupId, invitee, timeToLive, joinReference, previousGroupId);
+			long joinFee = resultSet.getInt(6);
+
+			return new GroupInviteTransactionData(baseTransactionData, groupId, invitee, timeToLive, joinFee, joinReference, previousGroupId);
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch group invite transaction from repository", e);
 		}
@@ -46,7 +48,8 @@ public class HSQLDBGroupInviteTransactionRepository extends HSQLDBTransactionRep
 
 		saveHelper.bind("signature", groupInviteTransactionData.getSignature()).bind("admin", groupInviteTransactionData.getAdminPublicKey())
 				.bind("group_id", groupInviteTransactionData.getGroupId()).bind("invitee", groupInviteTransactionData.getInvitee())
-				.bind("time_to_live", groupInviteTransactionData.getTimeToLive()).bind("join_reference", groupInviteTransactionData.getJoinReference())
+				.bind("time_to_live", groupInviteTransactionData.getTimeToLive()).bind("join_fee", groupInviteTransactionData.getJoinFee())
+				.bind("join_reference", groupInviteTransactionData.getJoinReference())
 				.bind("previous_group_id", groupInviteTransactionData.getPreviousGroupId());
 
 		try {

@@ -97,7 +97,8 @@ public class BlockChain {
 		mintedBlocksAdjustmentRemovalHeight,
 		atValidateHeight,
 		onlineAccountsSignatureV2Height,
-		assetOrderBoundsHeight
+		assetOrderBoundsHeight,
+		groupFeeHeight
 	}
 
     // V5.5 Default List of Historic Triggers
@@ -721,6 +722,10 @@ public class BlockChain {
 
 	public long getAssetOrderBoundsHeight() {
 		return this.featureTriggers.get(FeatureTrigger.assetOrderBoundsHeight.name()).longValue();
+	}
+
+	public int getGroupFeeHeight() {
+		return this.featureTriggers.get(FeatureTrigger.groupFeeHeight.name()).intValue();
 	}
 
 	// More complex getters for aspects that change by height or timestamp

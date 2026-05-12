@@ -15,6 +15,7 @@ public class GroupInviteData {
 	private String inviter;
 	private String invitee;
 	private Long expiry;
+	private Long joinFee;
 	/** Reference to GROUP_INVITE transaction, used to rebuild this invite during orphaning. */
 	// No need to ever expose this via API
 	@XmlTransient
@@ -32,6 +33,15 @@ public class GroupInviteData {
 		this.inviter = inviter;
 		this.invitee = invitee;
 		this.expiry = expiry;
+		this.reference = reference;
+	}
+
+	public GroupInviteData(int groupId, String inviter, String invitee, Long expiry, Long joinFee, byte[] reference) {
+		this.groupId = groupId;
+		this.inviter = inviter;
+		this.invitee = invitee;
+		this.expiry = expiry;
+		this.joinFee = joinFee;
 		this.reference = reference;
 	}
 
@@ -59,6 +69,14 @@ public class GroupInviteData {
 
 	public void setReference(byte[] reference) {
 		this.reference = reference;
+	}
+
+	public Long getJoinFee() {
+		return this.joinFee;
+	}
+
+	public void setJoinFee(Long joinFee) {
+		this.joinFee = joinFee;
 	}
 
 }

@@ -2,6 +2,7 @@ package org.qortal.group;
 
 import org.qortal.account.Account;
 import org.qortal.account.PublicKeyAccount;
+import org.qortal.asset.Asset;
 import org.qortal.block.BlockChain;
 import org.qortal.controller.Controller;
 import org.qortal.crypto.Crypto;
@@ -92,8 +93,8 @@ public class Group {
 				createGroupTransactionData.getDescription(), createGroupTransactionData.getTimestamp(),
 				createGroupTransactionData.isOpen(), createGroupTransactionData.getApprovalThreshold(),
 				createGroupTransactionData.getMinimumBlockDelay(), createGroupTransactionData.getMaximumBlockDelay(),
-				createGroupTransactionData.getSignature(), createGroupTransactionData.getTxGroupId(),
-				createGroupTransactionData.getReducedGroupName());
+				createGroupTransactionData.getJoinFee(), createGroupTransactionData.getSignature(),
+				createGroupTransactionData.getTxGroupId(), createGroupTransactionData.getReducedGroupName());
 	}
 
 	/**
@@ -215,7 +216,7 @@ public class Group {
 			expiry = groupInviteTransactionData.getTimestamp() + timeToLive * 1000;
 
 		GroupInviteData groupInviteData = new GroupInviteData(this.groupData.getGroupId(), inviter.getAddress(), invitee, expiry,
-				groupInviteTransactionData.getSignature());
+				groupInviteTransactionData.getJoinFee(), groupInviteTransactionData.getSignature());
 		groupRepository.save(groupInviteData);
 	}
 
@@ -301,6 +302,7 @@ public class Group {
 		this.groupData.setDescription(updateGroupTransactionData.getNewDescription());
 		this.groupData.setIsOpen(updateGroupTransactionData.getNewIsOpen());
 		this.groupData.setApprovalThreshold(updateGroupTransactionData.getNewApprovalThreshold());
+		this.groupData.setJoinFee(updateGroupTransactionData.getNewJoinFee());
 		this.groupData.setUpdated(updateGroupTransactionData.getTimestamp());
 
 		// Save updated group data
@@ -366,6 +368,7 @@ public class Group {
 				this.groupData.setDescription(previousCreateGroupTransactionData.getDescription());
 				this.groupData.setIsOpen(previousCreateGroupTransactionData.isOpen());
 				this.groupData.setApprovalThreshold(previousCreateGroupTransactionData.getApprovalThreshold());
+				this.groupData.setJoinFee(previousCreateGroupTransactionData.getJoinFee());
 				this.groupData.setUpdated(null);
 				break;
 			}
@@ -376,6 +379,7 @@ public class Group {
 				this.groupData.setDescription(previousUpdateGroupTransactionData.getNewDescription());
 				this.groupData.setIsOpen(previousUpdateGroupTransactionData.getNewIsOpen());
 				this.groupData.setApprovalThreshold(previousUpdateGroupTransactionData.getNewApprovalThreshold());
+				this.groupData.setJoinFee(previousUpdateGroupTransactionData.getNewJoinFee());
 				this.groupData.setUpdated(previousUpdateGroupTransactionData.getTimestamp());
 				break;
 			}
@@ -753,6 +757,32 @@ public class Group {
 		} else {
 			// Clear any reference to invite transaction to prevent invite rebuild during orphaning.
 			joinGroupTransactionData.setInviteReference(null);
+		}
+
+		// Handle join fee if feature trigger is active
+		// Use current height + 1 since this transaction will be in the next block
+		int currentHeight = this.repository.getBlockRepository().getBlockchainHeight();
+		int nextHeight = currentHeight + 1;
+		int groupFeeHeight = BlockChain.getInstance().getGroupFeeHeight();
+		System.out.println("DEBUG: currentHeight=" + currentHeight + ", nextHeight=" + nextHeight + ", groupFeeHeight=" + groupFeeHeight);
+		System.out.println("DEBUG: nextHeight >= groupFeeHeight: " + (nextHeight >= groupFeeHeight));
+		if (nextHeight >= groupFeeHeight) {
+			// Use join fee from invite if available, otherwise use current group join fee
+			Long joinFee = groupInviteData != null ? groupInviteData.getJoinFee() : this.groupData.getJoinFee();
+			System.out.println("DEBUG: joinFee=" + joinFee);
+			if (joinFee != null && joinFee > 0) {
+				System.out.println("DEBUG: Transferring join fee from " + joiner.getAddress() + " to " + this.groupData.getOwner());
+				// Transfer join fee from joiner to group owner
+				Account groupOwner = new Account(this.repository, this.groupData.getOwner());
+				System.out.println("DEBUG: joiner balance before: " + joiner.getConfirmedBalance(Asset.QORT));
+				System.out.println("DEBUG: groupOwner balance before: " + groupOwner.getConfirmedBalance(Asset.QORT));
+				joiner.setConfirmedBalance(Asset.QORT, joiner.getConfirmedBalance(Asset.QORT) - joinFee);
+				groupOwner.setConfirmedBalance(Asset.QORT, groupOwner.getConfirmedBalance(Asset.QORT) + joinFee);
+				System.out.println("DEBUG: joiner balance after: " + joiner.getConfirmedBalance(Asset.QORT));
+				System.out.println("DEBUG: groupOwner balance after: " + groupOwner.getConfirmedBalance(Asset.QORT));
+			}
+		} else {
+			System.out.println("DEBUG: Not transferring join fee because feature trigger is not active");
 		}
 
 		// Actually add new member to group

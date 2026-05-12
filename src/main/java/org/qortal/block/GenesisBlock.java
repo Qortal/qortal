@@ -6,6 +6,7 @@ import com.google.common.primitives.Longs;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.qortal.account.NullAccount;
+import org.qortal.asset.Asset;
 import org.qortal.crypto.Crypto;
 import org.qortal.data.asset.AssetData;
 import org.qortal.data.block.BlockData;
@@ -292,6 +293,7 @@ public class GenesisBlock extends Block {
 		this.ourAtStates = Collections.emptyList();
 		this.ourAtFees = 0;
 
+		System.out.println("DEBUG: GenesisBlock.process() - Calling super.process()");
 		super.process();
 	}
 

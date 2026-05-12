@@ -2,6 +2,8 @@ package org.qortal.transaction;
 
 import org.qortal.account.Account;
 import org.qortal.asset.Asset;
+import org.qortal.block.BlockChain;
+import org.qortal.data.group.GroupData;
 import org.qortal.data.transaction.JoinGroupTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.group.Group;
@@ -63,6 +65,20 @@ public class JoinGroupTransaction extends Transaction {
 		// Check joiner has enough funds
 		if (joiner.getConfirmedBalance(Asset.QORT) < this.joinGroupTransactionData.getFee())
 			return ValidationResult.NO_BALANCE;
+
+		// Check for join fee if feature trigger is active
+		// Use current height + 1 since this transaction will be in the next block
+		int currentHeight = this.repository.getBlockRepository().getBlockchainHeight();
+		int nextHeight = currentHeight + 1;
+		if (nextHeight >= BlockChain.getInstance().getGroupFeeHeight()) {
+			GroupData groupData = this.repository.getGroupRepository().fromGroupId(groupId);
+			if (groupData != null && groupData.getJoinFee() > 0) {
+				// Check joiner has enough funds to pay join fee
+				long totalRequired = this.joinGroupTransactionData.getFee() + groupData.getJoinFee();
+				if (joiner.getConfirmedBalance(Asset.QORT) < totalRequired)
+					return ValidationResult.NO_BALANCE;
+			}
+		}
 
 		return ValidationResult.OK;
 	}

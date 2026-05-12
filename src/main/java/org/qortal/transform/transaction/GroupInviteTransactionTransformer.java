@@ -19,8 +19,9 @@ public class GroupInviteTransactionTransformer extends TransactionTransformer {
 	private static final int GROUPID_LENGTH = INT_LENGTH;
 	private static final int INVITEE_LENGTH = ADDRESS_LENGTH;
 	private static final int TTL_LENGTH = INT_LENGTH;
+	private static final int JOIN_FEE_LENGTH = LONG_LENGTH;
 
-	private static final int EXTRAS_LENGTH = GROUPID_LENGTH + INVITEE_LENGTH + TTL_LENGTH;
+	private static final int EXTRAS_LENGTH = GROUPID_LENGTH + INVITEE_LENGTH + TTL_LENGTH + JOIN_FEE_LENGTH;
 
 	protected static final TransactionLayout layout;
 
@@ -34,6 +35,7 @@ public class GroupInviteTransactionTransformer extends TransactionTransformer {
 		layout.add("group ID", TransformationType.INT);
 		layout.add("account to invite (invitee)", TransformationType.ADDRESS);
 		layout.add("invite lifetime (seconds)", TransformationType.INT);
+		layout.add("join fee", TransformationType.AMOUNT);
 		layout.add("fee", TransformationType.AMOUNT);
 		layout.add("signature", TransformationType.SIGNATURE);
 	}
@@ -54,6 +56,8 @@ public class GroupInviteTransactionTransformer extends TransactionTransformer {
 
 		int timeToLive = byteBuffer.getInt();
 
+		long joinFee = byteBuffer.getLong();
+
 		long fee = byteBuffer.getLong();
 
 		byte[] signature = new byte[SIGNATURE_LENGTH];
@@ -61,7 +65,7 @@ public class GroupInviteTransactionTransformer extends TransactionTransformer {
 
 		BaseTransactionData baseTransactionData = new BaseTransactionData(timestamp, txGroupId, reference, adminPublicKey, fee, signature);
 
-		return new GroupInviteTransactionData(baseTransactionData, groupId, invitee, timeToLive);
+		return new GroupInviteTransactionData(baseTransactionData, groupId, invitee, timeToLive, joinFee);
 	}
 
 	public static int getDataLength(TransactionData transactionData) throws TransformationException {
@@ -81,6 +85,8 @@ public class GroupInviteTransactionTransformer extends TransactionTransformer {
 			Serialization.serializeAddress(bytes, groupInviteTransactionData.getInvitee());
 
 			bytes.write(Ints.toByteArray(groupInviteTransactionData.getTimeToLive()));
+
+			bytes.write(Longs.toByteArray(groupInviteTransactionData.getJoinFee()));
 
 			bytes.write(Longs.toByteArray(groupInviteTransactionData.getFee()));
 

@@ -66,6 +66,10 @@ public class UpdateGroupTransaction extends Transaction {
 		if (this.updateGroupTransactionData.getNewMaximumBlockDelay() < this.updateGroupTransactionData.getNewMinimumBlockDelay())
 			return ValidationResult.INVALID_GROUP_BLOCK_DELAY;
 
+		// Check new join fee is not negative
+		if (this.updateGroupTransactionData.getNewJoinFee() < 0)
+			return ValidationResult.INVALID_GROUP_JOIN_FEE;
+
 		// Check new description size bounds
 		int newDescriptionLength = Utf8.encodedLength(this.updateGroupTransactionData.getNewDescription());
 		if (newDescriptionLength < 1 || newDescriptionLength > Group.MAX_DESCRIPTION_SIZE)

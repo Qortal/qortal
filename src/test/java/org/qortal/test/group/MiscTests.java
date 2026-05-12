@@ -50,7 +50,7 @@ public class MiscTests extends Common {
 			int minimumBlockDelay = 10;
 			int maximumBlockDelay = 1440;
 
-			CreateGroupTransactionData transactionData = new CreateGroupTransactionData(TestTransaction.generateBase(alice), duplicateGroupName, description, isOpen, approvalThreshold, minimumBlockDelay, maximumBlockDelay);
+			CreateGroupTransactionData transactionData = new CreateGroupTransactionData(TestTransaction.generateBase(alice), duplicateGroupName, description, isOpen, approvalThreshold, minimumBlockDelay, maximumBlockDelay, 0);
 			ValidationResult result = TransactionUtils.signAndImport(repository, transactionData, alice);
 			assertTrue("Transaction should be invalid", ValidationResult.OK != result);
 		}
@@ -191,7 +191,7 @@ public class MiscTests extends Common {
 		int minimumBlockDelay = 10;
 		int maximumBlockDelay = 1440;
 
-		CreateGroupTransactionData transactionData = new CreateGroupTransactionData(TestTransaction.generateBase(owner), groupName, description, isOpen, approvalThreshold, minimumBlockDelay, maximumBlockDelay);
+		CreateGroupTransactionData transactionData = new CreateGroupTransactionData(TestTransaction.generateBase(owner), groupName, description, isOpen, approvalThreshold, minimumBlockDelay, maximumBlockDelay, 0);
 		TransactionUtils.signAndMint(repository, transactionData, owner);
 
 		return repository.getGroupRepository().fromGroupName(groupName).getGroupId();
@@ -203,7 +203,7 @@ public class MiscTests extends Common {
 	}
 
 	private void groupInvite(Repository repository, PrivateKeyAccount admin, int groupId, String invitee, int timeToLive) throws DataException {
-		GroupInviteTransactionData transactionData = new GroupInviteTransactionData(TestTransaction.generateBase(admin), groupId, invitee, timeToLive);
+		GroupInviteTransactionData transactionData = new GroupInviteTransactionData(TestTransaction.generateBase(admin), groupId, invitee, timeToLive, 0L);
 		TransactionUtils.signAndMint(repository, transactionData, admin);
 	}
 

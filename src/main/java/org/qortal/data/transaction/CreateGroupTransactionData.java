@@ -48,6 +48,9 @@ public class CreateGroupTransactionData extends TransactionData {
 	@Schema(description = "maximum block delay before which transaction approval must be reached")
 	private int maximumBlockDelay;
 
+	@Schema(description = "fee required to join the group", example = "0")
+	private long joinFee;
+
 	// For internal use
 	@XmlTransient
 	@Schema(hidden = true)
@@ -72,7 +75,7 @@ public class CreateGroupTransactionData extends TransactionData {
 	/** From repository */
 	public CreateGroupTransactionData(BaseTransactionData baseTransactionData,
 			String groupName, String description, boolean isOpen,
-			ApprovalThreshold approvalThreshold, int minimumBlockDelay, int maximumBlockDelay,
+			ApprovalThreshold approvalThreshold, int minimumBlockDelay, int maximumBlockDelay, long joinFee,
 			Integer groupId, String reducedGroupName) {
 		super(TransactionType.CREATE_GROUP, baseTransactionData);
 
@@ -82,6 +85,7 @@ public class CreateGroupTransactionData extends TransactionData {
 		this.approvalThreshold = approvalThreshold;
 		this.minimumBlockDelay = minimumBlockDelay;
 		this.maximumBlockDelay = maximumBlockDelay;
+		this.joinFee = joinFee;
 		this.groupId = groupId;
 		this.reducedGroupName = reducedGroupName;
 	}
@@ -89,9 +93,9 @@ public class CreateGroupTransactionData extends TransactionData {
 	/** From network/API */
 	public CreateGroupTransactionData(BaseTransactionData baseTransactionData,
 			String groupName, String description, boolean isOpen,
-			ApprovalThreshold approvalThreshold, int minimumBlockDelay, int maximumBlockDelay) {
+			ApprovalThreshold approvalThreshold, int minimumBlockDelay, int maximumBlockDelay, long joinFee) {
 		this(baseTransactionData, groupName, description, isOpen, approvalThreshold, minimumBlockDelay,
-				maximumBlockDelay, null, Unicode.sanitize(groupName));
+				maximumBlockDelay, joinFee, null, Unicode.sanitize(groupName));
 	}
 
 	// Getters / setters
@@ -143,6 +147,14 @@ public class CreateGroupTransactionData extends TransactionData {
 	@Schema(name = "creatorPublicKey", description = "group creator's public key", example = "2tiMr5LTpaWCgbRvkPK8TFd7k63DyHJMMFFsz9uBf1ZP")
 	public void setGroupCreatorPublicKey(byte[] creatorPublicKey) {
 		this.creatorPublicKey = creatorPublicKey;
+	}
+
+	public long getJoinFee() {
+		return this.joinFee;
+	}
+
+	public void setJoinFee(long joinFee) {
+		this.joinFee = joinFee;
 	}
 
 }

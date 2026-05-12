@@ -119,7 +119,8 @@
 		"mintedBlocksAdjustmentRemovalHeight": 27,
 		"atValidateHeight": 9999999999999,
 		"onlineAccountsSignatureV2Height": 9999999999999,
-		"assetOrderBoundsHeight": 10
+		"assetOrderBoundsHeight": 10,
+		"groupFeeHeight": 10
 	},
 	"genesisInfo": {
 		"version": 4,

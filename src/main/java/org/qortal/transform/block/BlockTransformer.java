@@ -458,7 +458,7 @@ public class BlockTransformer extends Transformer {
 	}
 
 	public static ConciseSet decodeOnlineAccounts(byte[] encodedOnlineAccounts) {
-		if (encodedOnlineAccounts.length == 0) {
+		if (encodedOnlineAccounts == null || encodedOnlineAccounts.length == 0) {
 			return new ConciseSet();
 		}
 

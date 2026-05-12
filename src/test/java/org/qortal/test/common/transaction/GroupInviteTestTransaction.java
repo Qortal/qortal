@@ -13,7 +13,7 @@ public class GroupInviteTestTransaction extends TestTransaction {
 		String invitee = account.getAddress();
 		final int timeToLive = 3600;
 
-		return new GroupInviteTransactionData(generateBase(account), groupId, invitee, timeToLive);
+		return new GroupInviteTransactionData(generateBase(account), groupId, invitee, timeToLive, 0L);
 	}
 
 }

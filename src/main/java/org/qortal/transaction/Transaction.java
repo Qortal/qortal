@@ -241,15 +241,16 @@ public abstract class Transaction {
 		SELF_SHARE_EXISTS(91),
 		ACCOUNT_ALREADY_EXISTS(92),
 		INVALID_GROUP_BLOCK_DELAY(93),
-		INCORRECT_NONCE(94),
-		INVALID_TIMESTAMP_SIGNATURE(95),
-		ADDRESS_BLOCKED(96),
-		NAME_BLOCKED(97),
-		GROUP_APPROVAL_REQUIRED(98),
-		ACCOUNT_NOT_TRANSFERABLE(99),
-		TRANSFER_PRIVS_DISABLED(100),
-		TEMPORARY_DISABLED(101),
-		GENERAL_TEMPORARY_DISABLED(102),
+		INVALID_GROUP_JOIN_FEE(94),
+		INCORRECT_NONCE(95),
+		INVALID_TIMESTAMP_SIGNATURE(96),
+		ADDRESS_BLOCKED(97),
+		NAME_BLOCKED(98),
+		GROUP_APPROVAL_REQUIRED(99),
+		ACCOUNT_NOT_TRANSFERABLE(100),
+		TRANSFER_PRIVS_DISABLED(101),
+		TEMPORARY_DISABLED(102),
+		GENERAL_TEMPORARY_DISABLED(103),
 		INVALID_BUT_OK(999),
 		NOT_YET_RELEASED(1000),
 		NOT_SUPPORTED(1001);
@@ -992,6 +993,7 @@ public abstract class Transaction {
 		Account creator = getCreator();
 
 		// Update transaction creator's balance
+		System.out.println("DEBUG: processReferencesAndFees - Deducting fee of " + transactionData.getFee() + " from " + creator.getAddress());
 		creator.modifyAssetBalance(Asset.QORT, - transactionData.getFee());
 
 		// Update transaction creator's reference (and possibly public key)

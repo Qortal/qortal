@@ -22,6 +22,7 @@ public class GroupData {
 	private ApprovalThreshold approvalThreshold;
 	private int minimumBlockDelay;
 	private int maximumBlockDelay;
+	private long joinFee;
 	public int memberCount;
 
 	/** Reference to CREATE_GROUP or UPDATE_GROUP transaction, used to rebuild group during orphaning. */
@@ -54,7 +55,7 @@ public class GroupData {
 
 	/** Constructs new GroupData with nullable groupId and nullable updated [timestamp] */
 	public GroupData(Integer groupId, String owner, String groupName, String description, long created, Long updated,
-			boolean isOpen, ApprovalThreshold approvalThreshold, int minBlockDelay, int maxBlockDelay, byte[] reference,
+			boolean isOpen, ApprovalThreshold approvalThreshold, int minBlockDelay, int maxBlockDelay, long joinFee, byte[] reference,
 			int creationGroupId, String reducedGroupName) {
 		this.groupId = groupId;
 		this.owner = owner;
@@ -67,16 +68,17 @@ public class GroupData {
 		this.reference = reference;
 		this.minimumBlockDelay = minBlockDelay;
 		this.maximumBlockDelay = maxBlockDelay;
+		this.joinFee = joinFee;
 		this.creationGroupId = creationGroupId;
 		this.reducedGroupName = reducedGroupName;
 	}
 
 	/** Constructs new GroupData with unassigned groupId */
 	public GroupData(String owner, String groupName, String description, long created, boolean isOpen,
-			ApprovalThreshold approvalThreshold, int minBlockDelay, int maxBlockDelay, byte[] reference,
+			ApprovalThreshold approvalThreshold, int minBlockDelay, int maxBlockDelay, long joinFee, byte[] reference,
 			int creationGroupId, String reducedGroupName) {
 		this(null, owner, groupName, description, created, null, isOpen, approvalThreshold, minBlockDelay,
-				maxBlockDelay, reference, creationGroupId, reducedGroupName);
+				maxBlockDelay, joinFee, reference, creationGroupId, reducedGroupName);
 	}
 
 	// Getters / setters
@@ -181,6 +183,14 @@ public class GroupData {
 
 	public void setOwnerPrimaryName(String ownerPrimaryName) {
 		this.ownerPrimaryName = ownerPrimaryName;
+	}
+
+	public long getJoinFee() {
+		return this.joinFee;
+	}
+
+	public void setJoinFee(long joinFee) {
+		this.joinFee = joinFee;
 	}
 
 }

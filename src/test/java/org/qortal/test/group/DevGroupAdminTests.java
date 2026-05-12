@@ -28,7 +28,7 @@ import static org.junit.Assert.*;
 /**
  * Dev group admin tests
  *
- * The dev group (ID 1) is owned by the null account with public key 11111111111111111111111111111111
+ * The dev group (ID 1) is owned by the null account with public key 00000000000000000000000000000001
  * To regain access to otherwise blocked owner-based rules, it has different validation logic
  * which applies to groups with this same null owner.
  *
@@ -723,7 +723,7 @@ public class DevGroupAdminTests extends Common {
 	}
 
 	private ValidationResult groupInvite(Repository repository, PrivateKeyAccount admin, int groupId, String invitee, int timeToLive) throws DataException {
-		GroupInviteTransactionData transactionData = new GroupInviteTransactionData(TestTransaction.generateBase(admin), groupId, invitee, timeToLive);
+		GroupInviteTransactionData transactionData = new GroupInviteTransactionData(TestTransaction.generateBase(admin), groupId, invitee, timeToLive, 0L);
 		ValidationResult result = TransactionUtils.signAndImport(repository, transactionData, admin);
 
 		if (result == ValidationResult.OK)
@@ -733,7 +733,7 @@ public class DevGroupAdminTests extends Common {
 	}
 
 	private TransactionData createGroupInviteForGroupApproval(Repository repository, PrivateKeyAccount admin, int groupId, String invitee, int timeToLive) throws DataException {
-		GroupInviteTransactionData transactionData = new GroupInviteTransactionData(TestTransaction.generateBase(admin, groupId), groupId, invitee, timeToLive);
+		GroupInviteTransactionData transactionData = new GroupInviteTransactionData(TestTransaction.generateBase(admin, groupId), groupId, invitee, timeToLive, 0L);
 		TransactionUtils.signAndMint(repository, transactionData, admin);
 		return transactionData;
 	}
@@ -745,7 +745,7 @@ public class DevGroupAdminTests extends Common {
 	}
 
 	private ValidationResult signAndImportGroupInvite(Repository repository, PrivateKeyAccount admin, int groupId, String invitee, int timeToLive) throws DataException {
-		GroupInviteTransactionData transactionData = new GroupInviteTransactionData(TestTransaction.generateBase(admin, groupId), groupId, invitee, timeToLive);
+		GroupInviteTransactionData transactionData = new GroupInviteTransactionData(TestTransaction.generateBase(admin, groupId), groupId, invitee, timeToLive, 0L);
 		return TransactionUtils.signAndImport(repository, transactionData, admin);
 	}
 

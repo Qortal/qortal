@@ -57,6 +57,10 @@ public class CreateGroupTransaction extends Transaction {
 		if (this.createGroupTransactionData.getMaximumBlockDelay() < this.createGroupTransactionData.getMinimumBlockDelay())
 			return ValidationResult.INVALID_GROUP_BLOCK_DELAY;
 
+		// Check join fee is not negative
+		if (this.createGroupTransactionData.getJoinFee() < 0)
+			return ValidationResult.INVALID_GROUP_JOIN_FEE;
+
 		String groupName = this.createGroupTransactionData.getGroupName();
 
 		// Check group name size bounds

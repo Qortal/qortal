@@ -24,9 +24,10 @@ public class CreateGroupTransactionTransformer extends TransactionTransformer {
 	private static final int IS_OPEN_LENGTH = BOOLEAN_LENGTH;
 	private static final int APPROVAL_THRESHOLD_LENGTH = BYTE_LENGTH;
 	private static final int BLOCK_DELAY_LENGTH = INT_LENGTH;
+	private static final int JOIN_FEE_LENGTH = LONG_LENGTH;
 
 	private static final int EXTRAS_LENGTH = NAME_SIZE_LENGTH + DESCRIPTION_SIZE_LENGTH + IS_OPEN_LENGTH
-			+ APPROVAL_THRESHOLD_LENGTH + BLOCK_DELAY_LENGTH + BLOCK_DELAY_LENGTH;
+			+ APPROVAL_THRESHOLD_LENGTH + BLOCK_DELAY_LENGTH + BLOCK_DELAY_LENGTH + JOIN_FEE_LENGTH;
 
 	protected static final TransactionLayout layout;
 
@@ -45,6 +46,7 @@ public class CreateGroupTransactionTransformer extends TransactionTransformer {
 		layout.add("group transaction approval threshold", TransformationType.BYTE);
 		layout.add("minimum block delay for transaction approvals", TransformationType.INT);
 		layout.add("maximum block delay for transaction approvals", TransformationType.INT);
+		layout.add("group join fee", TransformationType.AMOUNT);
 		layout.add("fee", TransformationType.AMOUNT);
 		layout.add("signature", TransformationType.SIGNATURE);
 	}
@@ -71,6 +73,8 @@ public class CreateGroupTransactionTransformer extends TransactionTransformer {
 
 		int maxBlockDelay = byteBuffer.getInt();
 
+		long joinFee = byteBuffer.getLong();
+
 		long fee = byteBuffer.getLong();
 
 		byte[] signature = new byte[SIGNATURE_LENGTH];
@@ -78,7 +82,7 @@ public class CreateGroupTransactionTransformer extends TransactionTransformer {
 
 		BaseTransactionData baseTransactionData = new BaseTransactionData(timestamp, txGroupId, reference, creatorPublicKey, fee, signature);
 
-		return new CreateGroupTransactionData(baseTransactionData, groupName, description, isOpen, approvalThreshold, minBlockDelay, maxBlockDelay);
+		return new CreateGroupTransactionData(baseTransactionData, groupName, description, isOpen, approvalThreshold, minBlockDelay, maxBlockDelay, joinFee);
 	}
 
 	public static int getDataLength(TransactionData transactionData) throws TransformationException {
@@ -107,6 +111,8 @@ public class CreateGroupTransactionTransformer extends TransactionTransformer {
 			bytes.write(Ints.toByteArray(createGroupTransactionData.getMinimumBlockDelay()));
 
 			bytes.write(Ints.toByteArray(createGroupTransactionData.getMaximumBlockDelay()));
+
+			bytes.write(Longs.toByteArray(createGroupTransactionData.getJoinFee()));
 
 			bytes.write(Longs.toByteArray(createGroupTransactionData.getFee()));
 

@@ -4,6 +4,7 @@ import org.qortal.account.Account;
 import org.qortal.asset.Asset;
 import org.qortal.block.BlockChain;
 import org.qortal.crypto.Crypto;
+import org.qortal.data.group.GroupData;
 import org.qortal.data.transaction.GroupInviteTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.group.Group;
@@ -59,6 +60,10 @@ public class GroupInviteTransaction extends Transaction {
 		if (this.groupInviteTransactionData.getTimeToLive() < 0)
 			return ValidationResult.INVALID_LIFETIME;
 
+		// Check join fee is not negative
+		if (this.groupInviteTransactionData.getJoinFee() < 0)
+			return ValidationResult.INVALID_GROUP_JOIN_FEE;
+
 		// Check member address is valid
 		if (!Crypto.isValidAddress(this.groupInviteTransactionData.getInvitee()))
 			return ValidationResult.INVALID_ADDRESS;
@@ -86,6 +91,16 @@ public class GroupInviteTransaction extends Transaction {
 		// Check creator has enough funds
 		if (admin.getConfirmedBalance(Asset.QORT) < this.groupInviteTransactionData.getFee())
 			return ValidationResult.NO_BALANCE;
+
+		// Check for join fee if feature trigger is active
+		int currentHeight = this.repository.getBlockRepository().getBlockchainHeight();
+		if (currentHeight >= BlockChain.getInstance().getGroupFeeHeight()) {
+			GroupData groupData = this.repository.getGroupRepository().fromGroupId(groupId);
+			if (groupData != null && groupData.getJoinFee() > 0) {
+				// Store the join fee in the transaction data for later use when accepting the invite
+				this.groupInviteTransactionData.setJoinFee(groupData.getJoinFee());
+			}
+		}
 
 		// if null ownership group, then check for admin approval
 		if( this.repository.getBlockRepository().getBlockchainHeight() >= BlockChain.getInstance().getNullGroupMembershipHeight() ) {

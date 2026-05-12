@@ -59,6 +59,9 @@ public class UpdateGroupTransactionData extends TransactionData {
 	@Schema(description = "new maximum block delay before which transaction approval must be reached")
 	private int newMaximumBlockDelay;
 
+	@Schema(description = "new fee required to join the group", example = "0")
+	private long newJoinFee;
+
 	/** Reference to CREATE_GROUP or UPDATE_GROUP transaction, used to rebuild group during orphaning. */
 	// For internal use when orphaning
 	@XmlTransient
@@ -81,7 +84,7 @@ public class UpdateGroupTransactionData extends TransactionData {
 	/** From repository */
 	public UpdateGroupTransactionData(BaseTransactionData baseTransactionData,
 			int groupId, String newOwner, String newDescription, boolean newIsOpen, ApprovalThreshold newApprovalThreshold,
-			int newMinimumBlockDelay, int newMaximumBlockDelay, byte[] groupReference) {
+			int newMinimumBlockDelay, int newMaximumBlockDelay, long newJoinFee, byte[] groupReference) {
 		super(TransactionType.UPDATE_GROUP, baseTransactionData);
 
 		this.ownerPublicKey = baseTransactionData.creatorPublicKey;
@@ -92,14 +95,15 @@ public class UpdateGroupTransactionData extends TransactionData {
 		this.newApprovalThreshold = newApprovalThreshold;
 		this.newMinimumBlockDelay = newMinimumBlockDelay;
 		this.newMaximumBlockDelay = newMaximumBlockDelay;
+		this.newJoinFee = newJoinFee;
 		this.groupReference = groupReference;
 	}
 
 	/** From network/API */
 	public UpdateGroupTransactionData(BaseTransactionData baseTransactionData,
 			int groupId, String newOwner, String newDescription, boolean newIsOpen, ApprovalThreshold newApprovalThreshold,
-			int newMinimumBlockDelay, int newMaximumBlockDelay) {
-		this(baseTransactionData, groupId, newOwner, newDescription, newIsOpen, newApprovalThreshold, newMinimumBlockDelay, newMaximumBlockDelay, null);
+			int newMinimumBlockDelay, int newMaximumBlockDelay, long newJoinFee) {
+		this(baseTransactionData, groupId, newOwner, newDescription, newIsOpen, newApprovalThreshold, newMinimumBlockDelay, newMaximumBlockDelay, newJoinFee, null);
 	}
 
 	// Getters / setters
@@ -142,6 +146,14 @@ public class UpdateGroupTransactionData extends TransactionData {
 
 	public void setGroupReference(byte[] groupReference) {
 		this.groupReference = groupReference;
+	}
+
+	public long getNewJoinFee() {
+		return this.newJoinFee;
+	}
+
+	public void setNewJoinFee(long newJoinFee) {
+		this.newJoinFee = newJoinFee;
 	}
 
 }

@@ -18,7 +18,7 @@ public class UpdateGroupTestTransaction extends TestTransaction {
 		final int newMinimumBlockDelay = 10;
 		final int newMaximumBlockDelay = 60;
 
-		return new UpdateGroupTransactionData(generateBase(account), groupId, newOwner, newDescription, newIsOpen, newApprovalThreshold, newMinimumBlockDelay, newMaximumBlockDelay);
+		return new UpdateGroupTransactionData(generateBase(account), groupId, newOwner, newDescription, newIsOpen, newApprovalThreshold, newMinimumBlockDelay, newMaximumBlockDelay, 0L, (byte[]) null);
 	}
 
 }

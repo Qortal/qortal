@@ -66,7 +66,7 @@ public class GroupBlockDelayTests extends Common {
 		final boolean isOpen = false;
 		ApprovalThreshold approvalThreshold = ApprovalThreshold.PCT40;
 
-		CreateGroupTransactionData transactionData = new CreateGroupTransactionData(TestTransaction.generateBase(account), groupName, description, isOpen, approvalThreshold, minimumBlockDelay, maximumBlockDelay);
+		CreateGroupTransactionData transactionData = new CreateGroupTransactionData(TestTransaction.generateBase(account), groupName, description, isOpen, approvalThreshold, minimumBlockDelay, maximumBlockDelay, 0);
 		return new CreateGroupTransaction(repository, transactionData);
 	}
 
@@ -104,7 +104,7 @@ public class GroupBlockDelayTests extends Common {
 		final boolean newIsOpen = false;
 		ApprovalThreshold newApprovalThreshold = ApprovalThreshold.PCT40;
 
-		UpdateGroupTransactionData transactionData = new UpdateGroupTransactionData(TestTransaction.generateBase(account), groupId, newOwner, newDescription, newIsOpen, newApprovalThreshold, newMinimumBlockDelay, newMaximumBlockDelay);
+		UpdateGroupTransactionData transactionData = new UpdateGroupTransactionData(TestTransaction.generateBase(account), groupId, newOwner, newDescription, newIsOpen, newApprovalThreshold, newMinimumBlockDelay, newMaximumBlockDelay, 0L, (byte[]) null);
 		return new UpdateGroupTransaction(repository, transactionData);
 	}
 

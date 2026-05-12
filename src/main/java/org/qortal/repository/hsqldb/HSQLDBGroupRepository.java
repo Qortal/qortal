@@ -31,7 +31,7 @@ public class HSQLDBGroupRepository implements GroupRepository {
 	@Override
 	public GroupData fromGroupId(int groupId) throws DataException {
 		String sql = "SELECT group_name, owner, description, created_when, updated_when, reference, is_open, "
-				+ "approval_threshold, min_block_delay, max_block_delay, creation_group_id, reduced_group_name "
+				+ "approval_threshold, min_block_delay, max_block_delay, join_fee, creation_group_id, reduced_group_name "
 				+ "FROM Groups WHERE group_id = ?";
 
 		try (ResultSet resultSet = this.repository.checkedExecute(sql, groupId)) {
@@ -55,12 +55,13 @@ public class HSQLDBGroupRepository implements GroupRepository {
 
 			int minBlockDelay = resultSet.getInt(9);
 			int maxBlockDelay = resultSet.getInt(10);
+			long joinFee = resultSet.getLong(11);
 
-			int creationGroupId = resultSet.getInt(11);
-			String reducedGroupName = resultSet.getString(12);
+			int creationGroupId = resultSet.getInt(12);
+			String reducedGroupName = resultSet.getString(13);
 
 			return new GroupData(groupId, owner, groupName, description, created, updated, isOpen,
-					approvalThreshold, minBlockDelay, maxBlockDelay, reference, creationGroupId, reducedGroupName);
+					approvalThreshold, minBlockDelay, maxBlockDelay, joinFee, reference, creationGroupId, reducedGroupName);
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch group info from repository", e);
 		}
@@ -69,7 +70,7 @@ public class HSQLDBGroupRepository implements GroupRepository {
 	@Override
 	public GroupData fromGroupName(String groupName) throws DataException {
 		String sql = "SELECT group_id, owner, description, created_when, updated_when, reference, is_open, "
-				+ "approval_threshold, min_block_delay, max_block_delay, creation_group_id, reduced_group_name "
+				+ "approval_threshold, min_block_delay, max_block_delay, join_fee, creation_group_id, reduced_group_name "
 				+ "FROM Groups WHERE group_name = ?";
 
 		try (ResultSet resultSet = this.repository.checkedExecute(sql, groupName)) {
@@ -93,12 +94,13 @@ public class HSQLDBGroupRepository implements GroupRepository {
 
 			int minBlockDelay = resultSet.getInt(9);
 			int maxBlockDelay = resultSet.getInt(10);
+			long joinFee = resultSet.getLong(11);
 
-			int creationGroupId = resultSet.getInt(11);
-			String reducedGroupName = resultSet.getString(12);
+			int creationGroupId = resultSet.getInt(12);
+			String reducedGroupName = resultSet.getString(13);
 
 			return new GroupData(groupId, owner, groupName, description, created, updated, isOpen,
-					approvalThreshold, minBlockDelay, maxBlockDelay, reference, creationGroupId, reducedGroupName);
+					approvalThreshold, minBlockDelay, maxBlockDelay, joinFee, reference, creationGroupId, reducedGroupName);
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch group info from repository", e);
 		}
@@ -202,7 +204,7 @@ public class HSQLDBGroupRepository implements GroupRepository {
 		StringBuilder sql = new StringBuilder(512);
 
 		sql.append("SELECT group_id, owner, group_name, description, created_when, updated_when, reference, is_open, "
-				+ "approval_threshold, min_block_delay, max_block_delay, creation_group_id, reduced_group_name "
+				+ "approval_threshold, min_block_delay, max_block_delay, join_fee, creation_group_id, reduced_group_name "
 				+ "FROM Groups ORDER BY group_name");
 
 		if (reverse != null && reverse)
@@ -235,12 +237,13 @@ public class HSQLDBGroupRepository implements GroupRepository {
 
 				int minBlockDelay = resultSet.getInt(10);
 				int maxBlockDelay = resultSet.getInt(11);
+				long joinFee = resultSet.getLong(12);
 
-				int creationGroupId = resultSet.getInt(12);
-				String reducedGroupName = resultSet.getString(13);
+				int creationGroupId = resultSet.getInt(13);
+				String reducedGroupName = resultSet.getString(14);
 
 				groups.add(new GroupData(groupId, owner, groupName, description, created, updated, isOpen,
-						approvalThreshold, minBlockDelay, maxBlockDelay, reference, creationGroupId, reducedGroupName));
+						approvalThreshold, minBlockDelay, maxBlockDelay, joinFee, reference, creationGroupId, reducedGroupName));
 			} while (resultSet.next());
 
 			return groups;
@@ -254,7 +257,7 @@ public class HSQLDBGroupRepository implements GroupRepository {
 		StringBuilder sql = new StringBuilder(512);
 
 		sql.append("SELECT group_id, group_name, description, created_when, updated_when, reference, is_open, "
-				+ "approval_threshold, min_block_delay, max_block_delay, creation_group_id, reduced_group_name "
+				+ "approval_threshold, min_block_delay, max_block_delay, join_fee, creation_group_id, reduced_group_name "
 				+ "FROM Groups WHERE owner = ? ORDER BY group_name");
 
 		if (reverse != null && reverse)
@@ -286,12 +289,13 @@ public class HSQLDBGroupRepository implements GroupRepository {
 
 				int minBlockDelay = resultSet.getInt(9);
 				int maxBlockDelay = resultSet.getInt(10);
+    			long joinFee = resultSet.getLong(11);
 
-				int creationGroupId = resultSet.getInt(11);
-				String reducedGroupName = resultSet.getString(12);
+    			int creationGroupId = resultSet.getInt(12);
+    			String reducedGroupName = resultSet.getString(13);
 
 				groups.add(new GroupData(groupId, owner, groupName, description, created, updated, isOpen,
-						approvalThreshold, minBlockDelay, maxBlockDelay, reference, creationGroupId, reducedGroupName));
+					approvalThreshold, minBlockDelay, maxBlockDelay, joinFee, reference, creationGroupId, reducedGroupName));
 			} while (resultSet.next());
 
 			return groups;
@@ -305,7 +309,7 @@ public class HSQLDBGroupRepository implements GroupRepository {
 		StringBuilder sql = new StringBuilder(512);
 
 		sql.append("SELECT group_id, owner, group_name, description, created_when, updated_when, reference, is_open, "
-				+ "approval_threshold, min_block_delay, max_block_delay, creation_group_id, reduced_group_name, admin FROM Groups "
+				+ "approval_threshold, min_block_delay, max_block_delay, join_fee, creation_group_id, reduced_group_name, admin FROM Groups "
 				+ "JOIN GroupMembers USING (group_id) "
 				+ "LEFT OUTER JOIN GroupAdmins ON GroupAdmins.group_id = GroupMembers.group_id AND GroupAdmins.admin = GroupMembers.address "
 				+ "WHERE address = ? ORDER BY group_name");
@@ -340,15 +344,16 @@ public class HSQLDBGroupRepository implements GroupRepository {
 
 				int minBlockDelay = resultSet.getInt(10);
 				int maxBlockDelay = resultSet.getInt(11);
+				long joinFee = resultSet.getLong(12);
 
-				int creationGroupId = resultSet.getInt(12);
-				String reducedGroupName = resultSet.getString(13);
+				int creationGroupId = resultSet.getInt(13);
+				String reducedGroupName = resultSet.getString(14);
 
-				resultSet.getString(14); // 'admin'
+				resultSet.getString(15); // 'admin'
 				boolean isAdmin = !resultSet.wasNull();
 
 				GroupData groupData = new GroupData(groupId, owner, groupName, description, created, updated, isOpen,
-						approvalThreshold, minBlockDelay, maxBlockDelay, reference, creationGroupId, reducedGroupName);
+						approvalThreshold, minBlockDelay, maxBlockDelay, joinFee, reference, creationGroupId, reducedGroupName);
 
 				groupData.setIsAdmin(isAdmin);
 
@@ -399,12 +404,13 @@ public class HSQLDBGroupRepository implements GroupRepository {
 
 				int minBlockDelay = resultSet.getInt(10);
 				int maxBlockDelay = resultSet.getInt(11);
+				long joinFee = resultSet.getLong(12);
 
-				int creationGroupId = resultSet.getInt(12);
-				String reducedGroupName = resultSet.getString(13);
+				int creationGroupId = resultSet.getInt(13);
+				String reducedGroupName = resultSet.getString(14);
 
 				groups.add(new GroupData(groupId, owner, groupName, description, created, updated, isOpen,
-						approvalThreshold, minBlockDelay, maxBlockDelay, reference, creationGroupId, reducedGroupName));
+						approvalThreshold, minBlockDelay, maxBlockDelay, joinFee, reference, creationGroupId, reducedGroupName));
 			} while (resultSet.next());
 
 			return groups;
@@ -421,7 +427,7 @@ public class HSQLDBGroupRepository implements GroupRepository {
 				.bind("description", groupData.getDescription()).bind("created_when", groupData.getCreated()).bind("updated_when", groupData.getUpdated())
 				.bind("reference", groupData.getReference()).bind("is_open", groupData.isOpen()).bind("approval_threshold", groupData.getApprovalThreshold().value)
 				.bind("min_block_delay", groupData.getMinimumBlockDelay()).bind("max_block_delay", groupData.getMaximumBlockDelay())
-				.bind("creation_group_id", groupData.getCreationGroupId()).bind("reduced_group_name", groupData.getReducedGroupName());
+				.bind("join_fee", groupData.getJoinFee()).bind("creation_group_id", groupData.getCreationGroupId()).bind("reduced_group_name", groupData.getReducedGroupName());
 
 		try {
 			saveHelper.execute(this.repository);
@@ -789,7 +795,7 @@ public class HSQLDBGroupRepository implements GroupRepository {
 
 	@Override
 	public GroupInviteData getInvite(int groupId, String invitee) throws DataException {
-		String sql = "SELECT inviter, expires_when, reference FROM GroupInvites WHERE group_id = ? AND invitee = ?";
+		String sql = "SELECT inviter, expires_when, reference, join_fee FROM GroupInvites WHERE group_id = ? AND invitee = ?";
 
 		try (ResultSet resultSet = this.repository.checkedExecute(sql, groupId, invitee)) {
 			if (resultSet == null)
@@ -802,8 +808,12 @@ public class HSQLDBGroupRepository implements GroupRepository {
 				expiry = null;
 
 			byte[] reference = resultSet.getBytes(3);
+			
+			Long joinFee = resultSet.getLong(4);
+			if (joinFee == 0 && resultSet.wasNull())
+				joinFee = null;
 
-			return new GroupInviteData(groupId, inviter, invitee, expiry, reference);
+			return new GroupInviteData(groupId, inviter, invitee, expiry, joinFee, reference);
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch group invite from repository", e);
 		}
@@ -822,7 +832,7 @@ public class HSQLDBGroupRepository implements GroupRepository {
 	public List<GroupInviteData> getInvitesByGroupId(int groupId, Integer limit, Integer offset, Boolean reverse) throws DataException {
 		StringBuilder sql = new StringBuilder(256);
 
-		sql.append("SELECT inviter, invitee, expires_when, reference FROM GroupInvites WHERE group_id = ? ORDER BY invitee");
+		sql.append("SELECT inviter, invitee, expires_when, reference, join_fee FROM GroupInvites WHERE group_id = ? ORDER BY invitee");
 
 		if (reverse != null && reverse)
 			sql.append(" DESC");
@@ -844,8 +854,12 @@ public class HSQLDBGroupRepository implements GroupRepository {
 					expiry = null;
 
 				byte[] reference = resultSet.getBytes(4);
+				
+				Long joinFee = resultSet.getLong(5);
+				if (joinFee == 0 && resultSet.wasNull())
+					joinFee = null;
 
-				invites.add(new GroupInviteData(groupId, inviter, invitee, expiry, reference));
+				invites.add(new GroupInviteData(groupId, inviter, invitee, expiry, joinFee, reference));
 			} while (resultSet.next());
 
 			return invites;
@@ -858,7 +872,7 @@ public class HSQLDBGroupRepository implements GroupRepository {
 	public List<GroupInviteData> getInvitesByInvitee(String invitee, Integer limit, Integer offset, Boolean reverse) throws DataException {
 		StringBuilder sql = new StringBuilder(256);
 
-		sql.append("SELECT group_id, inviter, expires_when, reference FROM GroupInvites WHERE invitee = ? ORDER BY group_id");
+		sql.append("SELECT group_id, inviter, expires_when, reference, join_fee FROM GroupInvites WHERE invitee = ? ORDER BY group_id");
 
 		if (reverse != null && reverse)
 			sql.append(" DESC");
@@ -880,8 +894,12 @@ public class HSQLDBGroupRepository implements GroupRepository {
 					expiry = null;
 
 				byte[] reference = resultSet.getBytes(4);
+				
+				Long joinFee = resultSet.getLong(5);
+				if (joinFee == 0 && resultSet.wasNull())
+					joinFee = null;
 
-				invites.add(new GroupInviteData(groupId, inviter, invitee, expiry, reference));
+				invites.add(new GroupInviteData(groupId, inviter, invitee, expiry, joinFee, reference));
 			} while (resultSet.next());
 
 			return invites;
@@ -896,7 +914,7 @@ public class HSQLDBGroupRepository implements GroupRepository {
 
 		saveHelper.bind("group_id", groupInviteData.getGroupId()).bind("inviter", groupInviteData.getInviter())
 				.bind("invitee", groupInviteData.getInvitee()).bind("expires_when", groupInviteData.getExpiry())
-				.bind("reference", groupInviteData.getReference());
+				.bind("join_fee", groupInviteData.getJoinFee()).bind("reference", groupInviteData.getReference());
 
 		try {
 			saveHelper.execute(this.repository);

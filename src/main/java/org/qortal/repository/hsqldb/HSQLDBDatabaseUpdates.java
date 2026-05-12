@@ -1080,6 +1080,15 @@ public class HSQLDBDatabaseUpdates {
 
 					break;
 
+				case 53:
+					// Add join_fee field to groups, groupinvites, and transaction tables
+					stmt.execute("ALTER TABLE `GROUPS` ADD COLUMN join_fee QortalAmount NOT NULL DEFAULT 0");
+					stmt.execute("ALTER TABLE GroupInvites ADD COLUMN join_fee QortalAmount NOT NULL DEFAULT 0");
+					stmt.execute("ALTER TABLE CreateGroupTransactions ADD COLUMN join_fee QortalAmount NOT NULL DEFAULT 0");
+					stmt.execute("ALTER TABLE UpdateGroupTransactions ADD COLUMN new_join_fee QortalAmount NOT NULL DEFAULT 0");
+					stmt.execute("ALTER TABLE GroupInviteTransactions ADD COLUMN join_fee QortalAmount NOT NULL DEFAULT 0");
+					break;
+
 				default:
 					// nothing to do
 					return false;

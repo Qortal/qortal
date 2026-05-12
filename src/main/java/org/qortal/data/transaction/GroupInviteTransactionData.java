@@ -25,6 +25,8 @@ public class GroupInviteTransactionData extends TransactionData {
 	private String invitee;
 	@Schema(description = "invitation lifetime in seconds")
 	private int timeToLive;
+	@Schema(description = "fee required to join the group", example = "0")
+	private long joinFee;
 	/** Reference to JOIN_GROUP transaction, used to rebuild this join request during orphaning. */
 	// No need to ever expose this via API
 	@XmlTransient
@@ -49,20 +51,21 @@ public class GroupInviteTransactionData extends TransactionData {
 
 	/** From repository */
 	public GroupInviteTransactionData(BaseTransactionData baseTransactionData,
-			int groupId, String invitee, int timeToLive, byte[] joinReference, Integer previousGroupId) {
+			int groupId, String invitee, int timeToLive, long joinFee, byte[] joinReference, Integer previousGroupId) {
 		super(TransactionType.GROUP_INVITE, baseTransactionData);
 
 		this.adminPublicKey = baseTransactionData.creatorPublicKey;
 		this.groupId = groupId;
 		this.invitee = invitee;
 		this.timeToLive = timeToLive;
+		this.joinFee = joinFee;
 		this.joinReference = joinReference;
 		this.previousGroupId = previousGroupId;
 	}
 
 	/** From network/API */
-	public GroupInviteTransactionData(BaseTransactionData baseTransactionData, int groupId, String invitee, int timeToLive) {
-		this(baseTransactionData, groupId, invitee, timeToLive, null, null);
+	public GroupInviteTransactionData(BaseTransactionData baseTransactionData, int groupId, String invitee, int timeToLive, long joinFee) {
+		this(baseTransactionData, groupId, invitee, timeToLive, joinFee, null, null);
 	}
 
 	// Getters / setters
@@ -81,6 +84,14 @@ public class GroupInviteTransactionData extends TransactionData {
 
 	public int getTimeToLive() {
 		return this.timeToLive;
+	}
+
+	public long getJoinFee() {
+		return this.joinFee;
+	}
+
+	public void setJoinFee(long joinFee) {
+		this.joinFee = joinFee;
 	}
 
 	public byte[] getJoinReference() {

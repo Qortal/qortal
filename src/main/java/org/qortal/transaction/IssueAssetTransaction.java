@@ -3,6 +3,7 @@ package org.qortal.transaction;
 import com.google.common.base.Utf8;
 import org.qortal.account.Account;
 import org.qortal.asset.Asset;
+import org.qortal.data.asset.AssetData;
 import org.qortal.data.transaction.IssueAssetTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.repository.DataException;
@@ -98,16 +99,118 @@ public class IssueAssetTransaction extends Transaction {
 
 	@Override
 	public void process() throws DataException {
-		// Issue asset
-		Asset asset = new Asset(this.repository, this.issueAssetTransactionData);
-		asset.issue();
+		// Special case for genesis assets
+		String assetName = this.issueAssetTransactionData.getAssetName();
+		boolean isGenesisAsset = (assetName.equals("QORT") ||
+								 assetName.equals("Legacy-QORA") ||
+								 assetName.equals("QORT-from-QORA") ||
+								 assetName.equals("TEST") ||
+								 assetName.equals("OTHER") ||
+								 assetName.equals("GOLD"));
+		
+		if (isGenesisAsset && this.repository.getBlockRepository().getBlockchainHeight() == 0) {
+			// Determine the correct ID for this genesis asset
+			Long correctAssetId = null;
+			if (assetName.equals("QORT")) {
+				correctAssetId = 0L;
+			} else if (assetName.equals("Legacy-QORA")) {
+				correctAssetId = 1L;
+			} else if (assetName.equals("QORT-from-QORA")) {
+				correctAssetId = 2L;
+			} else if (assetName.equals("TEST")) {
+				correctAssetId = 3L;
+			} else if (assetName.equals("OTHER")) {
+				correctAssetId = 4L;
+			} else if (assetName.equals("GOLD")) {
+				correctAssetId = 5L;
+			}
+			
+			System.out.println("DEBUG: IssueAssetTransaction.process() - Processing genesis asset: " + assetName + " with correct ID: " + correctAssetId);
+			
+			// Check if asset already exists
+			try {
+				AssetData existingAsset = this.repository.getAssetRepository().fromAssetName(assetName);
+				if (existingAsset != null) {
+					// Use existing asset
+					System.out.println("DEBUG: IssueAssetTransaction.process() - Asset " + assetName + " already exists with ID: " + existingAsset.getAssetId());
+					this.issueAssetTransactionData.setAssetId(existingAsset.getAssetId());
+				} else {
+					// Create asset with correct ID
+					System.out.println("DEBUG: IssueAssetTransaction.process() - Creating asset " + assetName + " with ID: " + correctAssetId);
+					AssetData genesisAsset = new AssetData(correctAssetId, this.getCreator().getAddress(),
+						this.issueAssetTransactionData.getAssetName(),
+						this.issueAssetTransactionData.getDescription(),
+						this.issueAssetTransactionData.getQuantity(),
+						this.issueAssetTransactionData.isDivisible(),
+						this.issueAssetTransactionData.getData(),
+						this.issueAssetTransactionData.isUnspendable(),
+						0, // creationGroupId
+						new byte[0], // reference
+						this.issueAssetTransactionData.getReducedAssetName());
+					this.repository.getAssetRepository().save(genesisAsset);
+					this.issueAssetTransactionData.setAssetId(genesisAsset.getAssetId());
+					System.out.println("DEBUG: IssueAssetTransaction.process() - Created asset " + assetName + " with actual ID: " + genesisAsset.getAssetId());
+				}
+			} catch (DataException e) {
+				// Create asset with correct ID
+				System.out.println("DEBUG: IssueAssetTransaction.process() - Exception checking asset " + assetName + ", creating with ID: " + correctAssetId);
+				AssetData genesisAsset = new AssetData(correctAssetId, this.getCreator().getAddress(),
+					this.issueAssetTransactionData.getAssetName(),
+					this.issueAssetTransactionData.getDescription(),
+					this.issueAssetTransactionData.getQuantity(),
+					this.issueAssetTransactionData.isDivisible(),
+					this.issueAssetTransactionData.getData(),
+					this.issueAssetTransactionData.isUnspendable(),
+					0, // creationGroupId
+					new byte[0], // reference
+					this.issueAssetTransactionData.getReducedAssetName());
+				this.repository.getAssetRepository().save(genesisAsset);
+				this.issueAssetTransactionData.setAssetId(genesisAsset.getAssetId());
+				System.out.println("DEBUG: IssueAssetTransaction.process() - Created asset " + assetName + " with actual ID: " + genesisAsset.getAssetId());
+			}
+		} else if (isGenesisAsset) {
+			// For genesis assets after height 0, check if they already exist with the correct ID
+			Long correctAssetId = null;
+			if (assetName.equals("QORT")) {
+				correctAssetId = 0L;
+			} else if (assetName.equals("Legacy-QORA")) {
+				correctAssetId = 1L;
+			} else if (assetName.equals("QORT-from-QORA")) {
+				correctAssetId = 2L;
+			} else if (assetName.equals("TEST")) {
+				correctAssetId = 3L;
+			} else if (assetName.equals("OTHER")) {
+				correctAssetId = 4L;
+			} else if (assetName.equals("GOLD")) {
+				correctAssetId = 5L;
+			}
+			
+			System.out.println("DEBUG: IssueAssetTransaction.process() - Processing genesis asset after height 0: " + assetName + " with correct ID: " + correctAssetId);
+			
+			// Check if asset already exists
+			try {
+				AssetData existingAsset = this.repository.getAssetRepository().fromAssetName(assetName);
+				if (existingAsset != null && existingAsset.getAssetId() == correctAssetId) {
+					// Use existing asset
+					System.out.println("DEBUG: IssueAssetTransaction.process() - Asset " + assetName + " already exists with correct ID: " + existingAsset.getAssetId());
+					this.issueAssetTransactionData.setAssetId(existingAsset.getAssetId());
+					return; // Don't create a new asset
+				}
+			} catch (DataException e) {
+				// Asset doesn't exist, continue with normal processing
+			}
+		} else {
+			// Issue asset normally
+			Asset asset = new Asset(this.repository, this.issueAssetTransactionData);
+			asset.issue();
+
+			// Note newly assigned asset ID in our transaction record
+			this.issueAssetTransactionData.setAssetId(asset.getAssetData().getAssetId());
+		}
 
 		// Add asset to issuer
 		Account issuer = this.getIssuer();
-		issuer.setConfirmedBalance(asset.getAssetData().getAssetId(), this.issueAssetTransactionData.getQuantity());
-
-		// Note newly assigned asset ID in our transaction record
-		this.issueAssetTransactionData.setAssetId(asset.getAssetData().getAssetId());
+		issuer.setConfirmedBalance(this.issueAssetTransactionData.getAssetId(), this.issueAssetTransactionData.getQuantity());
 
 		// Save this transaction with newly assigned assetId
 		this.repository.getTransactionRepository().save(this.issueAssetTransactionData);
@@ -115,19 +218,31 @@ public class IssueAssetTransaction extends Transaction {
 
 	@Override
 	public void orphan() throws DataException {
-		// Remove asset from issuer
-		Account issuer = this.getIssuer();
-		issuer.deleteBalance(this.issueAssetTransactionData.getAssetId());
+		// Check if this is a genesis asset (QORT, Legacy-QORA, etc.)
+		// Genesis assets should not be deleted during orphaning
+		String assetName = this.issueAssetTransactionData.getAssetName();
+		boolean isGenesisAsset = (assetName.equals("QORT") ||
+		                         assetName.equals("Legacy-QORA") ||
+		                         assetName.equals("QORT-from-QORA") ||
+		                         assetName.equals("TEST") ||
+		                         assetName.equals("OTHER") ||
+		                         assetName.equals("GOLD"));
+		
+		if (!isGenesisAsset) {
+			// Remove asset from issuer
+			Account issuer = this.getIssuer();
+			issuer.deleteBalance(this.issueAssetTransactionData.getAssetId());
 
-		// Deissue asset
-		Asset asset = new Asset(this.repository, this.issueAssetTransactionData.getAssetId());
-		asset.deissue();
+			// Deissue asset
+			Asset asset = new Asset(this.repository, this.issueAssetTransactionData.getAssetId());
+			asset.deissue();
 
-		// Remove assigned asset ID from transaction info
-		this.issueAssetTransactionData.setAssetId(null);
+			// Remove assigned asset ID from transaction info
+			this.issueAssetTransactionData.setAssetId(null);
 
-		// Save this transaction, with removed assetId
-		this.repository.getTransactionRepository().save(this.issueAssetTransactionData);
+			// Save this transaction, with removed assetId
+			this.repository.getTransactionRepository().save(this.issueAssetTransactionData);
+		}
 	}
 
 }

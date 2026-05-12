@@ -426,7 +426,7 @@ public class AdminTests extends Common {
 		int minimumBlockDelay = 10;
 		int maximumBlockDelay = 1440;
 
-		CreateGroupTransactionData transactionData = new CreateGroupTransactionData(TestTransaction.generateBase(owner), groupName, description, isOpen, approvalThreshold, minimumBlockDelay, maximumBlockDelay);
+		CreateGroupTransactionData transactionData = new CreateGroupTransactionData(TestTransaction.generateBase(owner), groupName, description, isOpen, approvalThreshold, minimumBlockDelay, maximumBlockDelay,0);
 		TransactionUtils.signAndMint(repository, transactionData, owner);
 
 		return repository.getGroupRepository().fromGroupName(groupName).getGroupId();

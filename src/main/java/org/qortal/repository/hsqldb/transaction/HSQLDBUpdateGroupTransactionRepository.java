@@ -18,7 +18,7 @@ public class HSQLDBUpdateGroupTransactionRepository extends HSQLDBTransactionRep
 	}
 
 	TransactionData fromBase(BaseTransactionData baseTransactionData) throws DataException {
-		String sql = "SELECT group_id, new_owner, new_description, new_is_open, new_approval_threshold, new_min_block_delay, new_max_block_delay, group_reference FROM UpdateGroupTransactions WHERE signature = ?";
+		String sql = "SELECT group_id, new_owner, new_description, new_is_open, new_approval_threshold, new_min_block_delay, new_max_block_delay, new_join_fee, group_reference FROM UpdateGroupTransactions WHERE signature = ?";
 
 		try (ResultSet resultSet = this.repository.checkedExecute(sql, baseTransactionData.getSignature())) {
 			if (resultSet == null)
@@ -31,10 +31,11 @@ public class HSQLDBUpdateGroupTransactionRepository extends HSQLDBTransactionRep
 			ApprovalThreshold newApprovalThreshold = ApprovalThreshold.valueOf(resultSet.getInt(5));
 			int newMinBlockDelay = resultSet.getInt(6);
 			int newMaxBlockDelay = resultSet.getInt(7);
-			byte[] groupReference = resultSet.getBytes(8);
+			long newJoinFee = resultSet.getLong(8);
+			byte[] groupReference = resultSet.getBytes(9);
 
 			return new UpdateGroupTransactionData(baseTransactionData, groupId, newOwner, newDescription, newIsOpen,
-					newApprovalThreshold, newMinBlockDelay, newMaxBlockDelay, groupReference);
+					newApprovalThreshold, newMinBlockDelay, newMaxBlockDelay, newJoinFee, groupReference);
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch update group transaction from repository", e);
 		}
@@ -52,6 +53,7 @@ public class HSQLDBUpdateGroupTransactionRepository extends HSQLDBTransactionRep
 				.bind("new_approval_threshold", updateGroupTransactionData.getNewApprovalThreshold().value)
 				.bind("new_min_block_delay", updateGroupTransactionData.getNewMinimumBlockDelay())
 				.bind("new_max_block_delay", updateGroupTransactionData.getNewMaximumBlockDelay())
+				.bind("new_join_fee", updateGroupTransactionData.getNewJoinFee())
 				.bind("group_reference", updateGroupTransactionData.getGroupReference());
 
 		try {
