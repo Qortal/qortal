@@ -105,8 +105,10 @@ public class ReticulumPeer implements Peer {
     private boolean isPeerAvailable;  // peer is available in Network lists
     Link peerLink;
     byte[] peerLinkHash;
-    BufferedRWPair peerBuffer;
+    volatile BufferedRWPair peerBuffer;
     Channel channel;
+    // Guards createPeerBuffer() so only one thread calls getChannel() at a time.
+    private final java.util.concurrent.atomic.AtomicBoolean creatingBuffer = new java.util.concurrent.atomic.AtomicBoolean(false);
     int receiveStreamId = 1001;
     int sendStreamId = 1001;
     ReticulumPeerAddress peerAddress;
@@ -386,18 +388,25 @@ public class ReticulumPeer implements Peer {
      * the Reticulum library holds that lock during link setup (bug: blocked Network-Workers).
      */
     public void createPeerBuffer() {
-        var ntpNow = NTP.getTime();
-        channel = this.peerLink.getChannel();
-        log.info("creating buffer - peerLink status: {}, channel: {}", this.peerLink.getStatus(), channel);
-        this.peerBuffer = Buffer.createBidirectionalBuffer(receiveStreamId, sendStreamId, channel, this::peerBufferReady);
-        this.peerData.setLastAttempted(ntpNow);
-        this.peerData.setLastConnected(ntpNow);
-        this.startPings();
-        makePeerAvailable();
-        // Chain tip is NOT sent here. Sending immediately on link establishment caused
-        // Channel "retry count exceeded" teardowns when the backbone dropped packets at
-        // that moment, creating a tight reconnect loop. The normal broadcastOurChain()
-        // cycle delivers the chain tip within a few seconds without straining new links.
+        if (this.peerBuffer != null) return;  // already created (volatile read)
+        // CAS guard: only one thread calls getChannel() at a time. If another thread is
+        // already creating the buffer, skip — the buffer will be visible shortly.
+        if (!creatingBuffer.compareAndSet(false, true)) return;
+        try {
+            if (this.peerBuffer != null) return;  // double-check after CAS
+            var ntpNow = NTP.getTime();
+            channel = this.peerLink.getChannel();
+            log.info("creating buffer - peerLink status: {}, channel: {}", this.peerLink.getStatus(), channel);
+            this.peerBuffer = Buffer.createBidirectionalBuffer(receiveStreamId, sendStreamId, channel, this::peerBufferReady);
+            this.peerData.setLastAttempted(ntpNow);
+            this.peerData.setLastConnected(ntpNow);
+            this.startPings();
+            makePeerAvailable();
+            // Chain tip is NOT sent here — sending immediately on link establishment caused
+            // Channel "retry count exceeded" teardowns. broadcastOurChain() delivers it shortly.
+        } finally {
+            creatingBuffer.set(false);
+        }
     }
 
     public BufferedRWPair getOrInitPeerBuffer() {
@@ -423,12 +432,13 @@ public class ReticulumPeer implements Peer {
                 this.peerData.setLastAttempted(ntpNow);
                 this.peerData.setLastMisbehaved(ntpNow);
             }
+        } else {
+            // Buffer is null: either createPeerBuffer() hasn't fired yet (link just became ACTIVE),
+            // or shutdownChannel() was called (e.g., peer went unreachable) but the link is still
+            // ACTIVE. Recreate it. createPeerBuffer() uses an AtomicBoolean so only one thread
+            // calls getChannel() at a time — no synchronized(link) pile-up.
+            createPeerBuffer();
         }
-        // Buffer is null: either createPeerBuffer() hasn't fired yet, or shutdownChannel() was
-        // called. Never call getChannel() here — synchronized(link) contention causes multiple
-        // broadcast/send threads to pile up when the Reticulum library holds that lock.
-        // Return null; the next send attempt will succeed once the buffer is created by the
-        // link-establishment callback (createPeerBuffer).
         return getPeerBuffer();
     }
 
@@ -655,7 +665,7 @@ public class ReticulumPeer implements Peer {
                 //log.info("***> creating message from {} bytes", data.length);
                 Message message = Message.fromByteBuffer(bb);
                 if (message == null) {
-                    log.warn("peerBufferReady - null message from {} bytes (unrecognised magic/type?), skipping", data.length);
+                    log.debug("peerBufferReady - null message from {} bytes (unrecognised magic/type?), skipping", data.length);
                     return;
                 }
                 log.debug("*=> type {} message received ({} bytes, id: {})", message.getType(), data.length, message.getId());
