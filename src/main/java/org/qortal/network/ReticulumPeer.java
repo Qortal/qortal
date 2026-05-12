@@ -563,8 +563,12 @@ public class ReticulumPeer implements Peer {
     
     public void linkClosed(Link link) {
         if (isInitiator) {
+            // Null the buffer immediately so createPeerBuffer() works correctly if this peer's
+            // link is re-initiated before prunePeers() calls removeLinkedPeer() → shutdownChannel().
+            // Without this, createPeerBuffer() sees peerBuffer != null (stale from the old link)
+            // and returns early, leaving the re-established link with no working buffer.
+            shutdownChannel();
             disconnect("link closed");
-            //makePeerUnavailable();
         }
         // Kick the announce/path-recovery cycle immediately rather than waiting up to 30s
         // for the next runBaseLoop iteration. Skip during shutdown (all links close then too).
