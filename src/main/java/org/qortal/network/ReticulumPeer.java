@@ -394,15 +394,10 @@ public class ReticulumPeer implements Peer {
         this.peerData.setLastConnected(ntpNow);
         this.startPings();
         makePeerAvailable();
-        // Send our chain tip so the remote peer knows our height and can trigger sync.
-        // This mirrors the TCP/IP handshake's chain-tip exchange on connection completion.
-        Message chainTipMessage = RNS.getInstance().buildHeightOrChainTipInfo(this);
-        if (chainTipMessage != null) {
-            log.info("[{}] Sending chain tip ({}) to {}", getPeerConnectionId(), chainTipMessage.getType(), this);
-            sendMessage(chainTipMessage);
-        } else {
-            log.info("[{}] No chain tip available to send to {} (blockchain not ready yet)", getPeerConnectionId(), this);
-        }
+        // Chain tip is NOT sent here. Sending immediately on link establishment caused
+        // Channel "retry count exceeded" teardowns when the backbone dropped packets at
+        // that moment, creating a tight reconnect loop. The normal broadcastOurChain()
+        // cycle delivers the chain tip within a few seconds without straining new links.
     }
 
     public BufferedRWPair getOrInitPeerBuffer() {

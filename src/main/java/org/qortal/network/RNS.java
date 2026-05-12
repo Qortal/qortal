@@ -174,9 +174,12 @@ public class RNS {
     private static final long BASE_LOOP_ANNOUNCE_INTERVAL_MS = 30_000L; // 30 seconds
     private volatile long lastBaseLoopAnnounceMs = 0;
 
-    /** Called by ReticulumPeer.linkClosed() to kick the announce/path-recovery cycle immediately. */
+    /** Called by ReticulumPeer.linkClosed() to kick the announce/path-recovery cycle soon.
+     *  Uses a 5s delay rather than 0 to avoid tight reconnect loops when links close rapidly
+     *  (e.g., Channel "retry count exceeded" tears down a link, immediate re-announce creates
+     *  a new link, new link also fails → rapid churn). */
     public void triggerImmediateAnnounce() {
-        this.lastBaseLoopAnnounceMs = 0;
+        this.lastBaseLoopAnnounceMs = System.currentTimeMillis() - BASE_LOOP_ANNOUNCE_INTERVAL_MS + 5_000L;
     }
 
     //private static final Logger logger = LoggerFactory.getLogger(RNS.class);
