@@ -172,7 +172,12 @@ public class RNS {
      * slow/blocked (e.g., prunePeers() waiting on a lock inside the Reticulum library).
      */
     private static final long BASE_LOOP_ANNOUNCE_INTERVAL_MS = 30_000L; // 30 seconds
-    private long lastBaseLoopAnnounceMs = 0;
+    private volatile long lastBaseLoopAnnounceMs = 0;
+
+    /** Called by ReticulumPeer.linkClosed() to kick the announce/path-recovery cycle immediately. */
+    public void triggerImmediateAnnounce() {
+        this.lastBaseLoopAnnounceMs = 0;
+    }
 
     //private static final Logger logger = LoggerFactory.getLogger(RNS.class);
     
@@ -442,11 +447,13 @@ public class RNS {
                 lastBaseLoopAnnounceMs = nowMs;
                 try {
                     maybeAnnounce(getBaseDestination(), RNSCommon.PeerAspect.BASE);
-                    // Path recovery: if no active linked peers, ask backbone for fresh routes
+                    // Path recovery: if below desired peers, ask backbone for fresh routes.
+                    // Previously this only fired at 0 — now fires on any partial loss too.
                     List<ReticulumPeer> currentLinked = getImmutableLinkedPeers();
-                    if (getActiveImmutableLinkedPeers().isEmpty() && !knownPeerHashes.isEmpty()) {
-                        log.info("No active linked peers (base loop); requesting paths to {} known peers",
-                                knownPeerHashes.size());
+                    int activeLinked = getActiveImmutableLinkedPeers().size();
+                    if (activeLinked < MIN_DESIRED_CORE_PEERS && !knownPeerHashes.isEmpty()) {
+                        log.info("Active linked peers {} < desired {} (base loop); requesting paths to {} known peers",
+                                activeLinked, MIN_DESIRED_CORE_PEERS, knownPeerHashes.size());
                         for (String hashHex : knownPeerHashes) {
                             try {
                                 byte[] dhash = org.apache.commons.codec.binary.Hex.decodeHex(hashHex);
@@ -1124,13 +1131,13 @@ public class RNS {
         maybeAnnounce(getBaseDestination(), RNSCommon.PeerAspect.BASE);
         //maybeAnnounce(getDataDestination(), RNSCommon.PeerAspect.DATA);
 
-        // If we have no active linked peers but know peer hashes from previous connections,
-        // request fresh paths to them. This recovers from backbone reconnects that clear
-        // the routing table, which would otherwise leave the node stuck at 0/0.
+        // If below desired peers, request fresh paths. Previously only fired at 0 —
+        // now fires on any partial loss so routing is refreshed before full degradation.
         List<ReticulumPeer> currentLinked = getImmutableLinkedPeers();
         int currentActiveLinked = getActiveImmutableLinkedPeers().size();
-        if (currentActiveLinked == 0 && !knownPeerHashes.isEmpty()) {
-            log.info("No active linked peers; requesting paths to {} previously known peers", knownPeerHashes.size());
+        if (currentActiveLinked < MIN_DESIRED_CORE_PEERS && !knownPeerHashes.isEmpty()) {
+            log.info("Active linked peers {} < desired {}; requesting paths to {} previously known peers",
+                    currentActiveLinked, MIN_DESIRED_CORE_PEERS, knownPeerHashes.size());
             for (String hashHex : knownPeerHashes) {
                 try {
                     byte[] dhash = org.apache.commons.codec.binary.Hex.decodeHex(hashHex);

@@ -558,6 +558,11 @@ public class ReticulumPeer implements Peer {
             disconnect("link closed");
             //makePeerUnavailable();
         }
+        // Kick the announce/path-recovery cycle immediately rather than waiting up to 30s
+        // for the next runBaseLoop iteration. Skip during shutdown (all links close then too).
+        if (!RNS.getInstance().isShuttingDown()) {
+            RNS.getInstance().triggerImmediateAnnounce();
+        }
         if (link.getTeardownReason() == TIMEOUT) {
             log.info("linkClosed callback: The link timed out");
             this.peerTimedOut = true;
