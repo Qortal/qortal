@@ -445,8 +445,10 @@ public class ReticulumPeer implements Peer {
     public Link getOrInitPeerLink() {
         if (this.peerLink.getStatus() == ACTIVE) {
             lastAccessTimestamp = Instant.now();
-            //return this.peerLink;
         } else {
+            // Clear stale timeout flag so prunePeers() doesn't remove this peer on the
+            // next cycle immediately after we re-initiate the link on a fresh announce.
+            this.peerTimedOut = false;
             initPeerLink();
         }
         return this.peerLink;

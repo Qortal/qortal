@@ -130,7 +130,9 @@ public class RNS {
 
     // Destination hashes of all peers we have ever initiated a link to.
     // Retained across peer removal so we can request fresh paths after reconnect.
+    // Also persisted to disk so a restarted node can reconnect without waiting for announces.
     private final Set<String> knownPeerHashes = Collections.synchronizedSet(new HashSet<>());
+    private static final String KNOWN_PEERS_FILE = "known_peer_hashes.txt";
 
     /**
      * Maintain two lists for each subset of peers
@@ -277,12 +279,18 @@ public class RNS {
         Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler("qortal.core"));
         //Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler("qortal.qdn"));
         log.debug("announceHandlers: {}", Transport.getInstance().getAnnounceHandlers());
+        // Load peer hashes persisted from previous run so we can call requestPath() fast on restart.
+        loadKnownPeerHashes();
         // do a first announce (across all configured interfaces)
         baseDestination.announce();
         log.info("Sent initial announce from {} ({})", encodeHexString(baseDestination.getHash()), baseDestination.getName());
-        // Seed the base-loop announce timer so it fires 30s after the initial announce,
-        // not immediately (both would race and likely miss if backbone isn't ready yet).
-        this.lastBaseLoopAnnounceMs = System.currentTimeMillis();
+        // Seed the base-loop announce timer. If we loaded known peer hashes (i.e. this is a restart),
+        // fire path requests at t=15s to give the backbone time to connect — much faster than
+        // waiting 30s with zero peers. On a first-ever start knownPeerHashes is empty so we use
+        // the normal 30s window.
+        this.lastBaseLoopAnnounceMs = knownPeerHashes.isEmpty()
+                ? System.currentTimeMillis()
+                : System.currentTimeMillis() - BASE_LOOP_ANNOUNCE_INTERVAL_MS + 15_000L;
         // announce QDN destination (across all configured interfaces)
         //dataDestination.announce();
         //log.debug("Sent initial announce from {} ({})", encodeHexString(dataDestination.getHash()), dataDestination.getName());
@@ -541,6 +549,7 @@ public class RNS {
 
     public void shutdown() {
         this.isShuttingDown = true;
+        saveKnownPeerHashes(); // Persist before shutting down so next restart reconnects fast.
         log.info("shutting down Reticulum");
         baseDestination.setProofStrategy(ProofStrategy.PROVE_NONE);
         //dataDestination.setProofStrategy(ProofStrategy.PROVE_NONE);
@@ -780,6 +789,7 @@ public class RNS {
         private ReticulumPeer getNewPeer(byte[] destinationHash, Identity announcedIdentity) {
             ReticulumPeer newPeer = new ReticulumPeer(destinationHash);
             newPeer.setServerIdentity(announcedIdentity);
+
             newPeer.setIsInitiator(true);
             if ("qortal.qdn".equals(this.aspectFilter)) {
                 // data peer
@@ -935,8 +945,11 @@ public class RNS {
     public void addLinkedPeer(ReticulumPeer peer) {
         this.linkedPeers.add(peer);
         this.immutableLinkedPeers = List.copyOf(this.linkedPeers); // thread safe
-        // Remember hash for path recovery after backbone reconnect
-        this.knownPeerHashes.add(encodeHexString(peer.getDestinationHash()));
+        // Remember hash for path recovery after backbone reconnect; persist so restart can reconnect fast.
+        boolean isNew = this.knownPeerHashes.add(encodeHexString(peer.getDestinationHash()));
+        if (isNew) {
+            saveKnownPeerHashes();
+        }
         //// Note: moved to ReticulumPeer linkEstablished
         //var network = Network.getInstance();
         //network.addConnectedPeer(peer);
@@ -1181,6 +1194,43 @@ public class RNS {
         //    log.info("Active qdn peers ({}) <= desired data peers ({}). Announcing", dataPeerCount, MIN_DESIRED_CORE_PEERS);
         //    d.announce();
         //}
+    }
+
+    /**
+     * Persist known peer destination hashes so a restarted node can call requestPath()
+     * immediately rather than waiting up to 15 minutes for a natural announce.
+     */
+    private void saveKnownPeerHashes() {
+        if (reticulum == null) return;
+        try {
+            Path file = reticulum.getStoragePath().resolve(KNOWN_PEERS_FILE);
+            Files.write(file, knownPeerHashes, UTF_8);
+            log.debug("Saved {} known peer hashes to {}", knownPeerHashes.size(), file);
+        } catch (IOException e) {
+            log.warn("Failed to save known peer hashes: {}", e.getMessage());
+        }
+    }
+
+    private void loadKnownPeerHashes() {
+        if (reticulum == null) return;
+        try {
+            Path file = reticulum.getStoragePath().resolve(KNOWN_PEERS_FILE);
+            if (!Files.isReadable(file)) return;
+            List<String> lines = Files.readAllLines(file, UTF_8);
+            int loaded = 0;
+            for (String line : lines) {
+                String hex = line.trim();
+                if (!hex.isEmpty()) {
+                    knownPeerHashes.add(hex);
+                    loaded++;
+                }
+            }
+            if (loaded > 0) {
+                log.info("Loaded {} known peer hashes from {}", loaded, file);
+            }
+        } catch (IOException e) {
+            log.warn("Failed to load known peer hashes: {}", e.getMessage());
+        }
     }
 
     /**
