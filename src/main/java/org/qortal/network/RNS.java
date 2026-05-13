@@ -730,7 +730,6 @@ public class RNS {
             }
 
             // add to peer list if we can use more peers
-            //synchronized (this) {
             var lps =  RNS.getInstance().getImmutableLinkedPeers();
             for (ReticulumPeer p: lps) {
                 var pl = p.getPeerLink();
@@ -752,7 +751,8 @@ public class RNS {
                             // connecting — creating a second link would race with the first
                             // and the first's TIMEOUT callback would set peerTimedOut=true,
                             // poisoning the peer and triggering premature pruning.
-                            p.getOrInitPeerLink();
+                            //p.getOrInitPeerLink();
+                            p.createPeerBuffer();
                         }
                         break;
                     } else {
