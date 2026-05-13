@@ -1143,30 +1143,10 @@ public class RNS {
         log.info("number of links (linkedPeers (active) / incomingPeers (active) after prunig: {} ({}), {} ({})",
                 initiatorPeerList.size(), getActiveImmutableLinkedPeers().size(),
                 incomingPeerList.size(), numActiveIncomingPeers);
-        maybeAnnounce(getBaseDestination(), RNSCommon.PeerAspect.BASE);
-        //maybeAnnounce(getDataDestination(), RNSCommon.PeerAspect.DATA);
-
-        // If below desired peers, request fresh paths. Previously only fired at 0 —
-        // now fires on any partial loss so routing is refreshed before full degradation.
-        List<ReticulumPeer> currentLinked = getImmutableLinkedPeers();
-        int currentActiveLinked = getActiveImmutableLinkedPeers().size();
-        if (currentActiveLinked < MIN_DESIRED_CORE_PEERS && !knownPeerHashes.isEmpty()) {
-            log.info("Active linked peers {} < desired {}; requesting paths to {} previously known peers",
-                    currentActiveLinked, MIN_DESIRED_CORE_PEERS, knownPeerHashes.size());
-            for (String hashHex : knownPeerHashes) {
-                try {
-                    byte[] dhash = org.apache.commons.codec.binary.Hex.decodeHex(hashHex);
-                    boolean alreadyTracked = currentLinked.stream()
-                            .anyMatch(p -> Arrays.equals(p.getDestinationHash(), dhash));
-                    if (!alreadyTracked) {
-                        Transport.getInstance().requestPath(dhash);
-                        log.debug("Requested path to known peer {}", hashHex);
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to request path to {}: {}", hashHex, e.getMessage());
-                }
-            }
-        }
+        // announce() and requestPath() are intentionally NOT called here — both involve
+        // Reticulum library calls that can block if the library holds a lock. The Controller
+        // thread must not block (node hangs, stop.sh hangs). runBaseLoop() handles both on
+        // its own thread every 30 seconds.
     }
 
     public void maybeAnnounce(Destination d, RNSCommon.PeerAspect pa) {

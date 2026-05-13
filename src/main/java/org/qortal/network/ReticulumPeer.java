@@ -398,6 +398,7 @@ public class ReticulumPeer implements Peer {
             channel = this.peerLink.getChannel();
             log.info("creating buffer - peerLink status: {}, channel: {}", this.peerLink.getStatus(), channel);
             this.peerBuffer = Buffer.createBidirectionalBuffer(receiveStreamId, sendStreamId, channel, this::peerBufferReady);
+            this.lastAccessTimestamp = Instant.now();
             this.peerData.setLastAttempted(ntpNow);
             this.peerData.setLastConnected(ntpNow);
             this.startPings();
