@@ -751,8 +751,7 @@ public class RNS {
                             // connecting — creating a second link would race with the first
                             // and the first's TIMEOUT callback would set peerTimedOut=true,
                             // poisoning the peer and triggering premature pruning.
-                            //p.getOrInitPeerLink();
-                            p.createPeerBuffer();
+                            p.getOrInitPeerLink();
                         }
                         break;
                     } else {
