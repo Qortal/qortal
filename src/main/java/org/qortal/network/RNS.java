@@ -8,6 +8,7 @@ import io.reticulum.destination.DestinationType;
 import io.reticulum.destination.Direction;
 import io.reticulum.destination.ProofStrategy;
 import io.reticulum.identity.Identity;
+import io.reticulum.identity.IdentityKnownDestination;
 import io.reticulum.link.Link;
 //import io.reticulum.link.LinkStatus;
 //import io.reticulum.constant.LinkConstant;
@@ -116,6 +117,7 @@ public class RNS {
     static final Integer TARGET_PORT = Settings.getInstance().isTestNet() ? RNSCommon.TESTNET_IF_TCP_PORT: RNSCommon.MAINNET_IF_TCP_PORT;
     //static final String defaultConfigPath = ".reticulum"; // if empty will look in Reticulums default paths
     static final String defaultConfigPath = Settings.getInstance().isTestNet() ? RNSCommon.defaultRNSConfigPathTestnet: RNSCommon.defaultRNSConfigPath;
+    static final String CORE_ASPECT = "qortal.core";
     private final int MAX_PEERS = Settings.getInstance().getReticulumMaxPeers();
     private final int MIN_DESIRED_CORE_PEERS = Settings.getInstance().getReticulumMinDesiredCorePeers();
     private final int MIN_DESIRED_DATA_PEERS = Settings.getInstance().getReticulumMinDesiredDataPeers();
@@ -470,11 +472,25 @@ public class RNS {
                                 byte[] dhash = org.apache.commons.codec.binary.Hex.decodeHex(hashHex);
                                 boolean tracked = currentLinked.stream()
                                         .anyMatch(p -> Arrays.equals(p.getDestinationHash(), dhash));
-                                if (!tracked) {
+                                if (tracked) continue;
+                                // Skip if the remote already opened a link to us — avoid duplicate channels.
+                                boolean alreadyIncoming = getImmutableIncomingPeers().stream()
+                                        .anyMatch(p -> {
+                                            Identity remoteId = p.getServerIdentity();
+                                            if (remoteId == null) return false;
+                                            return Arrays.equals(hashFromNameAndIdentity(CORE_ASPECT, remoteId), dhash);
+                                        });
+                                if (alreadyIncoming) continue;
+                                // Prefer proactive connect via cached identity — works even
+                                // when backbone doesn't propagate path responses as announces.
+                                Identity cachedIdentity = IdentityKnownDestination.recall(dhash);
+                                if (cachedIdentity != null) {
+                                    createLinkedPeerFromIdentity(dhash, cachedIdentity);
+                                } else {
                                     Transport.getInstance().requestPath(dhash);
                                 }
                             } catch (Exception e) {
-                                log.warn("Path request failed for {}: {}", hashHex, e.getMessage());
+                                log.warn("Path request/reconnect failed for {}: {}", hashHex, e.getMessage());
                             }
                         }
                     }
@@ -804,6 +820,20 @@ public class RNS {
             log.debug(">>> ReticulumPeer created - PeerData: {} - {}", newPeer.getPeerData().toString(), newPeer.getPeerAddress().getDestinationHash());
             return newPeer;
         }
+    }
+
+    // Create and add a BASE ReticulumPeer directly from a cached identity (no announce needed).
+    // Called from runBaseLoop() when recall() finds the identity in the local known-destinations DB.
+    private void createLinkedPeerFromIdentity(byte[] destinationHash, Identity identity) {
+        ReticulumPeer newPeer = new ReticulumPeer(destinationHash);
+        newPeer.setServerIdentity(identity);
+        newPeer.setIsInitiator(true);
+        newPeer.setPeerAspect(RNSCommon.PeerAspect.BASE);
+        newPeer.setIsDataPeer(false);
+        newPeer.setMessageMagic(getMessageMagic());
+        addLinkedPeer(newPeer);
+        log.info("Proactively connecting to known peer {} via cached identity", encodeHexString(destinationHash));
+        newPeer.getOrInitPeerLink();
     }
 
     //class RNSProcessor extends ExecuteProduceConsume {

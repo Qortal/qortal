@@ -645,7 +645,16 @@ public class ReticulumPeer implements Peer {
         var buf = this.peerBuffer;
         if (buf == null) return;
         // get the message data
-        byte[] data = buf.read(readyBytes);
+        byte[] data;
+        try {
+            data = buf.read(readyBytes);
+        } catch (IllegalArgumentException e) {
+            // Library bug: RawChannelReader.read() computes a negative-length array slice
+            // (seen as "N > 0" from Arrays.copyOfRange). Tear down and let reconnect handle it.
+            log.warn("peerBufferReady: read error for {} ({}), tearing down", encodeHexString(destinationHash), e.getMessage());
+            shutdownChannel();
+            return;
+        }
         ByteBuffer bb = ByteBuffer.wrap(data);
         //log.info("data length: {}, MAGIC: {}, data: {}, ByteBuffer: {}", data.length, this.messageMagic, data, bb);
         //log.info("data length: {}, MAGIC: {}, ByteBuffer: {}", data.length, this.messageMagic, bb);
@@ -672,7 +681,7 @@ public class ReticulumPeer implements Peer {
                 //log.info("***> creating message from {} bytes", data.length);
                 Message message = Message.fromByteBuffer(bb);
                 if (message == null) {
-                    log.debug("peerBufferReady - null message from {} bytes (unrecognised magic/type?), skipping", data.length);
+                    log.trace("peerBufferReady - null message from {} bytes (unrecognised magic/type?), skipping", data.length);
                     return;
                 }
                 log.debug("*=> type {} message received ({} bytes, id: {})", message.getType(), data.length, message.getId());
@@ -1131,7 +1140,7 @@ public class ReticulumPeer implements Peer {
                             message.getType().name(), message.getId(), encodeHexString(getDestinationHash()));
                     var peerBuffer = getOrInitPeerBuffer();
                     if (peerBuffer == null) {
-                        log.debug("sendMessage - buffer not available for {}", this);
+                        log.trace("sendMessage - buffer not available for {}", this);
                         return false;
                     }
                     peerBuffer.write(message.toBytes());
