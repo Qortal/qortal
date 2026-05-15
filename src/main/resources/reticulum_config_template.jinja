@@ -55,7 +55,7 @@ interfaces:
     listen_ip: 0.0.0.0
     listen_port: {{ python_rns_if_port }}
     network_name: {{ qortal_network_name }}
-{% if passphrase %}
+{%- if passphrase %}
     passphrase: {{ passphrase }}
 {% endif %}
 {% endif %}
@@ -67,7 +67,7 @@ interfaces:
     target_host: localhost
     target_port: {{ python_rns_if_port }}
     network_name: {{ qortal_network_name }}
-{% if passphrase %}
+{%- if passphrase %}
     passphrase: {{ passphrase }}
 {% endif %}
 {% endif %}
@@ -88,7 +88,7 @@ interfaces:
     target_host: {{ item_fqdn }}
     target_port: {{ item_target_port }}
     network_name: {{ qortal_network_name }}
-{% if passphrase %}
+{%- if passphrase %}
     passphrase: {{ passphrase }}
 {% endif %}
   {% endif %}
