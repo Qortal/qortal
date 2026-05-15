@@ -342,7 +342,7 @@ public class RNS {
 
         //log.info("fqdn: {}, reticulumTcpGatewayServers: {}", fqdn, reticulumTcpGatewayServers);
 
-        if (Files.notExists(configFile)) {
+        if (Files.notExists(configFile) || Settings.getInstance().isReticulumRegenerateConfigOnRestart()) {
             try {
                 // jinjava variables set in context:
                 // * tcp_gateway_servers: list of nodes with a TCPServerInterface
@@ -364,7 +364,8 @@ public class RNS {
                 context.put("backbone_gateway_servers",  reticulumBackboneGateways);
                 context.put("num_client_interfaces", reticulumDesiredClientInterfaces);
                 context.put("host_fqdn", fqdn);
-                context.put("qortal_network_name",  APP_NAME);
+                String networkName = Settings.getInstance().getReticulumNetworkName();
+                context.put("qortal_network_name", networkName.isEmpty() ? APP_NAME : networkName);
                 context.put("target_port", TARGET_PORT);
                 context.put("is_reticulum_gateway", isReticulumGateway ? "true" : "false");
                 //context.put("is_test_net", Settings.getInstance().isTestNet() ? "true" : "false");

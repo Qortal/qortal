@@ -697,6 +697,10 @@ public class Settings {
 	private int reticulumPythonRNSGatewayPort = 4242;
 	/** Shared IFAC passphrase for backbone interface isolation. Empty string = no passphrase. */
 	private String reticulumPassphrase = "";
+	/** Override network_name in generated config. Empty string = use APP_NAME (qortal/qortaltest). */
+	private String reticulumNetworkName = "";
+	/** Regenerate .reticulum/config.yml on every startup instead of only when missing. */
+	private boolean reticulumRegenerateConfigOnRestart = false;
 
 	// Constructors
 
@@ -1576,6 +1580,10 @@ public class Settings {
 	public int getReticulumPythonRNSGatewayPort() { return this.reticulumPythonRNSGatewayPort; }
 
 	public String getReticulumPassphrase() { return this.reticulumPassphrase; }
+
+	public String getReticulumNetworkName() { return this.reticulumNetworkName; }
+
+	public boolean isReticulumRegenerateConfigOnRestart() { return this.reticulumRegenerateConfigOnRestart; }
 
 	public int getBuildArbitraryResourcesBatchSize() {
 		return buildArbitraryResourcesBatchSize;
