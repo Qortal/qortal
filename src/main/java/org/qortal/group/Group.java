@@ -1,5 +1,7 @@
 package org.qortal.group;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.qortal.account.Account;
 import org.qortal.account.PublicKeyAccount;
 import org.qortal.asset.Asset;
@@ -19,6 +21,8 @@ import static java.util.Arrays.stream;
 import static java.util.stream.Collectors.toMap;
 
 public class Group {
+
+	private static final Logger LOGGER = LogManager.getLogger(Group.class);
 
 	/** Group-admin quora threshold for approving transactions */
 	public enum ApprovalThreshold {
@@ -764,25 +768,25 @@ public class Group {
 		int currentHeight = this.repository.getBlockRepository().getBlockchainHeight();
 		int nextHeight = currentHeight + 1;
 		int groupFeeHeight = BlockChain.getInstance().getGroupFeeHeight();
-		System.out.println("DEBUG: currentHeight=" + currentHeight + ", nextHeight=" + nextHeight + ", groupFeeHeight=" + groupFeeHeight);
-		System.out.println("DEBUG: nextHeight >= groupFeeHeight: " + (nextHeight >= groupFeeHeight));
+		LOGGER.debug("currentHeight={}, nextHeight={}, groupFeeHeight={}", currentHeight, nextHeight, groupFeeHeight);
+		LOGGER.debug("nextHeight >= groupFeeHeight: {}", nextHeight >= groupFeeHeight);
 		if (nextHeight >= groupFeeHeight) {
 			// Use join fee from invite if available, otherwise use current group join fee
 			Long joinFee = groupInviteData != null ? groupInviteData.getJoinFee() : this.groupData.getJoinFee();
-			System.out.println("DEBUG: joinFee=" + joinFee);
+			LOGGER.debug("joinFee={}", joinFee);
 			if (joinFee != null && joinFee > 0) {
-				System.out.println("DEBUG: Transferring join fee from " + joiner.getAddress() + " to " + this.groupData.getOwner());
+				LOGGER.debug("Transferring join fee from {} to {}", joiner.getAddress(), this.groupData.getOwner());
 				// Transfer join fee from joiner to group owner
 				Account groupOwner = new Account(this.repository, this.groupData.getOwner());
-				System.out.println("DEBUG: joiner balance before: " + joiner.getConfirmedBalance(Asset.QORT));
-				System.out.println("DEBUG: groupOwner balance before: " + groupOwner.getConfirmedBalance(Asset.QORT));
+				LOGGER.debug("joiner balance before: {}", joiner.getConfirmedBalance(Asset.QORT));
+				LOGGER.debug("groupOwner balance before: {}", groupOwner.getConfirmedBalance(Asset.QORT));
 				joiner.setConfirmedBalance(Asset.QORT, joiner.getConfirmedBalance(Asset.QORT) - joinFee);
 				groupOwner.setConfirmedBalance(Asset.QORT, groupOwner.getConfirmedBalance(Asset.QORT) + joinFee);
-				System.out.println("DEBUG: joiner balance after: " + joiner.getConfirmedBalance(Asset.QORT));
-				System.out.println("DEBUG: groupOwner balance after: " + groupOwner.getConfirmedBalance(Asset.QORT));
+				LOGGER.debug("joiner balance after: {}", joiner.getConfirmedBalance(Asset.QORT));
+				LOGGER.debug("groupOwner balance after: {}", groupOwner.getConfirmedBalance(Asset.QORT));
 			}
 		} else {
-			System.out.println("DEBUG: Not transferring join fee because feature trigger is not active");
+			LOGGER.debug("Not transferring join fee because feature trigger is not active");
 		}
 
 		// Actually add new member to group

@@ -2387,9 +2387,9 @@ public class Block {
 		// Debug: Check if QORT asset exists
 		try {
 			AssetData qortAsset = this.repository.getAssetRepository().fromAssetId(Asset.QORT);
-			System.out.println("DEBUG: distributeBlockReward - QORT asset exists: " + (qortAsset != null));
+			LOGGER.debug("distributeBlockReward - QORT asset exists: {}", qortAsset != null);
 		} catch (DataException e) {
-			System.out.println("DEBUG: distributeBlockReward - QORT asset does not exist");
+			LOGGER.debug("distributeBlockReward - QORT asset does not exist");
 		}
 		
 		// Ensure QORT asset exists for balance changes
@@ -2399,7 +2399,7 @@ public class Block {
 		} catch (DataException e) {
 			// QORT asset doesn't exist - this shouldn't happen in normal operation
 			// but can happen in tests with no online accounts
-			System.out.println("DEBUG: distributeBlockReward - QORT asset missing, creating it");
+			LOGGER.debug("distributeBlockReward - QORT asset missing, creating it");
 			// Create QORT asset with assetId = 0
 			AssetData qortAsset = new AssetData(0L, null, "QORT", "QORT native coin", Long.MAX_VALUE, true, null, false, 0, new byte[0], "QORT");
 			this.repository.getAssetRepository().save(qortAsset);
@@ -2410,7 +2410,7 @@ public class Block {
 		// because they were already processed during the normal transaction processing
 		// and we don't want to create duplicate assets
 		if (accountBalanceDeltas.isEmpty()) {
-			System.out.println("DEBUG: distributeBlockReward - no balance changes, skipping ISSUE_ASSET transactions to avoid duplicates");
+			LOGGER.debug("distributeBlockReward - no balance changes, skipping ISSUE_ASSET transactions to avoid duplicates");
 		}
 		
 		this.repository.getAccountRepository().modifyAssetBalances(accountBalanceDeltas);
@@ -2422,9 +2422,9 @@ public class Block {
 
 		// Special case for genesis block - no online accounts, no rewards
 		int blockHeight = this.getBlockData().getHeight();
-		System.out.println("DEBUG: determineBlockRewardCandidates - block height: " + blockHeight);
+		LOGGER.debug("determineBlockRewardCandidates - block height: {}", blockHeight);
 		if (blockHeight == 1) {
-			System.out.println("DEBUG: determineBlockRewardCandidates - returning empty list for genesis block");
+			LOGGER.debug("determineBlockRewardCandidates - returning empty list for genesis block");
 			return rewardCandidates;
 		}
 
@@ -2441,7 +2441,7 @@ public class Block {
 					.collect(Collectors.toList());
 		}
 		
-		System.out.println("DEBUG: determineBlockRewardCandidates - expandedAccounts size: " + expandedAccounts.size());
+		LOGGER.debug("determineBlockRewardCandidates - expandedAccounts size: {}", expandedAccounts.size());
 
 		/*
 		 * Distribution rules:

@@ -22,9 +22,14 @@ import org.qortal.test.common.TransactionUtils;
 import org.qortal.test.common.transaction.TestTransaction;
 import org.qortal.transaction.Transaction.ValidationResult;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 import static org.junit.Assert.*;
 
 public class JoinFeeTests extends Common {
+
+	private static final Logger LOGGER = LogManager.getLogger(JoinFeeTests.class);
 
 	@Before
 	public void beforeTest() throws DataException {
@@ -281,7 +286,7 @@ public class JoinFeeTests extends Common {
 			
 			// Check blockchain height after creating group
 			int heightAfterCreate = repository.getBlockRepository().getBlockchainHeight();
-			System.out.println("DEBUG: Height after creating group: " + heightAfterCreate);
+			LOGGER.debug("Height after creating group: {}", heightAfterCreate);
 			
 			// Get initial balances
 			AccountBalanceData aliceInitialBalance = repository.getAccountRepository().getBalance(alice.getAddress(), Asset.QORT);
@@ -296,7 +301,7 @@ public class JoinFeeTests extends Common {
 
 			// Check blockchain height before Bob joins
 			int heightBeforeJoin = repository.getBlockRepository().getBlockchainHeight();
-			System.out.println("DEBUG: Height before Bob joins: " + heightBeforeJoin);
+			LOGGER.debug("Height before Bob joins: {}", heightBeforeJoin);
 			
 			ValidationResult result = TransactionUtils.signAndImport(repository, joinTransactionData, bob);
 			assertEquals("Join transaction should be valid before feature trigger", ValidationResult.OK, result);
@@ -304,18 +309,18 @@ public class JoinFeeTests extends Common {
 
 			// Check Alice's balance before minting
 			AccountBalanceData aliceBalanceBeforeMint = repository.getAccountRepository().getBalance(alice.getAddress(), Asset.QORT);
-			System.out.println("DEBUG: Alice balance before minting: " + aliceBalanceBeforeMint.getBalance());
+			LOGGER.debug("Alice balance before minting: {}", aliceBalanceBeforeMint.getBalance());
 			
 			// Mint block to confirm transaction
 			mintBlockWithDedicatedMinter(repository);
 
 			// Check Alice's balance after minting
 			AccountBalanceData aliceBalanceAfterMint = repository.getAccountRepository().getBalance(alice.getAddress(), Asset.QORT);
-			System.out.println("DEBUG: Alice balance after minting: " + aliceBalanceAfterMint.getBalance());
+			LOGGER.debug("Alice balance after minting: {}", aliceBalanceAfterMint.getBalance());
 			
 			// Check blockchain height after minting
 			int heightAfterMint = repository.getBlockRepository().getBlockchainHeight();
-			System.out.println("DEBUG: Height after minting: " + heightAfterMint);
+			LOGGER.debug("Height after minting: {}", heightAfterMint);
 			
 			// Verify Bob is now a member
 			assertTrue("Bob should be a member", repository.getGroupRepository().memberExists(groupId, bob.getAddress()));
@@ -639,15 +644,15 @@ public class JoinFeeTests extends Common {
 			long blockReward = BlockChain.getInstance().getRewardAtHeight(heightAfterMint);
 			
 			// Debug logging
-			System.out.println("DEBUG: Alice initial balance: " + aliceInitialBalance.getBalance());
-			System.out.println("DEBUG: Alice final balance: " + aliceFinalBalance.getBalance());
-			System.out.println("DEBUG: Join fee: " + joinFee);
-			System.out.println("DEBUG: Block reward: " + blockReward);
-			System.out.println("DEBUG: Join transaction fee: " + joinTransactionData.getFee());
-			System.out.println("DEBUG: Invite transaction fee: " + inviteTransactionData.getFee());
-			System.out.println("DEBUG: Expected balance: " + (aliceInitialBalance.getBalance() + joinFee + blockReward + joinTransactionData.getFee() + inviteTransactionData.getFee()));
-			System.out.println("DEBUG: Actual balance: " + aliceFinalBalance.getBalance());
-			System.out.println("DEBUG: Difference: " + (aliceFinalBalance.getBalance() - aliceInitialBalance.getBalance()));
+			LOGGER.debug("Alice initial balance: {}", aliceInitialBalance.getBalance());
+			LOGGER.debug("Alice final balance: {}", aliceFinalBalance.getBalance());
+			LOGGER.debug("Join fee: {}", joinFee);
+			LOGGER.debug("Block reward: {}", blockReward);
+			LOGGER.debug("Join transaction fee: {}", joinTransactionData.getFee());
+			LOGGER.debug("Invite transaction fee: {}", inviteTransactionData.getFee());
+			LOGGER.debug("Expected balance: {}", aliceInitialBalance.getBalance() + joinFee + blockReward + joinTransactionData.getFee() + inviteTransactionData.getFee());
+			LOGGER.debug("Actual balance: {}", aliceFinalBalance.getBalance());
+			LOGGER.debug("Difference: {}", aliceFinalBalance.getBalance() - aliceInitialBalance.getBalance());
 			
 			assertEquals("Alice should receive join fee plus block reward and transaction fees",
 				aliceInitialBalance.getBalance() + joinFee + blockReward + joinTransactionData.getFee(), aliceFinalBalance.getBalance());

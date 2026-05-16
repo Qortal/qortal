@@ -147,9 +147,9 @@ public class Common {
 		try (final Repository repository = RepositoryManager.getRepository()) {
 			// Build snapshot of initial state in case we want to compare with post-test orphaning
 			initialAssets = repository.getAssetRepository().getAllAssets();
-			System.out.println("DEBUG: resetBlockchain - initialAssets size: " + initialAssets.size());
+			LOGGER.debug("resetBlockchain - initialAssets size: {}", initialAssets.size());
 			for (AssetData asset : initialAssets) {
-				System.out.println("DEBUG: resetBlockchain - initial asset: " + asset.getAssetId() + " - " + asset.getName());
+				LOGGER.debug("resetBlockchain - initial asset: {} - {}", asset.getAssetId(), asset.getName());
 			}
 			initialGroups = repository.getGroupRepository().getAllGroups();
 			initialBalances = repository.getAccountRepository().getAssetBalances(Collections.emptyList(), Collections.emptyList(), BalanceOrdering.ASSET_ACCOUNT, false, null, null, null);
@@ -175,9 +175,9 @@ public class Common {
 			// Debug: Check if QORT asset exists before orphaning
 			try {
 				AssetData qortAsset = repository.getAssetRepository().fromAssetId(Asset.QORT);
-				System.out.println("DEBUG: orphanCheck - QORT asset exists before orphaning: " + (qortAsset != null));
+				LOGGER.debug("orphanCheck - QORT asset exists before orphaning: {}", qortAsset != null);
 			} catch (DataException e) {
-				System.out.println("DEBUG: orphanCheck - QORT asset does not exist before orphaning");
+				LOGGER.debug("orphanCheck - QORT asset does not exist before orphaning");
 			}
 			
 			// Orphan back to genesis block
@@ -188,15 +188,15 @@ public class Common {
 			// Debug: Check if QORT asset exists after orphaning
 			try {
 				AssetData qortAsset = repository.getAssetRepository().fromAssetId(Asset.QORT);
-				System.out.println("DEBUG: orphanCheck - QORT asset exists after orphaning: " + (qortAsset != null));
+				LOGGER.debug("orphanCheck - QORT asset exists after orphaning: {}", qortAsset != null);
 			} catch (DataException e) {
-				System.out.println("DEBUG: orphanCheck - QORT asset does not exist after orphaning");
+				LOGGER.debug("orphanCheck - QORT asset does not exist after orphaning");
 			}
 
 			List<AssetData> remainingAssets = repository.getAssetRepository().getAllAssets();
-			System.out.println("DEBUG: orphanCheck - remainingAssets size: " + remainingAssets.size());
+			LOGGER.debug("orphanCheck - remainingAssets size: {}", remainingAssets.size());
 			for (AssetData asset : remainingAssets) {
-				System.out.println("DEBUG: orphanCheck - remaining asset: " + asset.getAssetId() + " - " + asset.getName());
+				LOGGER.debug("orphanCheck - remaining asset: {} - {}", asset.getAssetId(), asset.getName());
 			}
 			checkOrphanedLists("asset", initialAssets, remainingAssets, AssetData::getAssetId, AssetData::getAssetId);
 

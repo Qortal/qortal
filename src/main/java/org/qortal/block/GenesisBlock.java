@@ -293,7 +293,7 @@ public class GenesisBlock extends Block {
 		this.ourAtStates = Collections.emptyList();
 		this.ourAtFees = 0;
 
-		System.out.println("DEBUG: GenesisBlock.process() - Calling super.process()");
+		LOGGER.debug("GenesisBlock.process() - Calling super.process()");
 		super.process();
 	}
 

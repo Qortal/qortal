@@ -993,7 +993,7 @@ public abstract class Transaction {
 		Account creator = getCreator();
 
 		// Update transaction creator's balance
-		System.out.println("DEBUG: processReferencesAndFees - Deducting fee of " + transactionData.getFee() + " from " + creator.getAddress());
+		LOGGER.debug("processReferencesAndFees - Deducting fee of {} from {}", transactionData.getFee(), creator.getAddress());
 		creator.modifyAssetBalance(Asset.QORT, - transactionData.getFee());
 
 		// Update transaction creator's reference (and possibly public key)

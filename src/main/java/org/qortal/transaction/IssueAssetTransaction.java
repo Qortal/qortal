@@ -1,6 +1,8 @@
 package org.qortal.transaction;
 
 import com.google.common.base.Utf8;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.qortal.account.Account;
 import org.qortal.asset.Asset;
 import org.qortal.data.asset.AssetData;
@@ -15,6 +17,8 @@ import java.util.Collections;
 import java.util.List;
 
 public class IssueAssetTransaction extends Transaction {
+
+	private static final Logger LOGGER = LogManager.getLogger(IssueAssetTransaction.class);
 
 	// Properties
 
@@ -125,18 +129,18 @@ public class IssueAssetTransaction extends Transaction {
 				correctAssetId = 5L;
 			}
 			
-			System.out.println("DEBUG: IssueAssetTransaction.process() - Processing genesis asset: " + assetName + " with correct ID: " + correctAssetId);
+			LOGGER.debug("IssueAssetTransaction.process() - Processing genesis asset: {} with correct ID: {}", assetName, correctAssetId);
 			
 			// Check if asset already exists
 			try {
 				AssetData existingAsset = this.repository.getAssetRepository().fromAssetName(assetName);
 				if (existingAsset != null) {
 					// Use existing asset
-					System.out.println("DEBUG: IssueAssetTransaction.process() - Asset " + assetName + " already exists with ID: " + existingAsset.getAssetId());
+					LOGGER.debug("IssueAssetTransaction.process() - Asset {} already exists with ID: {}", assetName, existingAsset.getAssetId());
 					this.issueAssetTransactionData.setAssetId(existingAsset.getAssetId());
 				} else {
 					// Create asset with correct ID
-					System.out.println("DEBUG: IssueAssetTransaction.process() - Creating asset " + assetName + " with ID: " + correctAssetId);
+					LOGGER.debug("IssueAssetTransaction.process() - Creating asset {} with ID: {}", assetName, correctAssetId);
 					AssetData genesisAsset = new AssetData(correctAssetId, this.getCreator().getAddress(),
 						this.issueAssetTransactionData.getAssetName(),
 						this.issueAssetTransactionData.getDescription(),
@@ -149,11 +153,11 @@ public class IssueAssetTransaction extends Transaction {
 						this.issueAssetTransactionData.getReducedAssetName());
 					this.repository.getAssetRepository().save(genesisAsset);
 					this.issueAssetTransactionData.setAssetId(genesisAsset.getAssetId());
-					System.out.println("DEBUG: IssueAssetTransaction.process() - Created asset " + assetName + " with actual ID: " + genesisAsset.getAssetId());
+					LOGGER.debug("IssueAssetTransaction.process() - Created asset {} with actual ID: {}", assetName, genesisAsset.getAssetId());
 				}
 			} catch (DataException e) {
 				// Create asset with correct ID
-				System.out.println("DEBUG: IssueAssetTransaction.process() - Exception checking asset " + assetName + ", creating with ID: " + correctAssetId);
+				LOGGER.debug("IssueAssetTransaction.process() - Exception checking asset {}, creating with ID: {}", assetName, correctAssetId);
 				AssetData genesisAsset = new AssetData(correctAssetId, this.getCreator().getAddress(),
 					this.issueAssetTransactionData.getAssetName(),
 					this.issueAssetTransactionData.getDescription(),
@@ -166,7 +170,7 @@ public class IssueAssetTransaction extends Transaction {
 					this.issueAssetTransactionData.getReducedAssetName());
 				this.repository.getAssetRepository().save(genesisAsset);
 				this.issueAssetTransactionData.setAssetId(genesisAsset.getAssetId());
-				System.out.println("DEBUG: IssueAssetTransaction.process() - Created asset " + assetName + " with actual ID: " + genesisAsset.getAssetId());
+				LOGGER.debug("IssueAssetTransaction.process() - Created asset {} with actual ID: {}", assetName, genesisAsset.getAssetId());
 			}
 		} else if (isGenesisAsset) {
 			// For genesis assets after height 0, check if they already exist with the correct ID
@@ -185,14 +189,14 @@ public class IssueAssetTransaction extends Transaction {
 				correctAssetId = 5L;
 			}
 			
-			System.out.println("DEBUG: IssueAssetTransaction.process() - Processing genesis asset after height 0: " + assetName + " with correct ID: " + correctAssetId);
+			LOGGER.debug("IssueAssetTransaction.process() - Processing genesis asset after height 0: {} with correct ID: {}", assetName, correctAssetId);
 			
 			// Check if asset already exists
 			try {
 				AssetData existingAsset = this.repository.getAssetRepository().fromAssetName(assetName);
 				if (existingAsset != null && existingAsset.getAssetId() == correctAssetId) {
 					// Use existing asset
-					System.out.println("DEBUG: IssueAssetTransaction.process() - Asset " + assetName + " already exists with correct ID: " + existingAsset.getAssetId());
+					LOGGER.debug("IssueAssetTransaction.process() - Asset {} already exists with correct ID: {}", assetName, existingAsset.getAssetId());
 					this.issueAssetTransactionData.setAssetId(existingAsset.getAssetId());
 					return; // Don't create a new asset
 				}
