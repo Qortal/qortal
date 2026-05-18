@@ -74,7 +74,7 @@ public class GroupUtils {
 		long timestamp = repository.getTransactionRepository().fromSignature(reference).getTimestamp() + 1;
 
 		BaseTransactionData baseTransactionData = new BaseTransactionData(timestamp, Group.NO_GROUP, reference, joinerAccount.getPublicKey(), GroupUtils.fee, null);
-		TransactionData transactionData = new JoinGroupTransactionData(baseTransactionData, groupId);
+		TransactionData transactionData = new JoinGroupTransactionData(baseTransactionData, groupId, 0L);
 
 		TransactionUtils.signAndMint(repository, transactionData, joinerAccount);
 	}

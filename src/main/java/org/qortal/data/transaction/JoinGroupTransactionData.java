@@ -21,6 +21,8 @@ public class JoinGroupTransactionData extends TransactionData {
 	private byte[] joinerPublicKey;
 	@Schema(description = "which group to join", example = "my-group")
 	private int groupId;
+	@Schema(description = "fee to join group", example = "100000000")
+	private Long joinFee;
 	/** Reference to GROUP_INVITE transaction, used to rebuild invite during orphaning. */
 	// No need to ever expose this via API
 	@XmlTransient
@@ -44,18 +46,19 @@ public class JoinGroupTransactionData extends TransactionData {
 	}
 
 	/** From repository */
-	public JoinGroupTransactionData(BaseTransactionData baseTransactionData, int groupId, byte[] inviteReference, Integer previousGroupId) {
+	public JoinGroupTransactionData(BaseTransactionData baseTransactionData, int groupId, Long joinFee, byte[] inviteReference, Integer previousGroupId) {
 		super(TransactionType.JOIN_GROUP, baseTransactionData);
 
 		this.joinerPublicKey = baseTransactionData.creatorPublicKey;
 		this.groupId = groupId;
+		this.joinFee = joinFee;
 		this.inviteReference = inviteReference;
 		this.previousGroupId = previousGroupId;
 	}
 
 	/** From network/API */
-	public JoinGroupTransactionData(BaseTransactionData baseTransactionData, int groupId) {
-		this(baseTransactionData, groupId, null, null);
+	public JoinGroupTransactionData(BaseTransactionData baseTransactionData, int groupId, Long joinFee) {
+		this(baseTransactionData, groupId, joinFee, null, null);
 	}
 
 	// Getters / setters
@@ -66,6 +69,10 @@ public class JoinGroupTransactionData extends TransactionData {
 
 	public int getGroupId() {
 		return this.groupId;
+	}
+
+	public Long getJoinFee() {
+		return this.joinFee;
 	}
 
 	public byte[] getInviteReference() {
