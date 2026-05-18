@@ -17,8 +17,9 @@ public class JoinGroupTransactionTransformer extends TransactionTransformer {
 
 	// Property lengths
 	private static final int GROUPID_LENGTH = INT_LENGTH;
+	private static final int JOIN_FEE_LENGTH = LONG_LENGTH;
 
-	private static final int EXTRAS_LENGTH = GROUPID_LENGTH;
+	private static final int EXTRAS_LENGTH = GROUPID_LENGTH + JOIN_FEE_LENGTH;
 
 	protected static final TransactionLayout layout;
 
@@ -30,6 +31,7 @@ public class JoinGroupTransactionTransformer extends TransactionTransformer {
 		layout.add("reference", TransformationType.SIGNATURE);
 		layout.add("joiner's public key", TransformationType.PUBLIC_KEY);
 		layout.add("group ID", TransformationType.INT);
+		layout.add("join fee", TransformationType.AMOUNT);
 		layout.add("fee", TransformationType.AMOUNT);
 		layout.add("signature", TransformationType.SIGNATURE);
 	}
@@ -46,6 +48,8 @@ public class JoinGroupTransactionTransformer extends TransactionTransformer {
 
 		int groupId = byteBuffer.getInt();
 
+		long joinFee = byteBuffer.getLong();
+
 		long fee = byteBuffer.getLong();
 
 		byte[] signature = new byte[SIGNATURE_LENGTH];
@@ -53,7 +57,7 @@ public class JoinGroupTransactionTransformer extends TransactionTransformer {
 
 		BaseTransactionData baseTransactionData = new BaseTransactionData(timestamp, txGroupId, reference, joinerPublicKey, fee, signature);
 
-		return new JoinGroupTransactionData(baseTransactionData, groupId);
+		return new JoinGroupTransactionData(baseTransactionData, groupId, joinFee);
 	}
 
 	public static int getDataLength(TransactionData transactionData) throws TransformationException {
@@ -69,6 +73,8 @@ public class JoinGroupTransactionTransformer extends TransactionTransformer {
 			transformCommonBytes(transactionData, bytes);
 
 			bytes.write(Ints.toByteArray(joinGroupTransactionData.getGroupId()));
+
+			bytes.write(Longs.toByteArray(joinGroupTransactionData.getJoinFee()));
 
 			bytes.write(Longs.toByteArray(joinGroupTransactionData.getFee()));
 

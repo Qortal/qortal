@@ -1076,6 +1076,7 @@ public class HSQLDBDatabaseUpdates {
 					stmt.execute("ALTER TABLE CreateGroupTransactions ADD COLUMN join_fee QortalAmount NOT NULL DEFAULT 0");
 					stmt.execute("ALTER TABLE UpdateGroupTransactions ADD COLUMN new_join_fee QortalAmount NOT NULL DEFAULT 0");
 					stmt.execute("ALTER TABLE GroupInviteTransactions ADD COLUMN join_fee QortalAmount NOT NULL DEFAULT 0");
+					stmt.execute("ALTER TABLE JoinGroupTransactions ADD COLUMN join_fee QortalAmount NOT NULL DEFAULT 0");
 					break;
 
 				default:

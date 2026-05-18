@@ -433,7 +433,7 @@ public class AdminTests extends Common {
 	}
 
 	private ValidationResult joinGroup(Repository repository, PrivateKeyAccount joiner, int groupId) throws DataException {
-		JoinGroupTransactionData transactionData = new JoinGroupTransactionData(TestTransaction.generateBase(joiner), groupId);
+		JoinGroupTransactionData transactionData = new JoinGroupTransactionData(TestTransaction.generateBase(joiner), groupId, 0L);
 		ValidationResult result = TransactionUtils.signAndImport(repository, transactionData, joiner);
 
 		if (result == ValidationResult.OK)

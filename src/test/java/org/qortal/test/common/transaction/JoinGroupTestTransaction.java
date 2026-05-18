@@ -11,7 +11,7 @@ public class JoinGroupTestTransaction extends TestTransaction {
 	public static TransactionData randomTransaction(Repository repository, PrivateKeyAccount account, boolean wantValid) throws DataException {
 		final int groupId = 1;
 
-		return new JoinGroupTransactionData(generateBase(account), groupId);
+		return new JoinGroupTransactionData(generateBase(account), groupId, 0L);
 	}
 
 }
