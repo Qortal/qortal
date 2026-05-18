@@ -78,20 +78,24 @@ public class ArbitraryDataStorageManager extends Thread {
             while (!isStopping) {
                 Thread.sleep(1000);
 
-                // Don't run if QDN is disabled
-                if (!Settings.getInstance().isQdnEnabled()) {
-                    Thread.sleep(60 * 60 * 1000L);
-                    continue;
-                }
+                try {
+                    // Don't run if QDN is disabled
+                    if (!Settings.getInstance().isQdnEnabled()) {
+                        Thread.sleep(60 * 60 * 1000L);
+                        continue;
+                    }
 
-                Long now = NTP.getTime();
-                if (now == null) {
-                    continue;
-                }
+                    Long now = NTP.getTime();
+                    if (now == null) {
+                        continue;
+                    }
 
-                // Check the total directory size if we haven't in a while
-                if (this.shouldCalculateDirectorySize(now)) {
-                    this.calculateDirectorySize(now);
+                    // Check the total directory size if we haven't in a while
+                    if (this.shouldCalculateDirectorySize(now)) {
+                        this.calculateDirectorySize(now);
+                    }
+                } catch (Exception e) {
+                    LOGGER.error(e.getMessage(), e);
                 }
 
                 Thread.sleep(59000);
@@ -408,45 +412,51 @@ public class ArbitraryDataStorageManager extends Thread {
             return;
         }
 
-        long totalSize = 0;
-        long remainingCapacity = 0;
-
-        // Calculate remaining capacity
         try {
-            remainingCapacity = this.getRemainingUsableStorageCapacity();
-        } catch (IOException e) {
-            LOGGER.info("Unable to calculate remaining storage capacity: {}", e.getMessage());
-            return;
-        }
+            long totalSize = 0;
+            long remainingCapacity = 0;
 
-        // Calculate total size of data directory
-        LOGGER.trace("Calculating data directory size...");
-        Path dataDirectoryPath = Paths.get(Settings.getInstance().getDataPath());
-        if (dataDirectoryPath.toFile().exists()) {
-            totalSize += FileUtils.sizeOfDirectory(dataDirectoryPath.toFile());
-        }
+            // Calculate remaining capacity
+            try {
+                remainingCapacity = this.getRemainingUsableStorageCapacity();
+            } catch (IOException e) {
+                LOGGER.info("Unable to calculate remaining storage capacity: {}", e.getMessage());
+                return;
+            }
 
-        // Add total size of temp directory, if it's not already inside the data directory
-        Path tempDirectoryPath = Paths.get(Settings.getInstance().getTempDataPath());
-        if (tempDirectoryPath.toFile().exists()) {
-            if (!FilesystemUtils.isChild(tempDirectoryPath, dataDirectoryPath)) {
-                LOGGER.trace("Calculating temp directory size...");
+            // Calculate total size of data directory
+            LOGGER.trace("Calculating data directory size...");
+            Path dataDirectoryPath = Paths.get(Settings.getInstance().getDataPath());
+            if (dataDirectoryPath.toFile().exists()) {
                 totalSize += FileUtils.sizeOfDirectory(dataDirectoryPath.toFile());
             }
+
+            // Add total size of temp directory, if it's not already inside the data directory
+            Path tempDirectoryPath = Paths.get(Settings.getInstance().getTempDataPath());
+            if (tempDirectoryPath.toFile().exists()) {
+                if (!FilesystemUtils.isChild(tempDirectoryPath, dataDirectoryPath)) {
+                    LOGGER.trace("Calculating temp directory size...");
+                    totalSize += FileUtils.sizeOfDirectory(dataDirectoryPath.toFile());
+                }
+            }
+
+            this.totalDirectorySize = totalSize;
+            this.lastDirectorySizeCheck = now;
+
+            // It's essential that used space (this.totalDirectorySize) is included in the storage capacity
+            LOGGER.trace("Calculating total storage capacity...");
+            long storageCapacity = remainingCapacity + this.totalDirectorySize;
+
+            // Make sure to limit the storage capacity if the user is overriding it in the settings
+            if (Settings.getInstance().getMaxStorageCapacity() != null) {
+                storageCapacity = Math.min(storageCapacity, Settings.getInstance().getMaxStorageCapacity());
+            }
+            this.storageCapacity = storageCapacity;
+        } catch (UncheckedIOException e) {
+            LOGGER.warn(e.getMessage(), e);
+        } catch (Exception e) {
+           LOGGER.error(e.getMessage(), e);
         }
-
-        this.totalDirectorySize = totalSize;
-        this.lastDirectorySizeCheck = now;
-
-        // It's essential that used space (this.totalDirectorySize) is included in the storage capacity
-        LOGGER.trace("Calculating total storage capacity...");
-        long storageCapacity = remainingCapacity + this.totalDirectorySize;
-
-        // Make sure to limit the storage capacity if the user is overriding it in the settings
-        if (Settings.getInstance().getMaxStorageCapacity() != null) {
-            storageCapacity = Math.min(storageCapacity, Settings.getInstance().getMaxStorageCapacity());
-        }
-        this.storageCapacity = storageCapacity;
 
         LOGGER.info("Total used: {} bytes, Total capacity: {} bytes", this.totalDirectorySize, this.storageCapacity);
     }

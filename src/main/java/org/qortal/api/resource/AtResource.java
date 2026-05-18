@@ -14,7 +14,14 @@ import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiException;
 import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.model.AtCreationRequest;
+import org.qortal.crosschain.BitcoinACCTv3;
+import org.qortal.crosschain.DigibyteACCTv3;
+import org.qortal.crosschain.DogecoinACCTv3;
+import org.qortal.crosschain.LitecoinACCTv3;
+import org.qortal.crosschain.PirateChainACCTv3;
+import org.qortal.crosschain.RavencoinACCTv3;
 import org.qortal.data.at.ATData;
+import org.qortal.data.at.ATDataDisplayDetail;
 import org.qortal.data.at.ATStateData;
 import org.qortal.data.transaction.DeployAtTransactionData;
 import org.qortal.repository.DataException;
@@ -33,7 +40,10 @@ import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 
 @Path("/at")
@@ -117,6 +127,75 @@ public class AtResource {
 	public ATData getByAddress(@PathParam("ataddress") String atAddress) {
 		try (final Repository repository = RepositoryManager.getRepository()) {
 			return repository.getATRepository().fromATAddress(atAddress);
+		} catch (ApiException e) {
+			throw e;
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
+	@Path("/executables")
+	@Operation(
+			summary = "Fetch info for all executable AT's",
+			responses = {
+					@ApiResponse(
+							description = "all executable automated transactions",
+							content = @Content(
+									array = @ArraySchema(
+											schema = @Schema(
+													implementation = ATDataDisplayDetail.class
+											)
+									)
+							)
+					)
+			}
+	)
+	@ApiErrors({
+			ApiError.REPOSITORY_ISSUE
+	})
+	public List<ATDataDisplayDetail> getAllExecutableATs() {
+
+		List<ATDataDisplayDetail> details = new ArrayList<>();
+
+		Map<String, String> atNameByHash = new HashMap<>();
+
+		atNameByHash.put("9gS2L74FdaG3zuEeYv815xVyHkhvLguq7ZGD6pf24i8F", "q-fund version 1 - refund");
+		atNameByHash.put("HaqJBVVr9gZqgARZ5UZd7EU9ybyvVK2fCo9sx3gMMFsr", "q-fund version 2 - no refund");
+		atNameByHash.put("GA2GF79hfJeTy1TezS4sUZWS4vxJKs4qqwJ49h3NN8H9", "lottery");
+		atNameByHash.put(Base58.encode(LitecoinACCTv3.CODE_BYTES_HASH), LitecoinACCTv3.NAME);
+		atNameByHash.put(Base58.encode(BitcoinACCTv3.CODE_BYTES_HASH), BitcoinACCTv3.NAME);
+		atNameByHash.put(Base58.encode(DogecoinACCTv3.CODE_BYTES_HASH), DogecoinACCTv3.NAME);
+		atNameByHash.put(Base58.encode(DigibyteACCTv3.CODE_BYTES_HASH), DigibyteACCTv3.NAME);
+		atNameByHash.put(Base58.encode(RavencoinACCTv3.CODE_BYTES_HASH), RavencoinACCTv3.NAME);
+		atNameByHash.put(Base58.encode(PirateChainACCTv3.CODE_BYTES_HASH), PirateChainACCTv3.NAME);
+		atNameByHash.put("5xwLAjTo1RyKLQS5gM1TvUvDR53H2ARCGyNwyyGcDp4q", "escrow v1-lite");
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<ATData> allExecutableATs = repository.getATRepository().getAllExecutableATs();
+
+			for( ATData executableAT : allExecutableATs) {
+				executableAT.getCodeHash();
+
+				String codeHash58 = Base58.encode(executableAT.getCodeHash());
+
+				details.add(
+					new ATDataDisplayDetail(
+						executableAT.getATAddress(),
+						executableAT.getCreatorPublicKey(),
+						executableAT.getCreation(),
+						executableAT.getIsSleeping(),
+						executableAT.getIsFinished(),
+						executableAT.getHadFatalError(),
+						executableAT.getIsFrozen(),
+						executableAT.getFrozenBalance(),
+						codeHash58,
+							atNameByHash.getOrDefault(codeHash58, "-")
+					)
+				);
+			}
+
+			return details;
 		} catch (ApiException e) {
 			throw e;
 		} catch (DataException e) {

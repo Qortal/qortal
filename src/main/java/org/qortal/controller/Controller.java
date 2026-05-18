@@ -577,6 +577,9 @@ public class Controller extends Thread {
 		LOGGER.info("Starting trade-bot");
 		TradeBot.getInstance();
 
+		LOGGER.info("Starting chat delegate");
+		ChatTransactionDelegate.getInstance();
+
 		// Arbitrary data controllers
 		LOGGER.info("Starting arbitrary-transaction controllers");
 		ArbitraryDataManager.getInstance().start();
@@ -775,6 +778,12 @@ public class Controller extends Thread {
 				}
 			}
 		}, 3*60*1000, 3*60*1000);
+
+		if( Settings.getInstance().getThreadDumpInterval() > 0 ) {
+
+			LOGGER.info("Starting Thread Dump Scheduler ...");
+			ThreadDumpScheduler.getInstance().start();
+		}
 	}
 
 	/** Called by AdvancedInstaller's launch EXE in single-instance mode, when an instance is already running. */
@@ -1208,6 +1217,10 @@ public class Controller extends Thread {
 					AutoUpdate.getInstance().shutdown();
 				}
 
+				// Chat
+				LOGGER.info("Shutting down chat delegate");
+				ChatTransactionDelegate.getInstance().shutdown();
+
 			// Arbitrary data controllers
 			LOGGER.info("Shutting down arbitrary-transaction controllers");
 			ArbitraryDataManager.getInstance().shutdown();
@@ -1289,6 +1302,9 @@ public class Controller extends Thread {
 				if (blockchainLock.isHeldByCurrentThread()) {
 					blockchainLock.unlock();
 				}
+
+				// if thread dumps are scheduled, then this will shutdown
+				ThreadDumpScheduler.getInstance().shutdown();
 
 				LOGGER.info("Shutting down NTP");
 				NTP.shutdownNow();
@@ -1740,26 +1756,39 @@ public class Controller extends Thread {
 
 			for( BlockData blockData : blockDataList) {
 
-				if (PruneManager.getInstance().isBlockPruned(blockData.getHeight())) {
+				try {
+					if (PruneManager.getInstance().isBlockPruned(blockData.getHeight())) {
 
-					// If this is a pruned block, we likely only have partial data, so best not to sent it
-					continue;
-				}
+						// If this is a pruned block, we likely only have partial data, so best not to sent it
+						continue;
+					}
 
-				String signature58 = Base58.encode(blockData.getSignature());
+					String signature58 = Base58.encode(blockData.getSignature());
 
-				PeerMessage peerMessage = toProcessBySignature58.get(signature58);
+					PeerMessage peerMessage = toProcessBySignature58.get(signature58);
 
-				Message message = peerMessage.getMessage();
-				Peer peer = peerMessage.getPeer();
+					Message message = peerMessage.getMessage();
+					Peer peer = peerMessage.getPeer();
 
-				signature58Processed.add(signature58);
+					signature58Processed.add(signature58);
 
-				Block block = new Block(repository, blockData);
+					Block block = new Block(repository, blockData);
 
-				// V2 support
-				if (peer.getPeersVersion() >= BlockV2Message.MIN_PEER_VERSION) {
-					Message blockMessage = new BlockV2Message(block);
+					// V2 support
+					if (peer.getPeersVersion() >= BlockV2Message.MIN_PEER_VERSION) {
+						Message blockMessage = new BlockV2Message(block);
+						blockMessage.setId(message.getId());
+
+						if (!peer.sendMessage(blockMessage)) {
+							peer.disconnect("failed to send block");
+							// Don't fall-through to caching because failure to send might be from failure to build message
+							continue;
+						}
+
+						continue;
+					}
+
+					CachedBlockMessage blockMessage = new CachedBlockMessage(block);
 					blockMessage.setId(message.getId());
 
 					if (!peer.sendMessage(blockMessage)) {
@@ -1768,25 +1797,18 @@ public class Controller extends Thread {
 						continue;
 					}
 
-					continue;
-				}
+					int blockCacheSize = Settings.getInstance().getBlockCacheSize();
 
-				CachedBlockMessage blockMessage = new CachedBlockMessage(block);
-				blockMessage.setId(message.getId());
+					// If request is for a recent block, cache it
+					if (getChainHeight() - blockData.getHeight() <= blockCacheSize) {
+						this.stats.getBlockMessageStats.cacheFills.incrementAndGet();
 
-				if (!peer.sendMessage(blockMessage)) {
-					peer.disconnect("failed to send block");
-					// Don't fall-through to caching because failure to send might be from failure to build message
-					continue;
-				}
-
-				int blockCacheSize = Settings.getInstance().getBlockCacheSize();
-
-				// If request is for a recent block, cache it
-				if (getChainHeight() - blockData.getHeight() <= blockCacheSize) {
-					this.stats.getBlockMessageStats.cacheFills.incrementAndGet();
-
-					this.blockMessageCache.put(ByteArray.wrap(blockData.getSignature()), blockMessage);
+						this.blockMessageCache.put(ByteArray.wrap(blockData.getSignature()), blockMessage);
+					}
+				} catch (IllegalStateException e) {
+					LOGGER.warn(e.getMessage());
+				} catch (Exception e) {
+					LOGGER.error(e.getMessage(), e);
 				}
 			}
 

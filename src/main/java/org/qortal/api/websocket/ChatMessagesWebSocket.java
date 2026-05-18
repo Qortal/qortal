@@ -5,11 +5,10 @@ import org.eclipse.jetty.websocket.api.WriteCallback;
 import org.eclipse.jetty.websocket.api.annotations.*;
 import org.eclipse.jetty.websocket.server.JettyWebSocketServletFactory;
 import org.qortal.controller.ChatNotifier;
+import org.qortal.controller.ChatTransactionDelegate;
 import org.qortal.data.chat.ChatMessage;
 import org.qortal.data.transaction.ChatTransactionData;
 import org.qortal.repository.DataException;
-import org.qortal.repository.Repository;
-import org.qortal.repository.RepositoryManager;
 
 import java.io.IOException;
 import java.io.StringWriter;
@@ -58,8 +57,8 @@ public class ChatMessagesWebSocket extends ApiWebSocket {
 				return;
 			}
 
-			try (final Repository repository = RepositoryManager.getRepository()) {
-				List<ChatMessage> chatMessages = repository.getChatRepository().getMessagesMatchingCriteria(
+			try {
+				List<ChatMessage> chatMessages = ChatTransactionDelegate.getInstance().getMessagesMatchingCriteria(
 						null,
 						null,
 						txGroupId,
@@ -90,8 +89,8 @@ public class ChatMessagesWebSocket extends ApiWebSocket {
 			return;
 		}
 
-		try (final Repository repository = RepositoryManager.getRepository()) {
-			List<ChatMessage> chatMessages = repository.getChatRepository().getMessagesMatchingCriteria(
+		try {
+			List<ChatMessage> chatMessages = ChatTransactionDelegate.getInstance().getMessagesMatchingCriteria(
 					null,
 					null,
 					null,
@@ -182,8 +181,8 @@ public class ChatMessagesWebSocket extends ApiWebSocket {
 	private void sendChat(Session session, ChatTransactionData chatTransactionData) {
 		// Convert ChatTransactionData to ChatMessage
 		ChatMessage chatMessage;
-		try (final Repository repository = RepositoryManager.getRepository()) {
-			chatMessage = repository.getChatRepository().toChatMessage(chatTransactionData, getTargetEncoding(session));
+		try {
+			chatMessage = ChatTransactionDelegate.getInstance().toChatMessage(chatTransactionData, getTargetEncoding(session));
 		} catch (DataException e) {
 			// No output this time?
 			return;

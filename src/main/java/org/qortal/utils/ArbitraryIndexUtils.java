@@ -88,7 +88,7 @@ public class ArbitraryIndexUtils {
                     SearchMode.ALL,
                     0,
                     null,
-                    null,
+                    true,
                     null,
                     null,
                     null,
