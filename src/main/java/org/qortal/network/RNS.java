@@ -143,11 +143,11 @@ public class RNS {
     // Tracks hashes of peers whose PENDING links were pruned as stuck (>60 s without establishing).
     // When a peer is unreachable, createLinkedPeerFromIdentity() creates a PENDING link that the
     // Reticulum library times out at ~75 s → expirePath() → 60-120 s cull → cascade.
-    // After a stuck-PENDING failure, we back off to requestPath() for PENDING_FAILURE_BACKOFF_MS
-    // (5 min) so the backbone can provide a fresh announce path; only then retry direct link creation.
+    // After a stuck-PENDING failure or immediate send failure, we back off to requestPath() for
+    // PENDING_FAILURE_BACKOFF_MS so the backbone can provide a fresh announce path.
     private final java.util.concurrent.ConcurrentHashMap<String, Long> pendingLinkFailureMs =
             new java.util.concurrent.ConcurrentHashMap<>();
-    private static final long PENDING_FAILURE_BACKOFF_MS = 5 * 60 * 1000L;
+    private static final long PENDING_FAILURE_BACKOFF_MS = 60_000L; // 60s; cull is now fast so 5min is too conservative
 
     /**
      * Maintain two lists for each subset of peers
@@ -212,6 +212,11 @@ public class RNS {
     private volatile long reconnectTaskStartedMs = 0L;
     private volatile java.util.concurrent.Future<?> announceTaskFuture = null;
     private volatile java.util.concurrent.Future<?> reconnectTaskFuture = null;
+    // Circuit breaker: when both announce and reconnect tasks keep timing out consecutively,
+    // the backbone TCP connection is likely in a bad state. Force-close it to trigger the
+    // library's built-in auto-reconnect rather than spinning on a stuck jobsLock forever.
+    private volatile int consecutiveStuckTasks = 0;
+    private static final int BACKBONE_FORCE_RECONNECT_THRESHOLD = 2;
 
     /** Called by ReticulumPeer.linkClosed() to kick the announce/path-recovery cycle soon.
      *  Uses a 5s delay rather than 0 to avoid tight reconnect loops when links close rapidly
@@ -219,6 +224,23 @@ public class RNS {
      *  a new link, new link also fails → rapid churn). */
     public void triggerImmediateAnnounce() {
         this.lastBaseLoopAnnounceMs = System.currentTimeMillis() - BASE_LOOP_ANNOUNCE_INTERVAL_MS + 5_000L;
+    }
+
+    /**
+     * Called when a stuck task is interrupted. When the threshold is reached, force-closes
+     * the backbone TCP channel so the library's built-in auto-reconnect fires, clearing any
+     * jobsLock deadlock caused by a zombie-link cull cascade.
+     */
+    private void maybeForceBackboneReconnect() {
+        if (consecutiveStuckTasks < BACKBONE_FORCE_RECONNECT_THRESHOLD) return;
+        consecutiveStuckTasks = 0; // reset so we don't spam per-interval
+        log.warn("runBaseLoop: {} consecutive stuck tasks — forcing backbone TCP reconnect to clear deadlock",
+                BACKBONE_FORCE_RECONNECT_THRESHOLD);
+        for (io.reticulum.interfaces.ConnectionInterface iface : Transport.getInstance().getInterfaces()) {
+            if (iface instanceof io.reticulum.interfaces.backbone.BackboneClientInterface) {
+                ((io.reticulum.interfaces.backbone.BackboneClientInterface) iface).forceReconnect();
+            }
+        }
     }
 
     //private static final Logger logger = LoggerFactory.getLogger(RNS.class);
@@ -512,7 +534,10 @@ public class RNS {
                                 (nowMs - taskStart) / 1000);
                         java.util.concurrent.Future<?> f = announceTaskFuture;
                         if (f != null && !f.isDone()) f.cancel(true);
+                        ((ThreadPoolExecutor) announceExecutor).purge();
                         announceTaskStartedMs = 0L;
+                        consecutiveStuckTasks++;
+                        maybeForceBackboneReconnect();
                     }
                     if (announceTaskStartedMs == 0L) {
                         announceTaskStartedMs = nowMs;
@@ -524,6 +549,12 @@ public class RNS {
                                 } catch (Exception e) {
                                     log.warn("Exception in base loop announce: {}", e.getMessage(), e);
                                 } finally {
+                                    // Reset counter only if watchdog didn't fire — watchdog sets
+                                    // announceTaskStartedMs=0 before incrementing consecutiveStuckTasks,
+                                    // so a non-zero value here means we completed without intervention.
+                                    if (announceTaskStartedMs != 0L) {
+                                        consecutiveStuckTasks = 0;
+                                    }
                                     announceTaskStartedMs = 0L;
                                 }
                             });
@@ -544,7 +575,10 @@ public class RNS {
                                 (nowMs - rTaskStart) / 1000);
                         java.util.concurrent.Future<?> rf = reconnectTaskFuture;
                         if (rf != null && !rf.isDone()) rf.cancel(true);
+                        ((ThreadPoolExecutor) reconnectExecutor).purge();
                         reconnectTaskStartedMs = 0L;
+                        consecutiveStuckTasks++;
+                        maybeForceBackboneReconnect();
                     }
                     if (reconnectTaskStartedMs == 0L) {
                         reconnectTaskStartedMs = nowMs;
@@ -563,6 +597,11 @@ public class RNS {
                                     if (activeLinked < MIN_DESIRED_CORE_PEERS && !reconnectTargets.isEmpty()) {
                                         log.info("Active linked peers {} < desired {} (base loop); requesting paths to {} known peers",
                                                 activeLinked, MIN_DESIRED_CORE_PEERS, reconnectTargets.size());
+                                        // When fully disconnected, limit outgoing link creation to 1 per cycle.
+                                        // Creating all peers simultaneously floods jobsLock (each new Link() sends
+                                        // a LINKREQUEST via outbound(Packet)) and starves announce/reconnect tasks.
+                                        // The PENDING-failure backoff naturally rotates through peers across cycles.
+                                        int outgoingLinksCreated = 0;
                                         for (String hashHex : reconnectTargets) {
                                             try {
                                                 byte[] dhash = org.apache.commons.codec.binary.Hex.decodeHex(hashHex);
@@ -593,29 +632,37 @@ public class RNS {
                                                 //
                                                 // createLinkedPeerFromIdentity() creates an outgoing link immediately
                                                 // from the locally-cached identity. This is how initial connections form.
-                                                // BUT if the peer is unreachable, the Reticulum library times out the
-                                                // PENDING link at ~75 s → expirePath() → 60-120 s cull. The reconnect
-                                                // executor then immediately creates another PENDING link → another cull
-                                                // 75 s later → infinite cascade; Transport lock held forever; stuck 0/0.
+                                                // If the LINKREQUEST send fails (no route in pathTable), the link is
+                                                // CLOSED immediately and we record pendingLinkFailureMs right there.
+                                                // If the peer is reachable but slow, the RNS.java pruner removes the
+                                                // PENDING link after 60s and records pendingLinkFailureMs.
+                                                // Either way we back off to requestPath() for PENDING_FAILURE_BACKOFF_MS
+                                                // so the backbone can provide a fresh path before we retry.
                                                 //
                                                 // requestPath() sends a single path-request packet (no PENDING link).
                                                 // If the backbone responds with a fresh announce, QAnnounceHandler creates
-                                                // the link via the reentrant path — safe, no cull risk. If the peer is
-                                                // unreachable nothing happens: no cull, no cascade.
+                                                // the link. If the peer is unreachable nothing happens: no cull, no cascade.
                                                 //
-                                                // Strategy: use requestPath() for peers whose PENDING link recently
-                                                // timed out (recorded in pendingLinkFailureMs). This backs off from the
-                                                // cascade while letting the backbone find a fresh path. For all other
-                                                // peers (new or recovered) use createLinkedPeerFromIdentity() directly.
+                                                // Strategy: use createLinkedPeerFromIdentity() for peers without a recent
+                                                // PENDING failure; use requestPath() for peers in the backoff window.
+                                                // When activeLinked==0, limit outgoing link creation to 1 per cycle to
+                                                // avoid flooding jobsLock; requestPath breaks the 0/0 deadlock for others.
                                                 long lastFailure = pendingLinkFailureMs.getOrDefault(hashHex, 0L);
                                                 boolean recentlyFailed = (System.currentTimeMillis() - lastFailure) < PENDING_FAILURE_BACKOFF_MS;
-                                                Identity cachedIdentity = recentlyFailed ? null : IdentityKnownDestination.recall(dhash);
+                                                boolean outgoingSlotFree = activeLinked > 0 || outgoingLinksCreated == 0;
+                                                Identity cachedIdentity = (!recentlyFailed && outgoingSlotFree)
+                                                        ? IdentityKnownDestination.recall(dhash) : null;
                                                 if (cachedIdentity != null) {
                                                     log.info("Proactively connecting to {} via cached identity", hashHex);
                                                     createLinkedPeerFromIdentity(dhash, cachedIdentity);
+                                                    outgoingLinksCreated++;
                                                 } else {
                                                     if (recentlyFailed) {
                                                         log.info("Backing off to requestPath for {} (recent PENDING failure)", hashHex);
+                                                    } else if (!outgoingSlotFree) {
+                                                        log.info("requestPath for {} (outgoing slot in use)", hashHex);
+                                                    } else {
+                                                        log.info("requestPath for {} (no cached identity)", hashHex);
                                                     }
                                                     Transport.getInstance().requestPath(dhash);
                                                 }
@@ -627,6 +674,10 @@ public class RNS {
                                 } catch (Exception e) {
                                     log.warn("Exception in base loop reconnect: {}", e.getMessage(), e);
                                 } finally {
+                                    // Reset counter only if watchdog didn't fire (same logic as announce task).
+                                    if (reconnectTaskStartedMs != 0L) {
+                                        consecutiveStuckTasks = 0;
+                                    }
                                     reconnectTaskStartedMs = 0L;
                                 }
                             });
@@ -1000,6 +1051,16 @@ public class RNS {
         addLinkedPeer(newPeer);
         log.info("Proactively connecting to known peer {} via cached identity", encodeHexString(destinationHash));
         // Link already created in constructor — do NOT call getOrInitPeerLink() here.
+        // Detect immediate send failure: ReticulumPeer() → initPeerLink() → new Link() → packet.send()
+        // → outbound() is synchronous; if the LINKREQUEST couldn't be sent (no route, backbone down),
+        // the link is already CLOSED by the time we get here. Record a failure so the reconnect loop
+        // backs off to requestPath() rather than creating a new CLOSED link on every 15s cycle.
+        Link lnk = newPeer.getPeerLink();
+        if (lnk != null && lnk.getStatus() == CLOSED) {
+            log.warn("createLinkedPeerFromIdentity: LINKREQUEST to {} failed immediately — switching to requestPath backoff",
+                    encodeHexString(destinationHash));
+            pendingLinkFailureMs.put(encodeHexString(destinationHash), System.currentTimeMillis());
+        }
     }
 
     //class RNSProcessor extends ExecuteProduceConsume {
@@ -1462,8 +1523,15 @@ public class RNS {
             log.info("Active core peers ({}) <= desired core peers ({}). Announcing (dest={})",
                     corePeerCount, MIN_DESIRED_CORE_PEERS, d != null ? encodeHexString(d.getHash()) : "null");
             if (nonNull(d)) {
+                long announceT0 = System.currentTimeMillis();
                 d.announce();
-                log.info("Announce sent successfully");
+                long announceMs = System.currentTimeMillis() - announceT0;
+                // d.announce() always returns null when send=true — see Destination.java:675.
+                // Real failures are logged by Packet.java as "No interfaces could process".
+                log.info("Announce attempt completed in {}ms", announceMs);
+                if (announceMs > 5_000) {
+                    log.warn("Announce took {}ms — possible jobsLock contention", announceMs);
+                }
             } else {
                 log.error("Cannot announce - destination is null");
             }
