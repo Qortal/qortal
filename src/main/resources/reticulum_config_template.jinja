@@ -23,6 +23,9 @@ reticulum:
 {% elif is_reticulum_gateway %}
   # This Qortal instance is configured as a Reticulum gateway
   enable_transport: true
+{% else %}
+  # default
+  enable_transport: false
 {% endif %}
 
   share_instance: true
