@@ -43,7 +43,9 @@ public interface NameRepository {
 
 	public Optional<String> getPrimaryName(String address) throws DataException;
 
-	/** Returns map of owner address -> primary name for the given addresses. Batched in chunks of 500. Missing entries mean no primary name. */
+    Map<String, String> getAllPrimaryNamesByOwner() throws DataException;
+
+    /** Returns map of owner address -> primary name for the given addresses. Batched in chunks of 500. Missing entries mean no primary name. */
 	public Map<String, String> getPrimaryNamesByOwners(Collection<String> addresses) throws DataException;
 
 	public int clearPrimaryNames() throws DataException;

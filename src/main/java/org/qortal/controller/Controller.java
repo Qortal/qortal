@@ -592,6 +592,9 @@ public class Controller extends Thread {
 		LOGGER.info("Starting trade-bot");
 		TradeBot.getInstance();
 
+		LOGGER.info("Starting chat delegate");
+		ChatTransactionDelegate.getInstance();
+
 		// Arbitrary data controllers
 		LOGGER.info("Starting arbitrary-transaction controllers");
 		ArbitraryDataManager.getInstance().start();
@@ -731,8 +734,8 @@ public class Controller extends Thread {
 		syncFromGenesis.schedule(new TimerTask() {
 			@Override
 			public void run() {
-                // Note: the logic in this block only works for IPPeers
-                //       might need rework to work for ReticulumPeer
+        // Note: the logic in this block only works for IPPeers
+        //       might need rework to work for ReticulumPeer
 				LOGGER.debug("Start sync from genesis check.");
 				boolean canBootstrap = Settings.getInstance().getBootstrap();
 				boolean needsArchiveRebuild = false;
@@ -767,7 +770,7 @@ public class Controller extends Thread {
 					InetSocketAddress resolvedAddress = null;
 
 					try {
-                        PeerAddress peerAddress = PeerAddressFactory.create("uri", syncNode);
+            PeerAddress peerAddress = PeerAddressFactory.create("uri", syncNode);
 						resolvedAddress = peerAddress.toSocketAddress();
 					} catch (UnknownHostException e) {
 						throw new RuntimeException(e);
@@ -796,73 +799,11 @@ public class Controller extends Thread {
 			}
 		}, 3*60*1000, 3*60*1000);
 
-		//Timer syncFromGenesisRNS = new Timer();
-		//syncFromGenesisRNS.schedule(new TimerTask() {
-		//	@Override
-		//	public void run() {
-		//		LOGGER.debug("Start sync from genesis check (RNS).");
-		//		boolean canBootstrap = Settings.getInstance().getBootstrap();
-		//		boolean needsArchiveRebuildRNS = false;
-		//		int checkHeightRNS = 0;
-		//
-		//		try (final Repository repository = RepositoryManager.getRepository()){
-		//			needsArchiveRebuildRNS = (repository.getBlockArchiveRepository().fromHeight(2) == null);
-		//			checkHeightRNS = repository.getBlockRepository().getBlockchainHeight();
-		//		} catch (DataException e) {
-		//			throw new RuntimeException(e);
-		//		}
-		//
-		//		if (canBootstrap || !needsArchiveRebuildRNS || checkHeightRNS > 3) {
-		//			LOGGER.debug("Bootstrapping is enabled or we have more than 2 blocks, cancel sync from genesis check.");
-		//			syncFromGenesisRNS.cancel();
-		//			return;
-		//		}
-		//
-		//		if (needsArchiveRebuildRNS && !canBootstrap) {
-		//			LOGGER.info("Start syncing from genesis (RNS)!");
-		//			List<RNSPeer> seeds = new ArrayList<>(RNSNetwork.getInstance().getActiveImmutableLinkedPeers());
-		//
-		//			// Check if have a qualified peer to sync
-		//			if (seeds.isEmpty()) {
-		//				LOGGER.info("No connected RNSPeer(s), will try again later.");
-		//				return;
-		//			}
-		//
-		//			int index = new SecureRandom().nextInt(seeds.size());
-		//			RNSPeer syncPeer = seeds.get(index);
-		//			var syncPeerLinkAsString = syncPeer.getPeerLink().toString();
-		//			//String syncNode = String.valueOf(seeds.get(index));
-		//			//PeerAddress peerAddress = PeerAddress.fromString(syncNode);
-		//			//InetSocketAddress resolvedAddress = null;
-		//			//
-		//			//try {
-		//			//	resolvedAddress = peerAddress.toSocketAddress();
-		//			//} catch (UnknownHostException e) {
-		//			//	throw new RuntimeException(e);
-		//			//}
-		//			//
-		//			//InetSocketAddress finalResolvedAddress = resolvedAddress;
-		//			//Peer targetPeer = seeds.stream().filter(peer -> peer.getResolvedAddress().equals(finalResolvedAddress)).findFirst().orElse(null);
-		//			//RNSPeer targetPeerRNS = seeds.stream().findFirst().orElse(null);
-		//			RNSPeer targetPeerRNS = seeds.stream().filter(peer -> peer.getPeerLink().toString().equals(syncPeerLinkAsString)).findFirst().orElse(null);
-		//			RNSSynchronizer.SynchronizationResult syncResultRNS;
-		//
-		//			try {
-		//				do {
-		//					try {
-		//						syncResultRNS = RNSSynchronizer.getInstance().actuallySynchronize(targetPeerRNS, true);
-		//					} catch (InterruptedException e) {
-		//						throw new RuntimeException(e);
-		//					}
-		//				}
-		//				while (syncResultRNS == RNSSynchronizer.SynchronizationResult.OK);
-		//			} finally {
-		//				// We are syncing now, so can cancel the check
-		//				syncFromGenesisRNS.cancel();
-		//			}
-		//		}
-		//	}
-		//}, 3*60*1000, 3*60*1000);
+		if( Settings.getInstance().getThreadDumpInterval() > 0 ) {
+
+			LOGGER.info("Starting Thread Dump Scheduler ...");
+			ThreadDumpScheduler.getInstance().start();
+		}
 	}
 
 	/** Called by AdvancedInstaller's launch EXE in single-instance mode, when an instance is already running. */
@@ -1353,6 +1294,10 @@ public class Controller extends Thread {
 					AutoUpdate.getInstance().shutdown();
 				}
 
+				// Chat
+				LOGGER.info("Shutting down chat delegate");
+				ChatTransactionDelegate.getInstance().shutdown();
+
 			// Arbitrary data controllers
 			LOGGER.info("Shutting down arbitrary-transaction controllers");
 			ArbitraryDataManager.getInstance().shutdown();
@@ -1438,6 +1383,9 @@ public class Controller extends Thread {
 				if (blockchainLock.isHeldByCurrentThread()) {
 					blockchainLock.unlock();
 				}
+
+				// if thread dumps are scheduled, then this will shutdown
+				ThreadDumpScheduler.getInstance().shutdown();
 
 				LOGGER.info("Shutting down NTP");
 				NTP.shutdownNow();
@@ -1648,6 +1596,33 @@ public class Controller extends Thread {
 			if (transactionData.getType() == TransactionType.CHAT)
 				ChatNotifier.getInstance().onNewChatTransaction((ChatTransactionData) transactionData);
 		});
+	}
+
+	/**
+	 * Converts a transaction into a {@link NotificationEvent} and dispatches it
+	 * through the {@link NotificationManager} to any subscribed WebSocket clients.
+	 * <p>
+	 * Covered events:
+	 * <ul>
+	 *   <li>{@code PAYMENT_RECEIVED} – PAYMENT transactions</li>
+	 * </ul>
+	 */
+	private void dispatchTransactionNotification(TransactionData transactionData) {
+		if (transactionData == null) {
+			return;
+		}
+
+		try {
+			if (transactionData.getType() == TransactionType.PAYMENT) {
+				PaymentTransactionData tx = (PaymentTransactionData) transactionData;
+				String sender = Crypto.toAddress(tx.getCreatorPublicKey());
+				String amount = String.valueOf(tx.getAmount());
+				NotificationManager.getInstance().processEvent(new NotificationEvent("PAYMENT_RECEIVED",
+					Map.of("sender", sender, "recipient", tx.getRecipient(), "amount", amount)));
+			}
+		} catch (Exception e) {
+			LOGGER.debug("Error dispatching transaction notification: {}", e.getMessage());
+		}
 	}
 
 	/**
@@ -1862,26 +1837,39 @@ public class Controller extends Thread {
 
 			for( BlockData blockData : blockDataList) {
 
-				if (PruneManager.getInstance().isBlockPruned(blockData.getHeight())) {
+				try {
+					if (PruneManager.getInstance().isBlockPruned(blockData.getHeight())) {
 
-					// If this is a pruned block, we likely only have partial data, so best not to sent it
-					continue;
-				}
+						// If this is a pruned block, we likely only have partial data, so best not to sent it
+						continue;
+					}
 
-				String signature58 = Base58.encode(blockData.getSignature());
+					String signature58 = Base58.encode(blockData.getSignature());
 
-				PeerMessage peerMessage = toProcessBySignature58.get(signature58);
+					PeerMessage peerMessage = toProcessBySignature58.get(signature58);
 
-				Message message = peerMessage.getMessage();
-				Peer peer = peerMessage.getPeer();
+					Message message = peerMessage.getMessage();
+					Peer peer = peerMessage.getPeer();
 
-				signature58Processed.add(signature58);
+					signature58Processed.add(signature58);
 
-				Block block = new Block(repository, blockData);
+					Block block = new Block(repository, blockData);
 
-				// V2 support
-				if (peer.getPeersVersion() >= BlockV2Message.MIN_PEER_VERSION) {
-					Message blockMessage = new BlockV2Message(block);
+					// V2 support
+					if (peer.getPeersVersion() >= BlockV2Message.MIN_PEER_VERSION) {
+						Message blockMessage = new BlockV2Message(block);
+						blockMessage.setId(message.getId());
+
+						if (!peer.sendMessage(blockMessage)) {
+							peer.disconnect("failed to send block");
+							// Don't fall-through to caching because failure to send might be from failure to build message
+							continue;
+						}
+
+						continue;
+					}
+
+					CachedBlockMessage blockMessage = new CachedBlockMessage(block);
 					blockMessage.setId(message.getId());
 
 					if (!peer.sendMessage(blockMessage)) {
@@ -1890,25 +1878,18 @@ public class Controller extends Thread {
 						continue;
 					}
 
-					continue;
-				}
+					int blockCacheSize = Settings.getInstance().getBlockCacheSize();
 
-				CachedBlockMessage blockMessage = new CachedBlockMessage(block);
-				blockMessage.setId(message.getId());
+					// If request is for a recent block, cache it
+					if (getChainHeight() - blockData.getHeight() <= blockCacheSize) {
+						this.stats.getBlockMessageStats.cacheFills.incrementAndGet();
 
-				if (!peer.sendMessage(blockMessage)) {
-					peer.disconnect("failed to send block");
-					// Don't fall-through to caching because failure to send might be from failure to build message
-					continue;
-				}
-
-				int blockCacheSize = Settings.getInstance().getBlockCacheSize();
-
-				// If request is for a recent block, cache it
-				if (getChainHeight() - blockData.getHeight() <= blockCacheSize) {
-					this.stats.getBlockMessageStats.cacheFills.incrementAndGet();
-
-					this.blockMessageCache.put(ByteArray.wrap(blockData.getSignature()), blockMessage);
+						this.blockMessageCache.put(ByteArray.wrap(blockData.getSignature()), blockMessage);
+					}
+				} catch (IllegalStateException e) {
+					LOGGER.warn(e.getMessage());
+				} catch (Exception e) {
+					LOGGER.error(e.getMessage(), e);
 				}
 			}
 

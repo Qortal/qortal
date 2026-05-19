@@ -5,12 +5,10 @@ import org.eclipse.jetty.websocket.api.WriteCallback;
 import org.eclipse.jetty.websocket.api.annotations.*;
 import org.eclipse.jetty.websocket.server.JettyWebSocketServletFactory;
 import org.qortal.controller.ChatNotifier;
+import org.qortal.controller.ChatTransactionDelegate;
 import org.qortal.crypto.Crypto;
 import org.qortal.data.chat.ActiveChats;
 import org.qortal.data.transaction.ChatTransactionData;
-import org.qortal.repository.DataException;
-import org.qortal.repository.Repository;
-import org.qortal.repository.RepositoryManager;
 
 import java.io.IOException;
 import java.io.StringWriter;
@@ -84,10 +82,10 @@ public class ActiveChatsWebSocket extends ApiWebSocket {
 				return;
 		}
 
-		try (final Repository repository = RepositoryManager.getRepository()) {
+		try {
 			Boolean hasChatReference = getHasChatReference(session);
 
-			ActiveChats activeChats = repository.getChatRepository().getActiveChats(ourAddress, getTargetEncoding(session), hasChatReference);
+			ActiveChats activeChats = ChatTransactionDelegate.getInstance().getActiveChats(ourAddress, getTargetEncoding(session), hasChatReference);
 
 			StringWriter stringWriter = new StringWriter();
 
@@ -104,7 +102,7 @@ public class ActiveChatsWebSocket extends ApiWebSocket {
 			if (session.isOpen()) {
 				session.getRemote().sendString(output, WriteCallback.NOOP);
 			}
-		} catch (DataException | IOException e) {
+		} catch (IOException e) {
 			// No output this time
 		}
 	}

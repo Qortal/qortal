@@ -37,7 +37,6 @@ import org.qortal.network.Network;
 import org.qortal.network.Peer;
 import org.qortal.network.PeerAddress;
 import org.qortal.network.PeerAddressFactory;
-import org.qortal.repository.ReindexManager;
 import org.qortal.repository.DataException;
 import org.qortal.repository.ReindexManager;
 import org.qortal.repository.Repository;
@@ -157,7 +156,7 @@ public class AdminResource {
 			return "CA certificate not found.";
 		}
 		try {
-			KeyStore keyStore = KeyStore.getInstance("PKCS12", "BC");
+			KeyStore keyStore = KeyStore.getInstance("PKCS12");
 			try (FileInputStream fis = new FileInputStream(keystorePath.toFile())) {
 				keyStore.load(fis, keystorePassword.toCharArray());
 			}
@@ -206,7 +205,7 @@ public class AdminResource {
 			return new CertificateSanInfo(dns, ip);
 		}
 		try {
-			KeyStore keyStore = KeyStore.getInstance("PKCS12", "BC");
+			KeyStore keyStore = KeyStore.getInstance("PKCS12");
 			try (FileInputStream fis = new FileInputStream(keystorePath.toFile())) {
 				keyStore.load(fis, keystorePassword.toCharArray());
 			}
@@ -860,7 +859,7 @@ public class AdminResource {
 		try {
 			// Try to resolve passed address to make things easier
 			//PeerAddress peerAddress = PeerAddress.fromString(targetPeerAddress);
-            PeerAddress peerAddress = PeerAddressFactory.create("address", targetPeerAddress);
+      PeerAddress peerAddress = PeerAddressFactory.create("address", targetPeerAddress);
 			InetSocketAddress resolvedAddress = peerAddress.toSocketAddress();
 
 			List<Peer> peers = Network.getInstance().getImmutableHandshakedPeers();

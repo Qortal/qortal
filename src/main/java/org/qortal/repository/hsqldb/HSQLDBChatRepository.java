@@ -8,6 +8,7 @@ import org.qortal.data.chat.ActiveChats.DirectChat;
 import org.qortal.data.chat.ActiveChats.GroupChat;
 import org.qortal.data.chat.ChatMessage;
 import org.qortal.data.group.GroupMemberData;
+import org.qortal.data.transaction.BaseTransactionData;
 import org.qortal.data.transaction.ChatTransactionData;
 import org.qortal.repository.ChatRepository;
 import org.qortal.repository.DataException;
@@ -170,6 +171,65 @@ public class HSQLDBChatRepository implements ChatRepository {
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch matching chat transactions from repository", e);
 		}
+	}
+
+	@Override
+	public List<ChatTransactionData> getAllChatData() throws DataException {
+
+		String sql = "SELECT created_when, tx_group_id, reference, creator, signature, sender, nonce, recipient, is_text, is_encrypted, data, chat_reference FROM ChatTransactions JOIN Transactions using (signature)";
+
+		List<ChatTransactionData> chats = new ArrayList<>();
+
+		try (ResultSet resultSet = this.repository.checkedExecute(sql)) {
+
+			if (resultSet != null) {
+				do {
+					// created_when EpochMillis NOT NULL
+					long timestamp = resultSet.getLong(1);
+					// tx_group_id GroupID NOT NULL
+					int txGroupId = resultSet.getInt(2);
+					// reference Signature
+					byte[] reference = resultSet.getBytes(3);
+					// creator QortalPublicKey NOT NULL
+					byte[] creatorPublicKey = resultSet.getBytes(4);
+					// signature Signature,
+					byte[] signature = resultSet.getBytes(5);
+					// sender QortalAddress NOT NULL
+					String sender = resultSet.getString(6);
+					// nonce INT NOT NULL
+					int nonce = resultSet.getInt(7);
+					// recipient QortalAddress
+					String recipient = resultSet.getString(8);
+					// is_text BOOLEAN NOT NULL
+					boolean isText = resultSet.getBoolean(9);
+					// is_encrypted BOOLEAN NOT NULL
+					boolean isEncrypted = resultSet.getBoolean(10);
+					// data MessageData NOT NULL
+					byte[] data = resultSet.getBytes(11);
+					// chat_reference Signature
+					byte[] chatReference = resultSet.getBytes(12);
+
+					BaseTransactionData baseTransactionData
+						= new BaseTransactionData(
+							timestamp,
+							txGroupId,
+							reference,
+							creatorPublicKey,
+							0L,
+							null,
+							null,
+							null,
+							signature
+					);
+
+					chats.add( new ChatTransactionData(baseTransactionData, sender, nonce, recipient, chatReference, data, isText, isEncrypted) );
+				} while (resultSet.next());
+			}
+		} catch (SQLException e) {
+			throw new DataException("cannot fetch chat transaction data from the database", e);
+		}
+
+		return chats;
 	}
 
 	@Override

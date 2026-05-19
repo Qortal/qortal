@@ -364,6 +364,28 @@ public class HSQLDBNameRepository implements NameRepository {
 		}
 	}
 
+	@Override
+	public Map<String, String> getAllPrimaryNamesByOwner() throws DataException {
+		String sql = "SELECT owner, name FROM PrimaryNames";
+
+		try (ResultSet resultSet = this.repository.checkedExecute(sql)) {
+			if (resultSet == null)
+				return new HashMap<>(0);
+
+			Map<String, String> nameByOwner = new HashMap<>();
+
+			do {
+				String owner = resultSet.getString(1);
+				String name = resultSet.getString(2);
+				nameByOwner.put(owner, name);
+			} while (resultSet.next());
+
+			return nameByOwner;
+		} catch (SQLException e) {
+			throw new DataException("unable to fetch primary names", e);
+		}
+	}
+
 	private static final int PRIMARY_NAMES_BATCH_SIZE = 500;
 
 	@Override
