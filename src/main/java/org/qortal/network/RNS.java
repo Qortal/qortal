@@ -1211,7 +1211,7 @@ public class RNS {
         // TODO: check interfaces <=> if none available, shutdown and reintialize RNS
     }
 
-    // note: we already have a lobok getter for this
+    // note: we already have a lombok getter for this
     //public List<ReticulumPeer> getImmutableLinkedPeers() {
     //    return this.immutableLinkedPeers;
     //}
@@ -1268,7 +1268,7 @@ public class RNS {
         //network.removeConnectedPeer(peer);
     }
 
-    // note: we already have a lobok getter for this
+    // note: we already have a lombok getter for this
     //public List<ReticulumPeer> getLinkedPeers() {
     //    //synchronized(this.linkedPeers) {
     //        //return new ArrayList<>(this.linkedPeers);
@@ -1306,7 +1306,7 @@ public class RNS {
         this.immutableIncomingPeers = List.copyOf(this.incomingPeers);
     }
 
-    // note: we already have a lobok getter for this
+    // note: we already have a lombok getter for this
     //public List<ReticulumPeer> getIncomingPeers() {
     //    return this.incomingPeers;
     //}
