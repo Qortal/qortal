@@ -346,7 +346,7 @@ public class RNS {
         //dataDestination.setLinkEstablishedCallback(this::dataClientConnected);
         //Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler());
         Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler("qortal.core"));
-        //Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler("qortal.qdn"));
+        Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler("qortal.qdn"));
         log.debug("announceHandlers: {}", Transport.getInstance().getAnnounceHandlers());
         // Load peer hashes persisted from previous run so we can call requestPath() fast on restart.
         loadKnownPeerHashes();
@@ -948,14 +948,14 @@ public class RNS {
             var activePeerCount = 0; 
             //var network = Network.getInstance();
 
-            log.info("Received an announce from {}", encodeHexString(destinationHash));
+            log.debug("Received an announce from {}", encodeHexString(destinationHash));
 
             // Since getAspectFilter() returns null (match-all), we must verify manually.
             // Recompute the expected hash for "qortal.core" + the announced identity and
             // compare; skip announces that belong to other apps/aspects.
             var expectedHash = hashFromNameAndIdentity(this.aspectFilter, announcedIdentity);
             if (!Arrays.equals(destinationHash, expectedHash)) {
-                log.info("Announce hash mismatch — identity={}, dest={}, expected={}",
+                log.debug("Announce hash mismatch — identity={}, dest={}, expected={}",
                         announcedIdentity != null ? encodeHexString(announcedIdentity.getHash()) : "null",
                         encodeHexString(destinationHash),
                         encodeHexString(expectedHash));
