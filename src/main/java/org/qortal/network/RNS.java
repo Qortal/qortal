@@ -8,6 +8,7 @@ import io.reticulum.destination.DestinationType;
 import io.reticulum.destination.Direction;
 import io.reticulum.destination.ProofStrategy;
 import io.reticulum.identity.Identity;
+import io.reticulum.identity.IdentityKnownDestination;
 import io.reticulum.link.Link;
 //import io.reticulum.link.LinkStatus;
 //import io.reticulum.constant.LinkConstant;
@@ -29,6 +30,7 @@ import static io.reticulum.link.LinkStatus.PENDING;
 //import static io.reticulum.packet.PacketContextType.LINKCLOSE;
 //import static io.reticulum.identity.IdentityKnownDestination.recall;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
+import static io.reticulum.utils.DestinationUtils.hashFromNameAndIdentity;
 //import static io.reticulum.constant.ReticulumConstant.TRUNCATED_HASHLENGTH;
 import static io.reticulum.constant.ReticulumConstant.CONFIG_FILE_NAME;
 import lombok.Data;
@@ -64,6 +66,7 @@ import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 import java.io.File;
 import java.util.*;
+import java.util.HashSet;
 //import java.util.Random;
 //import java.util.Scanner;
 import java.util.concurrent.TimeUnit;
@@ -114,6 +117,7 @@ public class RNS {
     static final Integer TARGET_PORT = Settings.getInstance().isTestNet() ? RNSCommon.TESTNET_IF_TCP_PORT: RNSCommon.MAINNET_IF_TCP_PORT;
     //static final String defaultConfigPath = ".reticulum"; // if empty will look in Reticulums default paths
     static final String defaultConfigPath = Settings.getInstance().isTestNet() ? RNSCommon.defaultRNSConfigPathTestnet: RNSCommon.defaultRNSConfigPath;
+    static final String CORE_ASPECT = "qortal.core";
     private final int MAX_PEERS = Settings.getInstance().getReticulumMaxPeers();
     private final int MIN_DESIRED_CORE_PEERS = Settings.getInstance().getReticulumMinDesiredCorePeers();
     private final int MIN_DESIRED_DATA_PEERS = Settings.getInstance().getReticulumMinDesiredDataPeers();
@@ -124,6 +128,26 @@ public class RNS {
     public Destination baseDestination;
     public Destination dataDestination;
     private volatile boolean isShuttingDown = false;
+    private volatile boolean meshStarted = false;
+
+    // Confirmed-active peer destination hashes — only added when a peer's buffer is successfully
+    // created (ACTIVE confirmed). Persisted to disk on shutdown so the next restart reconnects
+    // immediately without waiting for announces. Never includes transient/failed-only peers.
+    private final Set<String> knownPeerHashes = Collections.synchronizedSet(new HashSet<>());
+    // Hashes loaded from disk on startup (may include stale entries from previous sessions).
+    // Used alongside knownPeerHashes for path recovery. Not saved back directly; knownPeerHashes
+    // (confirmed this session) is saved instead, which naturally drops stale entries over time.
+    private final Set<String> loadedPeerHashes = Collections.synchronizedSet(new HashSet<>());
+    private static final String KNOWN_PEERS_FILE = "known_peer_hashes.txt";
+
+    // Tracks hashes of peers whose PENDING links were pruned as stuck (>60 s without establishing).
+    // When a peer is unreachable, createLinkedPeerFromIdentity() creates a PENDING link that the
+    // Reticulum library times out at ~75 s → expirePath() → 60-120 s cull → cascade.
+    // After a stuck-PENDING failure or immediate send failure, we back off to requestPath() for
+    // PENDING_FAILURE_BACKOFF_MS so the backbone can provide a fresh announce path.
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> pendingLinkFailureMs =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long PENDING_FAILURE_BACKOFF_MS = 60_000L; // 60s; cull is now fast so 5min is too conservative
 
     /**
      * Maintain two lists for each subset of peers
@@ -141,6 +165,15 @@ public class RNS {
     private Thread rnsBaseThread;
     //private final ExecuteProduceConsume rnsEPC;
     private ExecutorService rnsWorkerPool;
+    // Dedicated single-thread executors for announce and reconnect.
+    // Root cause of prior failures: Transport.outbound() busy-waits on jobsLock (non-interruptibly).
+    // A full table cull triggered by link drops holds jobsLock for 30-60s. With a shared pool,
+    // each watchdog reset spawns a new thread, creating 20+ threads all spinning on jobsLock
+    // simultaneously — massively worsening contention and making the cull take even longer.
+    // Solution: one dedicated thread per operation (bounded queue=1). At most 2 threads ever
+    // spin on jobsLock; tasks queue up naturally and complete when the cull finishes.
+    private ExecutorService announceExecutor;
+    private ExecutorService reconnectExecutor;
     private static final long NETWORK_EPC_KEEPALIVE = 5L; // 1 second
     //private int totalThreadCount = 0;
     private final int reticulumMaxNetworkThreadPoolSize = Settings.getInstance().getReticulumMaxNetworkThreadPoolSize();
@@ -148,7 +181,7 @@ public class RNS {
     // replicating a feature from Network.class needed in for base Message.java,
     // just in case the classic TCP/IP Networking is turned off.
     private static final byte[] MAINNET_MESSAGE_MAGIC = new byte[]{0x51, 0x4f, 0x52, 0x54}; // QORT
-    private static final byte[] TESTNET_MESSAGE_MAGIC = new byte[]{0x71, 0x6f, 0x72, 0x54}; // qorT
+    private static final byte[] TESTNET_MESSAGE_MAGIC = new byte[]{0x71, 0x6f, 0x72, 0x54}; // qort
     private static final int BROADCAST_CHAIN_TIP_DEPTH = 7; // (~1440 bytes)
     /**
      * How long between informational broadcasts to all ACTIVE peers, in milliseconds.
@@ -159,6 +192,56 @@ public class RNS {
      */
     private static final long LINK_PING_INTERVAL = 55 * 1000L; // ms
     private static final long LINK_UNREACHABLE_TIMEOUT = 3 * LINK_PING_INTERVAL;
+    /**
+     * How often runBaseLoop() triggers maybeAnnounce() and path recovery, independent
+     * of prunePeers(). This ensures announces fire even when the Controller scheduler is
+     * slow/blocked (e.g., prunePeers() waiting on a lock inside the Reticulum library).
+     */
+    private static final long BASE_LOOP_ANNOUNCE_INTERVAL_MS = 30_000L; // 30 seconds
+    private static final long BASE_LOOP_RECONNECT_INTERVAL_MS = 15_000L; // reconnect independently of announce
+    private static final long ANNOUNCE_TASK_TIMEOUT_MS = 60_000L; // watchdog: reset stuck announce after 60s
+    private static final long RECONNECT_TASK_TIMEOUT_MS = 45_000L; // watchdog: reset stuck reconnect after 45s
+    private volatile long lastBaseLoopAnnounceMs = 0;
+    private volatile long lastBaseLoopReconnectMs = 0;
+    // Timestamp-based guards: 0 = no task running; non-zero = task started at that ms.
+    // Timestamps (rather than booleans) allow a watchdog to force-reset after the timeout.
+    // createLinkedPeerFromIdentity() and requestPath() call Reticulum transport code that can
+    // acquire internal locks and block when the backbone degrades — both must run in the pool,
+    // never inline on the runBaseLoop thread.
+    private volatile long announceTaskStartedMs = 0L;
+    private volatile long reconnectTaskStartedMs = 0L;
+    private volatile java.util.concurrent.Future<?> announceTaskFuture = null;
+    private volatile java.util.concurrent.Future<?> reconnectTaskFuture = null;
+    // Circuit breaker: when both announce and reconnect tasks keep timing out consecutively,
+    // the backbone TCP connection is likely in a bad state. Force-close it to trigger the
+    // library's built-in auto-reconnect rather than spinning on a stuck jobsLock forever.
+    private volatile int consecutiveStuckTasks = 0;
+    private static final int BACKBONE_FORCE_RECONNECT_THRESHOLD = 2;
+
+    /** Called by ReticulumPeer.linkClosed() to kick the announce/path-recovery cycle soon.
+     *  Uses a 5s delay rather than 0 to avoid tight reconnect loops when links close rapidly
+     *  (e.g., Channel "retry count exceeded" tears down a link, immediate re-announce creates
+     *  a new link, new link also fails → rapid churn). */
+    public void triggerImmediateAnnounce() {
+        this.lastBaseLoopAnnounceMs = System.currentTimeMillis() - BASE_LOOP_ANNOUNCE_INTERVAL_MS + 5_000L;
+    }
+
+    /**
+     * Called when a stuck task is interrupted. When the threshold is reached, force-closes
+     * the backbone TCP channel so the library's built-in auto-reconnect fires, clearing any
+     * jobsLock deadlock caused by a zombie-link cull cascade.
+     */
+    private void maybeForceBackboneReconnect() {
+        if (consecutiveStuckTasks < BACKBONE_FORCE_RECONNECT_THRESHOLD) return;
+        consecutiveStuckTasks = 0; // reset so we don't spam per-interval
+        log.warn("runBaseLoop: {} consecutive stuck tasks — forcing backbone TCP reconnect to clear deadlock",
+                BACKBONE_FORCE_RECONNECT_THRESHOLD);
+        for (io.reticulum.interfaces.ConnectionInterface iface : Transport.getInstance().getInterfaces()) {
+            if (iface instanceof io.reticulum.interfaces.backbone.BackboneClientInterface) {
+                ((io.reticulum.interfaces.backbone.BackboneClientInterface) iface).forceReconnect();
+            }
+        }
+    }
 
     //private static final Logger logger = LoggerFactory.getLogger(RNS.class);
     
@@ -197,6 +280,16 @@ public class RNS {
                 NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
                 new LinkedBlockingQueue<>(),
                 new NamedThreadFactory("RNS-Worker", rnsThreadPriority));
+        // Bounded queue(1): at most one task running + one queued. A rejected submission just
+        // means the next interval will retry — no unbounded thread growth.
+        this.announceExecutor = new ThreadPoolExecutor(1, 1,
+                NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(1),
+                new NamedThreadFactory("RNS-Announce", rnsThreadPriority));
+        this.reconnectExecutor = new ThreadPoolExecutor(1, 1,
+                NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(1),
+                new NamedThreadFactory("RNS-Reconnect", rnsThreadPriority));
     }
 
     // Note: potentially create persistent serverIdentity (utility rnid) and load it from file
@@ -235,14 +328,14 @@ public class RNS {
             "core"
         );
         log.info("Destination {} {} running", encodeHexString(baseDestination.getHash()), baseDestination.getName());
-        //dataDestination = new Destination(
-        //    serverIdentity,
-        //    Direction.IN,
-        //    DestinationType.SINGLE,
-        //    APP_NAME,
-        //    "qdn"
-        //);
-        //log.info("Destination {} {} running", encodeHexString(dataDestination.getHash()), dataDestination.getName());
+        dataDestination = new Destination(
+            serverIdentity,
+            Direction.IN,
+            DestinationType.SINGLE,
+            APP_NAME,
+            "qdn"
+        );
+        log.info("Destination {} {} running", encodeHexString(dataDestination.getHash()), dataDestination.getName());
    
         baseDestination.setProofStrategy(ProofStrategy.PROVE_ALL);
         baseDestination.setAcceptLinkRequests(true);
@@ -253,11 +346,20 @@ public class RNS {
         //dataDestination.setLinkEstablishedCallback(this::dataClientConnected);
         //Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler());
         Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler("qortal.core"));
-        //Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler("qortal.qdn"));
+        Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler("qortal.qdn"));
         log.debug("announceHandlers: {}", Transport.getInstance().getAnnounceHandlers());
+        // Load peer hashes persisted from previous run so we can call requestPath() fast on restart.
+        loadKnownPeerHashes();
         // do a first announce (across all configured interfaces)
         baseDestination.announce();
-        log.debug("Sent initial announce from {} ({})", encodeHexString(baseDestination.getHash()), baseDestination.getName());
+        log.info("Sent initial announce from {} ({})", encodeHexString(baseDestination.getHash()), baseDestination.getName());
+        // Seed the base-loop announce timer. If we loaded known peer hashes (i.e. this is a restart),
+        // fire path requests at t=15s to give the backbone time to connect — much faster than
+        // waiting 30s with zero peers. On a first-ever start knownPeerHashes is empty so we use
+        // the normal 30s window.
+        this.lastBaseLoopAnnounceMs = loadedPeerHashes.isEmpty()
+                ? System.currentTimeMillis()
+                : System.currentTimeMillis() - BASE_LOOP_ANNOUNCE_INTERVAL_MS + 15_000L;
         // announce QDN destination (across all configured interfaces)
         //dataDestination.announce();
         //log.debug("Sent initial announce from {} ({})", encodeHexString(dataDestination.getHash()), dataDestination.getName());
@@ -268,11 +370,18 @@ public class RNS {
         // Start up "main" thread, one for each destination to handle aspects separately.
         // Note: Each such thread is equivalent to the peerTypes "NETWORK" and "NETWORKDATA".
         this.rnsBaseThread = new Thread(this::runBaseLoop, "rnsMesh-BASE");
-        this.rnsBaseThread.setDaemon(false);
+        this.rnsBaseThread.setDaemon(true); // daemon so SIGTERM doesn't hang JVM exit
         this.rnsBaseThread.start();
         //this.rnsDataThread = new Thread(this::runDataLoop, "rnsMesh-DATA");
         //this.rnsDataThread.setDaemon(false);
         //this.rnsDataThread.start();
+
+        this.meshStarted = true;
+        log.info("RNS mesh started, baseDestination: {}", encodeHexString(baseDestination.getHash()));
+    }
+
+    public boolean isMeshStarted() {
+        return meshStarted;
     }
 
     private void initConfig(String configDir) throws IOException {
@@ -287,36 +396,43 @@ public class RNS {
         var isReticulumGateway = Settings.getInstance().getReticulumIsGateway();
         var reticulumDesiredClientInterfaces =  Settings.getInstance().getReticulumDesiredClientInterfaces();
         var reticulumTcpGatewayServers = Arrays.stream(Settings.getInstance().getReticulumTcpGatewayServers()).collect(Collectors.toList());
+        var reticulumBackboneGatewayServers = Arrays.stream(Settings.getInstance().getReticulumBackboneGatewayServers()).collect(Collectors.toList());
         reticulumTcpGatewayServers.remove(fqdn);
+        reticulumBackboneGatewayServers.remove(fqdn);
         Map<String, Object> context = Maps.newHashMap();
 
         //log.info("fqdn: {}, reticulumTcpGatewayServers: {}", fqdn, reticulumTcpGatewayServers);
 
-        if (Files.notExists(configFile)) {
+        if (Files.notExists(configFile) || Settings.getInstance().isReticulumRegenerateConfigOnRestart()) {
             try {
                 // jinjava variables set in context:
                 // * tcp_gateway_servers: list of nodes with a TCPServerInterface
+                // * tcp_backbone_servers: list of nodes with a BackboneServerInterface
                 // * num_client_interfaces: number of client interfaces to gateways be configured
                 // * host_fqdn: host FQDN
                 // * qortal_network_name: either "qortal" or "qortaltest" (from isTestnet)
                 // * is_reticulum_gateway: one of the instances (Qortal core or RNS) has
                 //                         at least one Gateway interface
                 // * is_test_net: String "true" or "false" (from isTestNet)
-                // * target_port: target port for TCPServerInterface (only)
+                // * target_port: target port for TCPServerInterface or BackboneServerInterface (only)
                 // * use_python_rns: use local shared python rnsd (has to provide a gateway interface)
                 // * python_rns_if_port: rnsd TCPServerInterface port (if rnsd gateway is a TCPServerInterface)
                 var jnj = new Jinjava();
-                var reticulumGateways = StringUtils.join(reticulumTcpGatewayServers, " ");
-                log.info("reticulumGateways: {}", reticulumGateways);
-                context.put("tcp_gateway_servers",  reticulumGateways);
+                var reticulumTcpGateways = StringUtils.join(reticulumTcpGatewayServers, " ");
+                var reticulumBackboneGateways = StringUtils.join(reticulumBackboneGatewayServers, " ");
+                log.info("reticulumTcpGateways: {}, reticulumBackboneGateways", reticulumTcpGateways);
+                context.put("tcp_gateway_servers",  reticulumTcpGateways);
+                context.put("backbone_gateway_servers",  reticulumBackboneGateways);
                 context.put("num_client_interfaces", reticulumDesiredClientInterfaces);
                 context.put("host_fqdn", fqdn);
-                context.put("qortal_network_name",  APP_NAME);
+                String networkName = Settings.getInstance().getReticulumNetworkName();
+                context.put("qortal_network_name", networkName.isEmpty() ? APP_NAME : networkName);
                 context.put("target_port", TARGET_PORT);
                 context.put("is_reticulum_gateway", isReticulumGateway ? "true" : "false");
                 //context.put("is_test_net", Settings.getInstance().isTestNet() ? "true" : "false");
                 context.put("use_python_rns", Settings.getInstance().getReticulumUsePythonRNS() ? "true" : "false");
                 context.put("python_rns_if_port", Settings.getInstance().getReticulumPythonRNSGatewayPort());
+                context.put("passphrase", Settings.getInstance().getReticulumPassphrase());
 
                 // render config.yml from template
                 log.info("Rendering new Reticulum configuration file from resource {}", RNSCommon.jinjaConfigTemplateName  );
@@ -347,36 +463,234 @@ public class RNS {
     // "main" loop for baseDestination (chain tasks)
     private void runBaseLoop() {
         while (!isShuttingDown && !Thread.currentThread().isInterrupted()) {
-            final List<ReticulumPeer> peersThisRound = this.getActiveImmutableLinkedPeers().stream()
-                    .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.BASE)
-                    .collect(Collectors.toList());
+            try {
+                // Drain messages from both initiator peers (linkedPeers) and
+                // non-initiator/incoming peers (incomingPeers) so that requests
+                // received by either side are processed.
+                final List<ReticulumPeer> peersThisRound = Stream.concat(
+                        this.getActiveImmutableLinkedPeers().stream()
+                                .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.BASE),
+                        this.getImmutableIncomingPeers().stream()
+                                .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.BASE)
+                                .filter(p -> {
+                                    var pl = p.getPeerLink();
+                                    return nonNull(pl) && pl.getStatus() == ACTIVE;
+                                })
+                ).collect(Collectors.toList());
 
-            for (ReticulumPeer peer : peersThisRound) {
-                ExecuteProduceConsume.Task task;
-                while ((task = peer.getMessageTask(Peer.NETWORK)) != null) {
-                    final ExecuteProduceConsume.Task t = task;
-                    try {
-                        rnsWorkerPool.execute(() -> {
-                            try {
-                                t.perform();
-                            } catch (InterruptedException e) {
-                                Thread.currentThread().interrupt();
-                            } catch (Exception e) {
-                                log.warn("Reticulum worker task threw: {}", e.getMessage(), e);
-                            }
-                        });
-                    } catch (java.util.concurrent.RejectedExecutionException e) {
-                        // Worker pool is full or shutting down - log and continue
-                        // Message will be lost but system remains stable
-                        log.warn("[{}] Reticulum worker pool rejected message task (pool full or shutting down)",
-                                peer.getPeerConnectionId());
-                        break; // Stop draining this peer's queue
+                final Long now = NTP.getTime();
+                for (ReticulumPeer peer : peersThisRound) {
+                    ExecuteProduceConsume.Task task;
+                    while ((task = peer.getMessageTask(Peer.NETWORK)) != null) {
+                        final ExecuteProduceConsume.Task t = task;
+                        try {
+                            rnsWorkerPool.execute(() -> {
+                                try {
+                                    t.perform();
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                } catch (Exception e) {
+                                    log.warn("Reticulum worker task threw: {}", e.getMessage(), e);
+                                }
+                            });
+                        } catch (java.util.concurrent.RejectedExecutionException e) {
+                            log.warn("[{}] Reticulum worker pool rejected message task (pool full or shutting down)",
+                                    peer.getPeerConnectionId());
+                            break;
+                        }
+                    }
+
+                    // Send keepalive ping if due (initiator peers only, every 55s)
+                    ExecuteProduceConsume.Task pingTask = peer.getPingTask(now);
+                    if (pingTask != null) {
+                        final ExecuteProduceConsume.Task pt = pingTask;
+                        try {
+                            rnsWorkerPool.execute(() -> {
+                                try {
+                                    pt.perform();
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                } catch (Exception e) {
+                                    log.warn("Reticulum ping task threw: {}", e.getMessage(), e);
+                                }
+                            });
+                        } catch (java.util.concurrent.RejectedExecutionException e) {
+                            log.warn("[{}] Reticulum worker pool rejected ping task", peer.getPeerConnectionId());
+                        }
                     }
                 }
+
+                // Periodic announce — dedicated single-thread executor with bounded queue(1).
+                // Transport.outbound() busy-waits on jobsLock (non-interruptibly); a table cull
+                // triggered by link drops can hold jobsLock for 30-60s.  With a single thread,
+                // at most 1 task spins on the lock at a time; a queued task runs as soon as the
+                // running one completes.  Rejected = queue full = there is already one waiting.
+                long nowMs = System.currentTimeMillis();
+                if (nowMs - lastBaseLoopAnnounceMs >= BASE_LOOP_ANNOUNCE_INTERVAL_MS) {
+                    lastBaseLoopAnnounceMs = nowMs;
+                    long taskStart = announceTaskStartedMs;
+                    if (taskStart != 0 && (nowMs - taskStart > ANNOUNCE_TASK_TIMEOUT_MS)) {
+                        log.warn("runBaseLoop: announce task running for {}s — interrupting stuck task",
+                                (nowMs - taskStart) / 1000);
+                        java.util.concurrent.Future<?> f = announceTaskFuture;
+                        if (f != null && !f.isDone()) f.cancel(true);
+                        ((ThreadPoolExecutor) announceExecutor).purge();
+                        announceTaskStartedMs = 0L;
+                        consecutiveStuckTasks++;
+                        maybeForceBackboneReconnect();
+                    }
+                    if (announceTaskStartedMs == 0L) {
+                        announceTaskStartedMs = nowMs;
+                        try {
+                            announceTaskFuture = announceExecutor.submit(() -> {
+                                Thread.interrupted(); // clear any stale interrupt flag from prior cancel
+                                try {
+                                    maybeAnnounce(getBaseDestination(), RNSCommon.PeerAspect.BASE);
+                                } catch (Exception e) {
+                                    log.warn("Exception in base loop announce: {}", e.getMessage(), e);
+                                } finally {
+                                    // Reset counter only if watchdog didn't fire — watchdog sets
+                                    // announceTaskStartedMs=0 before incrementing consecutiveStuckTasks,
+                                    // so a non-zero value here means we completed without intervention.
+                                    if (announceTaskStartedMs != 0L) {
+                                        consecutiveStuckTasks = 0;
+                                    }
+                                    announceTaskStartedMs = 0L;
+                                }
+                            });
+                        } catch (java.util.concurrent.RejectedExecutionException e) {
+                            announceTaskStartedMs = 0L;
+                        }
+                    }
+                }
+
+                // Periodic path recovery — submitted to rnsWorkerPool so that createLinkedPeerFromIdentity()
+                // and requestPath() (which call Reticulum transport code that acquires internal locks and can
+                // block on backbone I/O) do not freeze the runBaseLoop thread.
+                if (nowMs - lastBaseLoopReconnectMs >= BASE_LOOP_RECONNECT_INTERVAL_MS) {
+                    lastBaseLoopReconnectMs = nowMs;
+                    long rTaskStart = reconnectTaskStartedMs;
+                    if (rTaskStart != 0 && (nowMs - rTaskStart > RECONNECT_TASK_TIMEOUT_MS)) {
+                        log.warn("runBaseLoop: reconnect task running for {}s — interrupting stuck task",
+                                (nowMs - rTaskStart) / 1000);
+                        java.util.concurrent.Future<?> rf = reconnectTaskFuture;
+                        if (rf != null && !rf.isDone()) rf.cancel(true);
+                        ((ThreadPoolExecutor) reconnectExecutor).purge();
+                        reconnectTaskStartedMs = 0L;
+                        consecutiveStuckTasks++;
+                        maybeForceBackboneReconnect();
+                    }
+                    if (reconnectTaskStartedMs == 0L) {
+                        reconnectTaskStartedMs = nowMs;
+                        final int activeLinked = getActiveImmutableLinkedPeers().size();
+                        final List<ReticulumPeer> currentLinked = getImmutableLinkedPeers();
+                        final Set<String> reconnectTargets = new HashSet<>(knownPeerHashes);
+                        reconnectTargets.addAll(loadedPeerHashes);
+                        try {
+                            reconnectTaskFuture = reconnectExecutor.submit(() -> {
+                                Thread.interrupted(); // clear any stale interrupt flag from prior cancel
+                                try {
+                                    // Log interface online status for diagnostics
+                                    for (io.reticulum.interfaces.ConnectionInterface iface : Transport.getInstance().getInterfaces()) {
+                                        log.info("Interface '{}' online={}", iface.getInterfaceName(), iface.isOnline());
+                                    }
+                                    if (activeLinked < MIN_DESIRED_CORE_PEERS && !reconnectTargets.isEmpty()) {
+                                        log.info("Active linked peers {} < desired {} (base loop); requesting paths to {} known peers",
+                                                activeLinked, MIN_DESIRED_CORE_PEERS, reconnectTargets.size());
+                                        // When fully disconnected, limit outgoing link creation to 1 per cycle.
+                                        // Creating all peers simultaneously floods jobsLock (each new Link() sends
+                                        // a LINKREQUEST via outbound(Packet)) and starves announce/reconnect tasks.
+                                        // The PENDING-failure backoff naturally rotates through peers across cycles.
+                                        int outgoingLinksCreated = 0;
+                                        for (String hashHex : reconnectTargets) {
+                                            try {
+                                                byte[] dhash = org.apache.commons.codec.binary.Hex.decodeHex(hashHex);
+                                                // Skip peers already tracked (PENDING or ACTIVE) as initiator links
+                                                boolean tracked = currentLinked.stream()
+                                                        .anyMatch(p -> Arrays.equals(p.getDestinationHash(), dhash));
+                                                if (tracked) continue;
+                                                // Skip peers already ACTIVE as incoming — broadcast() covers them,
+                                                // and creating a duplicate outgoing link doubles the Channel teardown
+                                                // rate, driving more expirePath() culls and accumulating spurious
+                                                // incoming connections on the remote end.
+                                                boolean alreadyIncoming = getImmutableIncomingPeers().stream()
+                                                        .filter(p -> {
+                                                            Link pl = p.getPeerLink();
+                                                            return nonNull(pl) && pl.getStatus() == ACTIVE;
+                                                        })
+                                                        .anyMatch(p -> {
+                                                            Identity remoteId = p.getServerIdentity();
+                                                            if (remoteId == null) return false;
+                                                            return Arrays.equals(hashFromNameAndIdentity(CORE_ASPECT, remoteId), dhash);
+                                                        });
+                                                if (alreadyIncoming) continue;
+                                                // hopsTo() is a ConcurrentHashMap.get() — no lock, always safe.
+                                                int hops = Transport.getInstance().hopsTo(dhash);
+                                                log.info("Path to {}: hops={}", hashHex,
+                                                        hops == io.reticulum.constant.TransportConstant.PATHFINDER_M ? "unknown" : hops);
+                                                // Hybrid reconnect strategy:
+                                                //
+                                                // createLinkedPeerFromIdentity() creates an outgoing link immediately
+                                                // from the locally-cached identity. This is how initial connections form.
+                                                // If the LINKREQUEST send fails (no route in pathTable), the link is
+                                                // CLOSED immediately and we record pendingLinkFailureMs right there.
+                                                // If the peer is reachable but slow, the RNS.java pruner removes the
+                                                // PENDING link after 60s and records pendingLinkFailureMs.
+                                                // Either way we back off to requestPath() for PENDING_FAILURE_BACKOFF_MS
+                                                // so the backbone can provide a fresh path before we retry.
+                                                //
+                                                // requestPath() sends a single path-request packet (no PENDING link).
+                                                // If the backbone responds with a fresh announce, QAnnounceHandler creates
+                                                // the link. If the peer is unreachable nothing happens: no cull, no cascade.
+                                                //
+                                                // Strategy: use createLinkedPeerFromIdentity() for peers without a recent
+                                                // PENDING failure; use requestPath() for peers in the backoff window.
+                                                // When activeLinked==0, limit outgoing link creation to 1 per cycle to
+                                                // avoid flooding jobsLock; requestPath breaks the 0/0 deadlock for others.
+                                                long lastFailure = pendingLinkFailureMs.getOrDefault(hashHex, 0L);
+                                                boolean recentlyFailed = (System.currentTimeMillis() - lastFailure) < PENDING_FAILURE_BACKOFF_MS;
+                                                boolean outgoingSlotFree = activeLinked > 0 || outgoingLinksCreated == 0;
+                                                Identity cachedIdentity = (!recentlyFailed && outgoingSlotFree)
+                                                        ? IdentityKnownDestination.recall(dhash) : null;
+                                                if (cachedIdentity != null) {
+                                                    log.info("Proactively connecting to {} via cached identity", hashHex);
+                                                    createLinkedPeerFromIdentity(dhash, cachedIdentity);
+                                                    outgoingLinksCreated++;
+                                                } else {
+                                                    if (recentlyFailed) {
+                                                        log.info("Backing off to requestPath for {} (recent PENDING failure)", hashHex);
+                                                    } else if (!outgoingSlotFree) {
+                                                        log.info("requestPath for {} (outgoing slot in use)", hashHex);
+                                                    } else {
+                                                        log.info("requestPath for {} (no cached identity)", hashHex);
+                                                    }
+                                                    Transport.getInstance().requestPath(dhash);
+                                                }
+                                            } catch (Exception e) {
+                                                log.warn("Path request/reconnect failed for {}: {}", hashHex, e.getMessage());
+                                            }
+                                        }
+                                    }
+                                } catch (Exception e) {
+                                    log.warn("Exception in base loop reconnect: {}", e.getMessage(), e);
+                                } finally {
+                                    // Reset counter only if watchdog didn't fire (same logic as announce task).
+                                    if (reconnectTaskStartedMs != 0L) {
+                                        consecutiveStuckTasks = 0;
+                                    }
+                                    reconnectTaskStartedMs = 0L;
+                                }
+                            });
+                        } catch (java.util.concurrent.RejectedExecutionException e) {
+                            reconnectTaskStartedMs = 0L;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.error("runBaseLoop: unexpected exception — loop continues", e);
             }
 
-            // Sleep unconditionally at the end of every cycle to cap the loop
-            // at ~100 iterations/sec.
+            // Sleep unconditionally at the end of every cycle to cap the loop at ~100 iterations/sec.
             if (!isShuttingDown && !Thread.currentThread().isInterrupted()) {
                 try {
                     Thread.sleep(10);
@@ -395,21 +709,24 @@ public class RNS {
     //}
 
     public void broadcast(Function<ReticulumPeer, Message> peerMessageBuilder) {
-        for (ReticulumPeer peer : getActiveImmutableLinkedPeers()) {
+        List<ReticulumPeer> allPeers = Stream.concat(
+                getActiveImmutableLinkedPeers().stream(),
+                getImmutableIncomingPeers().stream()
+                        .filter(p -> nonNull(p.getPeerLink()) && p.getPeerLink().getStatus() == ACTIVE)
+        ).collect(Collectors.toList());
+
+        for (ReticulumPeer peer : allPeers) {
             if (this.isShuttingDown) {
                 return;
             }
-    
+
             Message message = peerMessageBuilder.apply(peer);
-    
+
             if (message == null) {
                 continue;
             }
-    
-            var pl = peer.getPeerLink();
-            if (nonNull(pl) && (pl.getStatus() == ACTIVE)) {
-                peer.sendMessage(message);
-            }
+
+            peer.sendMessage(message);
         }
     }
 
@@ -439,6 +756,7 @@ public class RNS {
 
     public void shutdown() {
         this.isShuttingDown = true;
+        saveKnownPeerHashes(); // Persist before shutting down so next restart reconnects fast.
         log.info("shutting down Reticulum");
         baseDestination.setProofStrategy(ProofStrategy.PROVE_NONE);
         //dataDestination.setProofStrategy(ProofStrategy.PROVE_NONE);
@@ -491,7 +809,37 @@ public class RNS {
             //}
         }
         log.debug("Shutdown of linkedPeers completed");
-        reticulum.exitHandler();
+        // Shut down worker pool so its threads don't prevent JVM exit
+        this.rnsWorkerPool.shutdown();
+        this.announceExecutor.shutdown();
+        this.reconnectExecutor.shutdown();
+        try {
+            if (!this.rnsWorkerPool.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS))
+                this.rnsWorkerPool.shutdownNow();
+            if (!this.announceExecutor.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS))
+                this.announceExecutor.shutdownNow();
+            if (!this.reconnectExecutor.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS))
+                this.reconnectExecutor.shutdownNow();
+        } catch (InterruptedException e) {
+            this.rnsWorkerPool.shutdownNow();
+            this.announceExecutor.shutdownNow();
+            this.reconnectExecutor.shutdownNow();
+        }
+
+        // exitHandler() can block indefinitely if a zombie link's channel holds a lock
+        // (library ABBA deadlock). Run it on a daemon thread with a timeout so the JVM
+        // can exit even if the library gets stuck.
+        Thread exitThread = new Thread(reticulum::exitHandler, "rns-exit");
+        exitThread.setDaemon(true);
+        exitThread.start();
+        try {
+            exitThread.join(5000);
+            if (exitThread.isAlive()) {
+                log.warn("exitHandler did not complete in 5s — zombie channel likely; forcing shutdown");
+            }
+        } catch (InterruptedException e) {
+            log.warn("Interrupted while waiting for exitHandler");
+        }
         log.info("shutdown of Reticulum complete");
     }
 
@@ -535,8 +883,9 @@ public class RNS {
         newPeer.setPeerLinkHash(link.getHash());
         newPeer.setPeerAspect(RNSCommon.PeerAspect.BASE);
         newPeer.setMessageMagic(getMessageMagic());
-        // make sure the peer has a channel and buffer
-        newPeer.getOrInitPeerBuffer();
+        // createPeerBuffer() rather than getOrInitPeerBuffer() — avoids synchronized(link)
+        // contention on the broadcast path (see ReticulumPeer.createPeerBuffer javadoc).
+        newPeer.createPeerBuffer();
         addIncomingPeer(newPeer);
         log.info("***> Base client connected, base link: {}", encodeHexString(link.getLinkId()));
     }
@@ -549,8 +898,7 @@ public class RNS {
         newPeer.setPeerLinkHash(link.getHash());
         newPeer.setPeerAspect(RNSCommon.PeerAspect.DATA);
         newPeer.setMessageMagic(getMessageMagic());
-        // make sure the peer has a channel and buffer
-        newPeer.getOrInitPeerBuffer();
+        newPeer.createPeerBuffer();
         addIncomingPeer(newPeer);
         log.info("***> Data Client connected, data link: {}", encodeHexString(link.getLinkId()));
     }
@@ -581,8 +929,12 @@ public class RNS {
 
         @Override
         public String getAspectFilter() {
-            //return "qortal.core";
-            return this.aspectFilter;
+            // Return null so Transport fires this handler for ALL received announces.
+            // Transport's hash-based filter (hashFromNameAndIdentity(aspectFilter, recall(hash)))
+            // fails whenever recall() returns null for the incoming announce identity — the
+            // computed hash (no identity component) never matches the actual destination hash,
+            // so receivedAnnounce() is never called. We filter by name inside the handler instead.
+            return null;
         }
 
         @Override
@@ -596,14 +948,25 @@ public class RNS {
             var activePeerCount = 0; 
             //var network = Network.getInstance();
 
-            log.info("Received an announce from {}", encodeHexString(destinationHash));
+            log.debug("Received an announce from {}", encodeHexString(destinationHash));
+
+            // Since getAspectFilter() returns null (match-all), we must verify manually.
+            // Recompute the expected hash for "qortal.core" + the announced identity and
+            // compare; skip announces that belong to other apps/aspects.
+            var expectedHash = hashFromNameAndIdentity(this.aspectFilter, announcedIdentity);
+            if (!Arrays.equals(destinationHash, expectedHash)) {
+                log.debug("Announce hash mismatch — identity={}, dest={}, expected={}",
+                        announcedIdentity != null ? encodeHexString(announcedIdentity.getHash()) : "null",
+                        encodeHexString(destinationHash),
+                        encodeHexString(expectedHash));
+                return;
+            }
 
             if (nonNull(appData)) {
                 log.debug("The announce contained the following app data: {}", new String(appData, UTF_8));
             }
 
             // add to peer list if we can use more peers
-            //synchronized (this) {
             var lps =  RNS.getInstance().getImmutableLinkedPeers();
             for (ReticulumPeer p: lps) {
                 var pl = p.getPeerLink();
@@ -620,7 +983,11 @@ public class RNS {
                                     encodeHexString(p.getPeerLink().getLinkId()), p.getPeerLink().getStatus());
                         }
                         peerExists = true;
-                        if (nonNull(p.getPeerLink()) && (p.getPeerLink().getStatus() != ACTIVE)) {
+                        if (nonNull(p.getPeerLink()) && (p.getPeerLink().getStatus() == CLOSED)) {
+                            // Only re-initiate for CLOSED links. PENDING links are already
+                            // connecting — creating a second link would race with the first
+                            // and the first's TIMEOUT callback would set peerTimedOut=true,
+                            // poisoning the peer and triggering premature pruning.
                             p.getOrInitPeerLink();
                         }
                         break;
@@ -640,7 +1007,6 @@ public class RNS {
                 if (!peerExists) {
                     ReticulumPeer newPeer = getNewPeer(destinationHash, announcedIdentity);
                     addLinkedPeer(newPeer);
-                    //network.addConnectedPeer(newPeer);
                     log.info("added new {} ReticulumPeer, destinationHash: {}",
                             newPeer.getPeerAspect(), encodeHexString(destinationHash));
                 }
@@ -650,8 +1016,9 @@ public class RNS {
         private ReticulumPeer getNewPeer(byte[] destinationHash, Identity announcedIdentity) {
             ReticulumPeer newPeer = new ReticulumPeer(destinationHash);
             newPeer.setServerIdentity(announcedIdentity);
+
             newPeer.setIsInitiator(true);
-            if (getAspectFilter() == "qortal.qdn") {
+            if ("qortal.qdn".equals(this.aspectFilter)) {
                 // data peer
                 newPeer.setPeerAspect(RNSCommon.PeerAspect.DATA);
                 newPeer.setIsDataPeer(true);
@@ -663,6 +1030,36 @@ public class RNS {
             newPeer.setMessageMagic(getMessageMagic());
             log.debug(">>> ReticulumPeer created - PeerData: {} - {}", newPeer.getPeerData().toString(), newPeer.getPeerAddress().getDestinationHash());
             return newPeer;
+        }
+    }
+
+    // Create and add a BASE ReticulumPeer directly from a cached identity (no announce needed).
+    // Called from runBaseLoop() when recall() finds the identity in the local known-destinations DB.
+    //
+    // The ReticulumPeer constructor calls initPeerLink() (which sends the LINK OPEN via outbound()).
+    // Do NOT call getOrInitPeerLink() here: the peer's link is already PENDING, so getOrInitPeerLink()
+    // would call initPeerLink() a second time — creating a zombie PENDING link in the Reticulum library.
+    // The zombie establishes on the remote end (adding a spurious incoming peer there), and when it
+    // times out it fires expirePath() → tablesLastCulled=EPOCH → cascading 60-120s cull cycles.
+    private void createLinkedPeerFromIdentity(byte[] destinationHash, Identity identity) {
+        ReticulumPeer newPeer = new ReticulumPeer(destinationHash);
+        newPeer.setServerIdentity(identity);
+        newPeer.setIsInitiator(true);
+        newPeer.setPeerAspect(RNSCommon.PeerAspect.BASE);
+        newPeer.setIsDataPeer(false);
+        newPeer.setMessageMagic(getMessageMagic());
+        addLinkedPeer(newPeer);
+        log.info("Proactively connecting to known peer {} via cached identity", encodeHexString(destinationHash));
+        // Link already created in constructor — do NOT call getOrInitPeerLink() here.
+        // Detect immediate send failure: ReticulumPeer() → initPeerLink() → new Link() → packet.send()
+        // → outbound() is synchronous; if the LINKREQUEST couldn't be sent (no route, backbone down),
+        // the link is already CLOSED by the time we get here. Record a failure so the reconnect loop
+        // backs off to requestPath() rather than creating a new CLOSED link on every 15s cycle.
+        Link lnk = newPeer.getPeerLink();
+        if (lnk != null && lnk.getStatus() == CLOSED) {
+            log.warn("createLinkedPeerFromIdentity: LINKREQUEST to {} failed immediately — switching to requestPath backoff",
+                    encodeHexString(destinationHash));
+            pendingLinkFailureMs.put(encodeHexString(destinationHash), System.currentTimeMillis());
         }
     }
 
@@ -777,11 +1174,36 @@ public class RNS {
     public List<ReticulumPeer> getActiveImmutableLinkedPeers() {
         List<ReticulumPeer> activePeers = Collections.synchronizedList(new ArrayList<>());
         for (ReticulumPeer p: this.immutableLinkedPeers) {
-            if (nonNull(p.getPeerLink()) && (p.getPeerLink().getStatus() == ACTIVE)) {
+            // Exclude peers marked for removal (deleteMe=true): their buffer is dead even if
+            // the library-level link is still ACTIVE. Excluding them lets runBaseLoop() see
+            // the real active count and trigger reconnect without waiting for prunePeers().
+            if (nonNull(p.getPeerLink()) && (p.getPeerLink().getStatus() == ACTIVE) && !p.getDeleteMe()) {
                 activePeers.add(p);
             }
         }
         return activePeers;
+    }
+
+    /**
+     * Immediately remove a peer from the peer list and kick reconnect, rather than waiting
+     * for the next prunePeers() cycle (~60s). Called from ReticulumPeer.peerBufferReady()
+     * on read error. Runs on the rnsWorkerPool to avoid blocking the Reticulum callback thread.
+     */
+    void markPeerForImmediateRemoval(ReticulumPeer peer) {
+        if (this.isShuttingDown) return;
+        try {
+            rnsWorkerPool.submit(() -> {
+                peer.makePeerUnavailable();
+                if (Boolean.TRUE.equals(peer.getIsInitiator())) {
+                    removeLinkedPeer(peer);
+                } else {
+                    removeIncomingPeer(peer);
+                }
+                triggerImmediateAnnounce(); // kick runBaseLoop to reconnect within ~5s
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // Pool shut down — prunePeers() will clean up on next cycle
+        }
     }
 
     // recovery from disconnected interfaces (eg. restart disconnected interfaces, etc)
@@ -789,7 +1211,7 @@ public class RNS {
         // TODO: check interfaces <=> if none available, shutdown and reintialize RNS
     }
 
-    // note: we already have a lobok getter for this
+    // note: we already have a lombok getter for this
     //public List<ReticulumPeer> getImmutableLinkedPeers() {
     //    return this.immutableLinkedPeers;
     //}
@@ -803,13 +1225,21 @@ public class RNS {
     //}
 
     public void addLinkedPeer(ReticulumPeer peer) {
-        this.linkedPeers.add(peer);
-        this.immutableLinkedPeers = List.copyOf(this.linkedPeers); // thread safe
-        //// Note: moved to ReticulumPeer linkEstablished
-        //var network = Network.getInstance();
-        //network.addConnectedPeer(peer);
-        //network.addOutboundHandshakedPeer(peer);
-        //network.addHandshakedPeer(peer);
+        // Atomic dedup: receivedAnnounce() and runBaseLoop() can both call this concurrently
+        // when a peer drops and reconnects — both see an empty slot and race to fill it.
+        synchronized (this.linkedPeers) {
+            boolean duplicate = this.linkedPeers.stream()
+                    .anyMatch(p -> Arrays.equals(p.getDestinationHash(), peer.getDestinationHash()));
+            if (duplicate) {
+                log.debug("addLinkedPeer: skipping duplicate for {}", encodeHexString(peer.getDestinationHash()));
+                return;
+            }
+            this.linkedPeers.add(peer);
+            this.immutableLinkedPeers = List.copyOf(this.linkedPeers);
+        }
+        // Hash is added to knownPeerHashes only once the peer's buffer is confirmed ACTIVE
+        // (see confirmPeerHash(), called from ReticulumPeer.createPeerBuffer()). This prevents
+        // transient/failed connections from accumulating in the persisted peer list.
     }
 
     public void removePeer(ReticulumPeer peer) {
@@ -829,14 +1259,8 @@ public class RNS {
     //}
 
     public void removeLinkedPeer(ReticulumPeer peer) {
-        if (nonNull(peer.getPeerBuffer())) {
-            peer.shutdownChannel();
-            peer.getPeerBuffer().close();
-        }
-        //if (nonNull(peer.getPeerLink())) {
-        //    peer.getPeerLink().teardown();
-        //}
-        var p = this.linkedPeers.remove(this.linkedPeers.indexOf(peer)); // thread safe
+        peer.shutdownChannel(); // clears channel + nulls peerBuffer; no close() to avoid deadlock
+        this.linkedPeers.remove(peer); // single synchronized operation on the list
         this.immutableLinkedPeers = List.copyOf(this.linkedPeers);
         //var network = Network.getInstance();
         //network.removeHandshakedPeer(peer);
@@ -844,7 +1268,7 @@ public class RNS {
         //network.removeConnectedPeer(peer);
     }
 
-    // note: we already have a lobok getter for this
+    // note: we already have a lombok getter for this
     //public List<ReticulumPeer> getLinkedPeers() {
     //    //synchronized(this.linkedPeers) {
     //        //return new ArrayList<>(this.linkedPeers);
@@ -853,23 +1277,36 @@ public class RNS {
     //}
 
     public void addIncomingPeer(ReticulumPeer peer) {
-        this.incomingPeers.add(peer);
-        this.immutableIncomingPeers = List.copyOf(this.incomingPeers);
+        // Dedup by remote identity: if a stale incoming peer from the same node already exists
+        // (e.g. rapid reconnects leave old ACTIVE links lingering for up to 3 min), replace it.
+        // This prevents incomingPeers from growing to 10+ during a reconnect storm.
+        Identity newId = peer.getServerIdentity();
+        synchronized (this.incomingPeers) {
+            if (newId != null) {
+                byte[] newHash = hashFromNameAndIdentity(CORE_ASPECT, newId);
+                Iterator<ReticulumPeer> it = this.incomingPeers.iterator();
+                while (it.hasNext()) {
+                    ReticulumPeer existing = it.next();
+                    Identity existingId = existing.getServerIdentity();
+                    if (existingId != null && Arrays.equals(hashFromNameAndIdentity(CORE_ASPECT, existingId), newHash)) {
+                        log.info("addIncomingPeer: replacing stale incoming peer from {}", encodeHexString(newHash));
+                        it.remove();
+                        existing.shutdownChannel();
+                    }
+                }
+            }
+            this.incomingPeers.add(peer);
+            this.immutableIncomingPeers = List.copyOf(this.incomingPeers);
+        }
     }
 
     public void removeIncomingPeer(ReticulumPeer peer) {
-        if (nonNull(peer.getPeerBuffer())) {
-            peer.shutdownChannel();
-            peer.getPeerBuffer().close();
-        }
-        //if (nonNull(peer.getPeerLink())) {
-        //    peer.getPeerLink().teardown();
-        //}
-        var p = this.incomingPeers.remove(this.incomingPeers.indexOf(peer));
+        peer.shutdownChannel(); // clears channel + nulls peerBuffer; no close() to avoid deadlock
+        this.incomingPeers.remove(peer); // single synchronized operation on the list
         this.immutableIncomingPeers = List.copyOf(this.incomingPeers);
     }
 
-    // note: we already have a lobok getter for this
+    // note: we already have a lombok getter for this
     //public List<ReticulumPeer> getIncomingPeers() {
     //    return this.incomingPeers;
     //}
@@ -938,7 +1375,7 @@ public class RNS {
         List<ReticulumPeer> incomingPeerList = getImmutableIncomingPeers();
         int numActiveIncomingPeers = incomingPeerList.size() - getNonActiveIncomingPeers().size();
         List<PeerData> allKnownReticulumPeers = new ArrayList<>();
-        log.info("number of links (linkedPeers (active) / incomingPeers (active) before prunig: {} ({}), {} ({})",
+        log.info("number of links (linkedPeers (active) / incomingPeers (active) before pruning: {} ({}), {} ({})",
                 initiatorPeerList.size(), getActiveImmutableLinkedPeers().size(),
                 incomingPeerList.size(), numActiveIncomingPeers);
         //for (ReticulumPeer p: initiatorActivePeerList) {
@@ -956,6 +1393,16 @@ public class RNS {
                     continue;
                 }
                 if (pLink.getStatus() == ACTIVE) {
+                    // Even ACTIVE links can be zombie: buffer dead (deleteMe=true from
+                    // peerBufferReady read error) or silent (no data received for >165s).
+                    // Without this check, the ACTIVE continue below bypasses deleteMe entirely.
+                    if (isUnreachable(p)) {
+                        log.info("Removing unreachable ACTIVE peer ({}): {}",
+                                p.getDeleteMe() ? "deleteMe" : "data timeout",
+                                encodeHexString(p.getDestinationHash()));
+                        p.makePeerUnavailable();
+                        removeLinkedPeer(p);
+                    }
                     continue;
                 }
                 if ((pLink.getStatus() == CLOSED) || (p.getDeleteMe()))  {
@@ -965,11 +1412,31 @@ public class RNS {
                     continue;
                 }
                 if (pLink.getStatus() == PENDING) {
-                    p.makePeerUnavailable();
-                    //p.shutdownChannel();
-                    pLink.teardown();
-                    p.setIsPeerAvailable(false);
-                    removeLinkedPeer(p);
+                    // Give PENDING links 60s to establish before removing them.
+                    // Removing too early races with QAnnounceHandler (which creates a
+                    // new link and then finds peerTimedOut=true from the old teardown).
+                    // Keeping them forever blocks QAnnounceHandler (peerExists=true,
+                    // status != CLOSED, so the announce is silently ignored).
+                    long pendingSeconds = java.time.Duration.between(
+                            p.getCreationTimestamp(), Instant.now()).getSeconds();
+                    if (pendingSeconds > 60) {
+                        log.info("Removing PENDING link stuck for {}s: {}", pendingSeconds, p);
+                        p.makePeerUnavailable();
+                        p.setIsPeerAvailable(false);
+                        // Record failure so the reconnect loop backs off to requestPath() for this
+                        // peer for PENDING_FAILURE_BACKOFF_MS, avoiding the cull cascade.
+                        pendingLinkFailureMs.put(encodeHexString(p.getDestinationHash()), System.currentTimeMillis());
+                        removeLinkedPeer(p);
+                        // Do NOT call pLink.teardown() here.
+                        // teardown() sets status=CLOSED → jobs() finds CLOSED link in pendingLinks
+                        // → calls expirePath() → tablesLastCulled=EPOCH → next jobs() does a full
+                        // routing table cull (60-120s when announce-flooded). Multiple teardowns
+                        // chain into cascading culls that hold the Transport lock for 22+ minutes,
+                        // blocking all outbound() / requestPath() calls during that window.
+                        // We remove the peer from our own tracking only; the library's zombie PENDING
+                        // links have a 774000s (8.9 day) timeout (hopsTo=PATHFINDER_M → no path),
+                        // which is harmless compared to the cull cascade.
+                    }
                     continue;
                 }
             }
@@ -986,24 +1453,59 @@ public class RNS {
         //    }
         //}
         for (ReticulumPeer p: inaps) {
-            pLink = p.getPeerLink();
-            if (nonNull(pLink)) {
-                // could be eg. PENDING
-                if (pLink.getStatus() != ACTIVE) {
-                    pLink.teardown();
+            // Don't call pLink.teardown() — synchronized(link) can block the Controller
+            // scheduler if the Reticulum library is processing on this link. The library
+            // handles non-active link cleanup via its own keepalive/watchdog mechanism.
+            removeIncomingPeer(p);
+        }
+        // Dedup ACTIVE incoming peers by remote identity. linkEstablished() resolves the identity
+        // (null at construction time because the handshake wasn't complete yet), so by prune time
+        // (~60s later) it is available. Keep the newest peer per identity; remove the rest.
+        {
+            Map<String, List<ReticulumPeer>> byIdentity = new java.util.HashMap<>();
+            for (ReticulumPeer p : getImmutableIncomingPeers()) {
+                Link pl = p.getPeerLink();
+                if (nonNull(pl) && pl.getStatus() == ACTIVE) {
+                    Identity remoteId = p.getServerIdentity();
+                    if (remoteId != null) {
+                        String key = encodeHexString(hashFromNameAndIdentity(CORE_ASPECT, remoteId));
+                        byIdentity.computeIfAbsent(key, k -> new ArrayList<>()).add(p);
+                    }
                 }
             }
-            removeIncomingPeer(p);
+            for (Map.Entry<String, List<ReticulumPeer>> entry : byIdentity.entrySet()) {
+                List<ReticulumPeer> dupes = entry.getValue();
+                if (dupes.size() > 1) {
+                    // Keep the one with the most recent data; remove the rest
+                    dupes.sort((a, b) -> b.getLastAccessTimestamp().compareTo(a.getLastAccessTimestamp()));
+                    for (int i = 1; i < dupes.size(); i++) {
+                        log.info("prunePeers: removing duplicate ACTIVE incoming peer from {}", entry.getKey());
+                        removeIncomingPeer(dupes.get(i));
+                    }
+                }
+            }
+        }
+        // Prune ACTIVE incoming peers that have gone silent: the initiator moved to a new
+        // link so pings stopped flowing, but the old library-level link is still ACTIVE.
+        // 165s = 3 missed pings.
+        for (ReticulumPeer p : getImmutableIncomingPeers()) {
+            Link pl = p.getPeerLink();
+            if (nonNull(pl) && pl.getStatus() == ACTIVE && isUnreachable(p)) {
+                log.info("Removing stale ACTIVE incoming peer (data timeout): {}", encodeHexString(p.getDestinationHash()));
+                removeIncomingPeer(p);
+            }
         }
         initiatorPeerList = getImmutableLinkedPeers();
         initiatorActivePeerList = getActiveImmutableLinkedPeers();
         incomingPeerList = getImmutableIncomingPeers();
         numActiveIncomingPeers = incomingPeerList.size() - getNonActiveIncomingPeers().size();
-        log.info("number of links (linkedPeers (active) / incomingPeers (active) after prunig: {} ({}), {} ({})",
+        log.info("number of links (linkedPeers (active) / incomingPeers (active) after pruning: {} ({}), {} ({})",
                 initiatorPeerList.size(), getActiveImmutableLinkedPeers().size(),
                 incomingPeerList.size(), numActiveIncomingPeers);
-        maybeAnnounce(getBaseDestination(), RNSCommon.PeerAspect.BASE);
-        //maybeAnnounce(getDataDestination(), RNSCommon.PeerAspect.DATA);
+        // announce() and requestPath() are intentionally NOT called here — both involve
+        // Reticulum library calls that can block if the library holds a lock. The Controller
+        // thread must not block (node hangs, stop.sh hangs). runBaseLoop() handles both on
+        // its own thread every 30 seconds.
     }
 
     public void maybeAnnounce(Destination d, RNSCommon.PeerAspect pa) {
@@ -1018,13 +1520,76 @@ public class RNS {
             }
         }
         if ((corePeerCount <= MIN_DESIRED_CORE_PEERS) && (pa == RNSCommon.PeerAspect.BASE)) {
-            log.info("Active core peers ({}) <= desired core peers ({}). Announcing", corePeerCount, MIN_DESIRED_CORE_PEERS);
-            d.announce();
+            log.info("Active core peers ({}) <= desired core peers ({}). Announcing (dest={})",
+                    corePeerCount, MIN_DESIRED_CORE_PEERS, d != null ? encodeHexString(d.getHash()) : "null");
+            if (nonNull(d)) {
+                long announceT0 = System.currentTimeMillis();
+                d.announce();
+                long announceMs = System.currentTimeMillis() - announceT0;
+                // d.announce() always returns null when send=true — see Destination.java:675.
+                // Real failures are logged by Packet.java as "No interfaces could process".
+                log.info("Announce attempt completed in {}ms", announceMs);
+                if (announceMs > 5_000) {
+                    log.warn("Announce took {}ms — possible jobsLock contention", announceMs);
+                }
+            } else {
+                log.error("Cannot announce - destination is null");
+            }
         }
         //if ((dataPeerCount <= MIN_DESIRED_DATA_PEERS) && (pa == RNSCommon.PeerAspect.DATA)) {
         //    log.info("Active qdn peers ({}) <= desired data peers ({}). Announcing", dataPeerCount, MIN_DESIRED_CORE_PEERS);
         //    d.announce();
         //}
+    }
+
+    /**
+     * Persist known peer destination hashes so a restarted node can call requestPath()
+     * immediately rather than waiting up to 15 minutes for a natural announce.
+     */
+    private void saveKnownPeerHashes() {
+        if (reticulum == null) return;
+        try {
+            Path file = reticulum.getStoragePath().resolve(KNOWN_PEERS_FILE);
+            // Prefer confirmed-active hashes; fall back to loaded hashes only if nothing was
+            // confirmed this session (e.g., very short startup before any peer became ACTIVE).
+            Set<String> toSave = knownPeerHashes.isEmpty() ? loadedPeerHashes : knownPeerHashes;
+            Files.write(file, toSave, UTF_8);
+            log.debug("Saved {} known peer hashes to {}", toSave.size(), file);
+        } catch (IOException e) {
+            log.warn("Failed to save known peer hashes: {}", e.getMessage());
+        }
+    }
+
+    // Called from ReticulumPeer.createPeerBuffer() when a peer's buffer is confirmed ACTIVE.
+    // Only initiator peers call this (non-initiators have our own destination hash, not the remote's).
+    void confirmPeerHash(String hashHex) {
+        boolean isNew = this.knownPeerHashes.add(hashHex);
+        if (isNew) {
+            saveKnownPeerHashes();
+            log.debug("Confirmed ACTIVE peer hash {}", hashHex);
+        }
+    }
+
+    private void loadKnownPeerHashes() {
+        if (reticulum == null) return;
+        try {
+            Path file = reticulum.getStoragePath().resolve(KNOWN_PEERS_FILE);
+            if (!Files.isReadable(file)) return;
+            List<String> lines = Files.readAllLines(file, UTF_8);
+            int loaded = 0;
+            for (String line : lines) {
+                String hex = line.trim();
+                if (!hex.isEmpty()) {
+                    loadedPeerHashes.add(hex); // loaded into separate set; confirmed-active entries go to knownPeerHashes
+                    loaded++;
+                }
+            }
+            if (loaded > 0) {
+                log.info("Loaded {} known peer hashes from {}", loaded, file);
+            }
+        } catch (IOException e) {
+            log.warn("Failed to load known peer hashes: {}", e.getMessage());
+        }
     }
 
     /**

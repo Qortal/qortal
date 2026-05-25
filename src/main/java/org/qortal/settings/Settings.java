@@ -1,10 +1,7 @@
 package org.qortal.settings;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
-import java.io.IOException;
-import java.io.Reader;
+import java.io.*;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -13,6 +10,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import javax.xml.bind.JAXBContext;
 import javax.xml.bind.JAXBException;
@@ -31,18 +29,13 @@ import org.eclipse.persistence.jaxb.UnmarshallerProperties;
 import org.qortal.block.BlockChain;
 import org.qortal.controller.arbitrary.ArbitraryDataStorageManager.StoragePolicy;
 import org.qortal.crosschain.Bitcoin.BitcoinNet;
-//import org.qortal.controller.BitcoinWalletController;
 import org.qortal.crosschain.Digibyte.DigibyteNet;
-//import org.qortal.controller.DigibyteWalletController;
 import org.qortal.crosschain.Dogecoin.DogecoinNet;
-//import org.qortal.controller.DogecoinWalletController;
-//import org.qortal.crosschain.Litecoin.LitecoinNet;
 import org.qortal.crosschain.Litecoin.*;
 import org.qortal.crosschain.Litecoin; 
 import org.qortal.crosschain.PirateChain.PirateChainNet;
 import org.qortal.controller.PirateChainWalletController;
 import org.qortal.crosschain.Ravencoin.RavencoinNet;
-//import org.qortal.controller.RavencoinWalletController;
 import org.qortal.network.message.MessageType;
 import org.qortal.utils.EnumUtils;
 
@@ -593,7 +586,21 @@ public class Settings {
 	 */
     private  boolean hostMonitorEnabled = false;
 
-    // Domain mapping
+	/**
+	 * Thread Dump Interval
+	 *
+	 * The interval (in minutes) to perform a thread dump. If zero or less, then no thread dumps will be performed.
+	 */
+	private long threadDumpInterval = 0;
+
+	/**
+	 * Thread Dump Expiration
+	 *
+	 * The time (in hours) to elapse before a thread dump file will be deleted.
+	 */
+	private int threadDumpExpiration = 24;
+
+	// Domain mapping
 	public static class ThreadLimit {
 		private String messageType;
 		private Integer limit;
@@ -679,19 +686,28 @@ public class Settings {
     /** Minimum number of Reticulum Data peers desired. */
     private int reticulumMinDesiredDataPeers = 8;
 	/** Maximum number of task executor network threads */
-	private int reticulumMaxNetworkThreadPoolSize = 5;
+	private int reticulumMaxNetworkThreadPoolSize = 20;
 	/** Node provides a TCPServerInterface or other "qortal"/"qortaltest" gateway interface */
 	private boolean reticulumHasServerInterface = false;
 	/** Number of desired client Interfaces (taken from core server list) */
 	private int reticulumDesiredClientInterfaces = 1;
-	/** Array of core Reticulum server hostnames. TCP only */
+	/** Array of core Reticulum server hostname[:port], TCP or Backbone only */
 	private String[] reticulumTcpGatewayServers = new String[]{
+			""
+	};
+	private String[] reticulumBackboneGatewayServers = new String[]{
 			"phantom.mobilefabrik.com:4242"
 	};
 	/** There is a Python rnsd running on the node with a gateway inteface to use */
 	private boolean reticulumUsePythonRNS = false;
 	/** Specify the port if reticulumUsePythonRNS=true and rnsd has a TCPServerInterface */
 	private int reticulumPythonRNSGatewayPort = 4242;
+	/** Shared IFAC passphrase for backbone interface isolation. Empty string = no passphrase. */
+	private String reticulumPassphrase = "";
+	/** Override network_name in generated config. Empty string = use APP_NAME (qortal/qortaltest). */
+	private String reticulumNetworkName = "";
+	/** Regenerate .reticulum/config.yml on every startup instead of only when missing. */
+	private boolean reticulumRegenerateConfigOnRestart = false;
 
 	// Constructors
 
@@ -729,7 +745,7 @@ public class Settings {
 		try {
 			// Create JAXB context aware of Settings
 			jc = JAXBContextFactory.createContext(new Class[] {
-				Settings.class
+					Settings.class
 			}, null);
 
 			// Create unmarshaller
@@ -750,14 +766,28 @@ public class Settings {
 		String path = "";
 
 		do {
-			LOGGER.info(String.format("Using settings file: %s%s", path, filename));
+			// Use Path API to combine directory and filename safely for Windows/Linux/Mac
+			Path fullPath = Paths.get(path, filename);
+			LOGGER.info(String.format("Using settings file: %s", fullPath.toString()));
 
 			// Create the StreamSource by creating Reader to the JSON input
-			try (Reader settingsReader = new FileReader(path + filename)) {
-				StreamSource json = new StreamSource(settingsReader);
+			try (BufferedReader reader = new BufferedReader(new FileReader(fullPath.toFile()))) {
+				// settings reader is a JSON with Comments
 
-				// Attempt to unmarshal JSON stream to Settings
-				settings = unmarshaller.unmarshal(json, Settings.class).getValue();
+				// Need to skip or parse out the comment lines, any line that starts with a '#' is considered a comment
+				String rawJson = reader.lines()
+						.filter(line -> !line.trim().startsWith("#"))
+						.collect(Collectors.joining(System.lineSeparator()));
+
+				// Also handle the case where a line ends with a ',' before a closing '}' or ']'
+				String cleanJson = rawJson.replaceAll(",(?=\\s*[\\}\\]])", "");
+
+				try (StringReader stringReader = new StringReader(cleanJson)) {
+					StreamSource json = new StreamSource(stringReader);
+
+					// Attempt to unmarshal JSON stream to Settings
+					settings = unmarshaller.unmarshal(json, Settings.class).getValue();
+				}
 			} catch (FileNotFoundException e) {
 				String message = "Settings file not found: " + path + filename;
 				LOGGER.error(message, e);
@@ -787,9 +817,10 @@ public class Settings {
 				// Adjust filename and go round again
 				path = settings.userPath;
 
-				// Add trailing directory separator if needed
-				if (!path.endsWith(File.separator))
+				// Add trailing directory separator if needed (using Path API logic to ensure consistency)
+				if (!path.isEmpty() && !path.endsWith(File.separator)) {
 					path += File.separator;
+				}
 			}
 		} while (settings.userPath != null);
 
@@ -1562,10 +1593,19 @@ public class Settings {
 	public String[] getReticulumTcpGatewayServers() {
 		return this.reticulumTcpGatewayServers;
 	}
+	public String[] getReticulumBackboneGatewayServers() {
+		return this.reticulumBackboneGatewayServers;
+	}
 
 	public boolean getReticulumUsePythonRNS() { return this.reticulumUsePythonRNS; }
 
 	public int getReticulumPythonRNSGatewayPort() { return this.reticulumPythonRNSGatewayPort; }
+
+	public String getReticulumPassphrase() { return this.reticulumPassphrase; }
+
+	public String getReticulumNetworkName() { return this.reticulumNetworkName; }
+
+	public boolean isReticulumRegenerateConfigOnRestart() { return this.reticulumRegenerateConfigOnRestart; }
 
 	public int getBuildArbitraryResourcesBatchSize() {
 		return buildArbitraryResourcesBatchSize;
@@ -1597,5 +1637,13 @@ public class Settings {
 
 	public boolean isHostMonitorEnabled() {
 		return hostMonitorEnabled;
+	}
+
+	public long getThreadDumpInterval() {
+		return threadDumpInterval;
+	}
+
+	public int getThreadDumpExpiration() {
+		return threadDumpExpiration;
 	}
 }

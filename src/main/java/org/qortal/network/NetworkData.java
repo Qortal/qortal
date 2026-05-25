@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import static java.util.Objects.nonNull;
 
 // For managing arbitrary data between peers
 public class NetworkData {
@@ -1008,7 +1009,6 @@ public class NetworkData {
                             }
                         });
                     } catch (java.util.concurrent.RejectedExecutionException e) {
-                        // Worker pool is full or shutting down - skip this task
                         LOGGER.debug("NetworkData worker pool rejected scheduler task (pool full or shutting down)");
                     }
                 } else {
@@ -1017,6 +1017,13 @@ public class NetworkData {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
+            } catch (Exception e) {
+                LOGGER.error("NetworkData scheduler loop caught unexpected exception — continuing", e);
+                // Don't die; sleep briefly and retry
+                try { Thread.sleep(100); } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
             }
         }
         LOGGER.debug("NetworkData scheduler loop exiting");
@@ -1247,7 +1254,9 @@ public class NetworkData {
 
     private Peer getConnectablePeer(final Long now) throws InterruptedException {
         List<PeerData> peers = this.getAllKnownPeers();
-            
+        LOGGER.debug("[QDN] getConnectablePeer start: {} known, {} outbound handshaked",
+                peers.size(), getImmutableOutboundHandshakedPeers().size());
+
         // Fallback: If NetworkData has no peers, try to get peers from Network
         // Only use peers that actually advertise QDN capability
         if (peers.isEmpty()) {
@@ -1261,31 +1270,33 @@ public class NetworkData {
                         String addedBy = "Network-fallback";
                         int peersAdded = 0;
                         
-                        // Only use peers that advertise QDN capability
+                        // Add all handshaked Network peers using their advertised QDN port,
+                        // or the default QDN port for pre-HELLO_V2 peers that don't advertise one.
                         for (Peer networkPeer : connectedNetworkPeers) {
                             Object qdnCapability = networkPeer.getPeerCapability("QDN");
-                            
-                            // Skip peers without QDN capability
-                            if (qdnCapability == null) {
-                                continue;
-                            }
-                            
-                            // Get the actual QDN port from peer's capability
+
                             int qdnPort;
-                            try {
-                                if (qdnCapability instanceof Integer) {
-                                    qdnPort = (Integer) qdnCapability;
-                                } else if (qdnCapability instanceof Long) {
-                                    qdnPort = ((Long) qdnCapability).intValue();
-                                } else {
-                                    LOGGER.debug("Peer {} has invalid QDN capability type: {}", 
-                                            networkPeer.getPeerData().getAddress(), qdnCapability.getClass());
+                            if (qdnCapability == null) {
+                                qdnPort = Settings.getInstance().getDefaultQDNListenPort();
+                            } else {
+                                try {
+                                    if (qdnCapability instanceof Integer) {
+                                        qdnPort = (Integer) qdnCapability;
+                                    } else if (qdnCapability instanceof Long) {
+                                        qdnPort = ((Long) qdnCapability).intValue();
+                                    } else {
+                                        LOGGER.debug("Peer {} has invalid QDN capability type: {}",
+                                                networkPeer.getPeerData().getAddress(), qdnCapability.getClass());
+                                        continue;
+                                    }
+                                } catch (Exception e) {
+                                    LOGGER.debug("Failed to parse QDN port for peer {}: {}",
+                                            networkPeer.getPeerData().getAddress(), e.getMessage());
                                     continue;
                                 }
-                            } catch (Exception e) {
-                                LOGGER.debug("Failed to parse QDN port for peer {}: {}", 
-                                        networkPeer.getPeerData().getAddress(), e.getMessage());
-                                continue;
+                                if (qdnPort == 0) {
+                                    continue;
+                                }
                             }
                             
                             String host = networkPeer.getPeerData().getAddress().getHost();
@@ -1350,22 +1361,25 @@ public class NetworkData {
                 .collect(Collectors.toList());
         }
 
-        peers.removeIf(peerData -> peerData.getLastAttempted() != null
-            && (peerData.getLastConnected() == null ));
-
+        // Remove peers attempted recently (within backoff window) that haven't yet successfully connected.
+        // "Recently attempted and not connected" = either never connected, or last attempt was after last connection.
+        // Peers attempted long ago (outside the backoff window) are eligible for retry.
         peers.removeIf(peerData ->
             peerData.getLastAttempted() != null
-            && peerData.getLastConnected() != null
-            && peerData.getLastConnected() < peerData.getLastAttempted()
-            && peerData.getLastAttempted() > lastAttemptedThreshold);
+            && peerData.getLastAttempted() > lastAttemptedThreshold
+            && (peerData.getLastConnected() == null
+                || peerData.getLastConnected() < peerData.getLastAttempted()));
+        LOGGER.debug("[QDN] after backoff filter: {} remain", peers.size());
 
         // Don't consider peers that we know loop back to self
         synchronized (this.selfPeers) {
             peers.removeIf(isSelfPeer);
         }
+        LOGGER.debug("[QDN] after self filter: {} remain", peers.size());
 
         // Don't consider already connected peers (simple address match)
         peers.removeIf(isConnectedPeer);
+        LOGGER.debug("[QDN] after connected filter: {} remain", peers.size());
 
         // Don't consider peers we're already connected to by nodeId
         // This handles cases where we have an inbound connection on an ephemeral port
@@ -1464,25 +1478,27 @@ public class NetworkData {
             return false;
         }
 
+        String peerAddress = newPeer.getPeerData().getAddress().toString();
+        LOGGER.debug("[QDN] Attempting outbound connection to {}", peerAddress);
         SocketChannel socketChannel = newPeer.connect(Peer.NETWORKDATA);
         if (socketChannel == null) {
+            LOGGER.debug("[QDN] Outbound connection failed to {} (TCP refused/timeout)", peerAddress);
             // Record outbound failure for reachability fallback
             try {
-                String peerAddress = newPeer.getPeerData().getAddress().toString();
-                
                 // Try to get nodeId from cache for more accurate tracking
                 String nodeId = null;
                 CachedNodeIdInfo cachedInfo = addressToNodeIdCache.get(peerAddress);
                 if (cachedInfo != null) {
                     nodeId = cachedInfo.nodeId;
                 }
-                
+
                 recordOutboundFailure(peerAddress, nodeId);
             } catch (Exception e) {
                 LOGGER.debug("Failed to record outbound failure: {}", e.getMessage());
             }
             return false;
         }
+        LOGGER.debug("[QDN] TCP connected to {}, starting handshake", peerAddress);
 
         if (Thread.currentThread().isInterrupted()) {
             LOGGER.debug("Thread is interrupted");
@@ -1994,8 +2010,7 @@ public class NetworkData {
     }
     
     protected void onHandshakeCompleted(Peer peer) {
-        LOGGER.trace("[NetworkData: {}] Handshake completed with peer {} on {}", peer.getPeerConnectionId(), peer,
-                peer.getPeersVersionString());
+        LOGGER.info("[QDN] Handshake completed with peer {} (version {})", peer, peer.getPeersVersionString());
 
         // Clear any outbound failure records for this peer's IP since connection succeeded
         // Also update address→nodeId cache and clear direction mismatch for inbound
@@ -2319,32 +2334,38 @@ public class NetworkData {
         String remoteHost = p.getPeerData().getAddress().getHost();
         Object qdnCapability = p.getPeerCapability("QDN");
         
-        // Skip peers that don't advertise QDN capability
-        if (qdnCapability == null) {
-            LOGGER.debug("Peer {} does not advertise QDN capability, skipping NetworkData registration", remoteHost);
-            return;
-        }
-        
-        // Parse QDN port from capability (handle both Integer and Long types)
+        // Determine QDN port: use capability if advertised, else assume default (pre-HELLO_V2 mainnet nodes)
         int remoteHostQDNPort;
-        try {
-            if (qdnCapability instanceof Integer) {
-                remoteHostQDNPort = (Integer) qdnCapability;
-            } else if (qdnCapability instanceof Long) {
-                remoteHostQDNPort = ((Long) qdnCapability).intValue();
-            } else {
-                LOGGER.warn("Peer {} has invalid QDN capability type: {}, skipping", remoteHost, qdnCapability.getClass());
+        if (qdnCapability == null) {
+            remoteHostQDNPort = Settings.getInstance().getDefaultQDNListenPort();
+            LOGGER.debug("[QDN] Peer {} has no QDN capability (pre-HELLO_V2), assuming default port {}", remoteHost, remoteHostQDNPort);
+        } else {
+            try {
+                if (qdnCapability instanceof Integer) {
+                    remoteHostQDNPort = (Integer) qdnCapability;
+                } else if (qdnCapability instanceof Long) {
+                    remoteHostQDNPort = ((Long) qdnCapability).intValue();
+                } else {
+                    LOGGER.warn("Peer {} has invalid QDN capability type: {}, skipping", remoteHost, qdnCapability.getClass());
+                    return;
+                }
+            } catch (Exception e) {
+                LOGGER.warn("Failed to parse QDN capability for peer {}: {}", remoteHost, e.getMessage());
                 return;
             }
-        } catch (Exception e) {
-            LOGGER.warn("Failed to parse QDN capability for peer {}: {}", remoteHost, e.getMessage());
-            return;
+            if (remoteHostQDNPort == 0) {
+                LOGGER.debug("Peer {} advertises QDN disabled (port 0), skipping NetworkData registration", remoteHost);
+                return;
+            }
         }
 
         synchronized (this.allKnownPeers) {
-            // if All Known Peers  already has this host. return;
+            // Deduplicate by host:port (not host-only) so multiple nodes on the same host
+            // (e.g. localhost test clusters) can each register their distinct QDN port.
             boolean alreadyKnown = allKnownPeers.stream()
-                    .anyMatch(pd -> pd.getAddress().getHost().equals(remoteHost));
+                    .anyMatch(pd -> nonNull(pd.getAddress())
+                            && pd.getAddress().getHost().equals(remoteHost)
+                            && pd.getAddress().getPort() == remoteHostQDNPort);
             if (alreadyKnown)
                 return;
 
@@ -2354,14 +2375,14 @@ public class NetworkData {
             PeerAddress pa = PeerAddress.fromString(target);
             PeerData pd = new PeerData(
                     pa,
-                    0L,
-                    0L,
-                    0L,
+                    null,
+                    null,
+                    null,
                     System.currentTimeMillis(),
                     "INIT");
             allKnownPeers.add(pd);
             
-            LOGGER.debug("Added QDN peer {} (port {}) from Network connection", remoteHost, remoteHostQDNPort);
+            LOGGER.info("[QDN] Registered peer {}:{} for data connections", remoteHost, remoteHostQDNPort);
             
             // CRITICAL FIX: Update cache to map QDN listen address to nodeId
             // This allows getConnectablePeer() to identify this peer even if we're

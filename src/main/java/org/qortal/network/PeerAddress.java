@@ -18,6 +18,6 @@ public interface PeerAddress {
     default String getHost() { return null; }
     default int getPort() { return -1; }
 
-    static PeerAddress fromString(String addressString) { return null;}
+    static PeerAddress fromString(String addressString) { return IPPeerAddress.fromString(addressString); }
 }
 

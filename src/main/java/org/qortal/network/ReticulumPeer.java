@@ -105,8 +105,10 @@ public class ReticulumPeer implements Peer {
     private boolean isPeerAvailable;  // peer is available in Network lists
     Link peerLink;
     byte[] peerLinkHash;
-    BufferedRWPair peerBuffer;
+    volatile BufferedRWPair peerBuffer;
     Channel channel;
+    // Guards createPeerBuffer() so only one thread calls getChannel() at a time.
+    private final java.util.concurrent.atomic.AtomicBoolean creatingBuffer = new java.util.concurrent.atomic.AtomicBoolean(false);
     int receiveStreamId = 1001;
     int sendStreamId = 1001;
     ReticulumPeerAddress peerAddress;
@@ -121,7 +123,7 @@ public class ReticulumPeer implements Peer {
     @Setter(AccessLevel.PACKAGE) private Boolean peerTimedOut = false;
 
     // for qortal networking
-    private static final int RESPONSE_TIMEOUT = 3000; // [ms]
+    private static final int RESPONSE_TIMEOUT = 10_000; // [ms]
     ///**
     // * Maximum time to wait for a message to be added to sendQueue (ms)
     // */
@@ -155,7 +157,6 @@ public class ReticulumPeer implements Peer {
     private LinkedBlockingQueue<Message> pendingMessages;
     private boolean syncInProgress = false;
     private final Object peerInfoLock = new Object();
-    //private String peersNodeId;
     private PeerData peerData;
     private PeerCapabilities peerCapabilities;
     private long linkEstablishedTime = -1L; // equivalent of (tcpip) Peer 'handshakeComplete'
@@ -164,11 +165,12 @@ public class ReticulumPeer implements Peer {
             + "(\\d{1,3})\\.(\\d{1,5})\\.(\\d{1,5})");
     /* Pending signature requests */
     private List<byte[]> pendingSignatureRequests = Collections.synchronizedList(new ArrayList<>());
-    private TransferQueue<Message> sendQueue;
+    // Note: Reticulum uses Buffer for send, not a bounded queue. These fields satisfy the Peer interface.
     /**
      * Latest block info as reported by peer.
      */
     private List<BlockSummaryData> peersChainTipData = Collections.emptyList();
+    private int peerType = Peer.NETWORK;
     /**
      * Our common block with this peer
      */
@@ -368,53 +370,88 @@ public class ReticulumPeer implements Peer {
     }
 
     public void shutdownChannel() {
-        if (nonNull(channel)) {
-            channel.shutdown();
-            this.channel = null;
+        // Do NOT call channel.shutdown() — it deadlocks with Channel.receive():
+        //   shutdown()  acquires synchronized(channel) first, then lock
+        //   receive()   acquires lock first, then synchronized(channel) via runCallbacks()
+        // Inverted lock order → ABBA deadlock between rnsWorkerPool and Reticulum receive thread.
+        // The Reticulum library cleans up the Channel when the Link closes; we just drop our
+        // references. peerBufferReady() has a null guard to safely ignore any late callbacks.
+        this.channel = null;
+        this.peerBuffer = null;
+    }
+
+    /**
+     * Creates the RNS Channel and Buffer for this peer link.
+     * Must only be called once per link, from linkEstablished() (initiator) or
+     * baseClientConnected() (non-initiator). Never call this on the send/broadcast path —
+     * getChannel() acquires synchronized(link) and multiple concurrent callers pile up if
+     * the Reticulum library holds that lock during link setup (bug: blocked Network-Workers).
+     */
+    public void createPeerBuffer() {
+        if (this.peerBuffer != null) return;  // already created (volatile read)
+        // Only create a buffer once the link is fully established. If called while PENDING
+        // (e.g. baseClientConnected fires early), return — linkEstablished() will retry.
+        if (this.peerLink == null || this.peerLink.getStatus() != ACTIVE) {
+            log.debug("createPeerBuffer - skipping: link not ACTIVE ({})",
+                    this.peerLink != null ? this.peerLink.getStatus() : "null");
+            return;
+        }
+        // CAS guard: only one thread calls getChannel() at a time. If another thread is
+        // already creating the buffer, skip — the buffer will be visible shortly.
+        if (!creatingBuffer.compareAndSet(false, true)) return;
+        try {
+            if (this.peerBuffer != null) return;  // double-check after CAS
+            var ntpNow = NTP.getTime();
+            channel = this.peerLink.getChannel();
+            log.info("creating buffer - peerLink status: {}, channel: {}", this.peerLink.getStatus(), channel);
+            this.peerBuffer = Buffer.createBidirectionalBuffer(receiveStreamId, sendStreamId, channel, this::peerBufferReady);
+            this.lastAccessTimestamp = Instant.now();
+            this.peerData.setLastAttempted(ntpNow);
+            this.peerData.setLastConnected(ntpNow);
+            this.deleteMe = false; // buffer is alive — clear any pending deletion flag
+            this.startPings();
+            makePeerAvailable();
+            // Record this peer's hash as confirmed-active so it's saved for fast reconnect on restart.
+            // Only initiator peers have the remote's destination hash; non-initiators have our own hash.
+            if (Boolean.TRUE.equals(isInitiator)) {
+                RNS.getInstance().confirmPeerHash(encodeHexString(destinationHash));
+            }
+            // Chain tip is NOT sent here — sending immediately on link establishment caused
+            // Channel "retry count exceeded" teardowns. broadcastOurChain() delivers it shortly.
+        } finally {
+            creatingBuffer.set(false);
         }
     }
 
     public BufferedRWPair getOrInitPeerBuffer() {
-        channel = this.peerLink.getChannel();
-        //var network = Network.getInstance();
+        if (this.peerLink == null || this.peerLink.getStatus() != ACTIVE) {
+            log.debug("getOrInitPeerBuffer - skipping: link not ACTIVE (status: {})",
+                this.peerLink != null ? this.peerLink.getStatus() : "null");
+            return null;
+        }
         var rns = RNS.getInstance();
         var ntpNow = NTP.getTime();
         if (nonNull(this.peerBuffer)) {
-            //log.info("peerBuffer exists: {}, link status: {}", this.peerBuffer, this.peerLink.getStatus());
             try {
                 log.trace("peerBuffer exists: {}, link status: {}", this.peerBuffer, this.peerLink.getStatus());
                 if (rns.isUnreachable(this)) {
                     makePeerUnavailable();
                     shutdownChannel();
-                    //peerLink.teardown();
                     return null;
                 }
             } catch (IllegalStateException e) {
                 // Exception thrown by Reticulum if the buffer is unusable (Channel, Link, etc)
-                // This is a chance to correct links status when doing a ReticulumPingTask
                 log.warn("can't establish Channel/Buffer (remote peer down?), closing link: {}");
-                ////shutdownChannel();
-                this.peerBuffer.close();
-                //this.peerLink.teardown();
-                //log.error("(handled) IllegalStateException - can't establish Channel/Buffer: {}", e);
-                //network.removeOutboundHandshakedPeer(this);
-                //network.removeConnectedPeer(this);
+                shutdownChannel();
                 this.peerData.setLastAttempted(ntpNow);
                 this.peerData.setLastMisbehaved(ntpNow);
             }
-        }
-        else {
-            log.info("creating buffer - peerLink status: {}, channel: {}", this.peerLink.getStatus(), channel);
-            //// multi-destination: we might need to use different stream IDs from other destination (default is 0) (?)
-            //if (destinationType == RNSCommon.RNSDestinationType.DATA) {
-            //    this.receiveStreamId = 1;
-            //    this.sendStreamId = 1;
-            //}
-            this.peerBuffer = Buffer.createBidirectionalBuffer(receiveStreamId, sendStreamId, channel, this::peerBufferReady);
-            this.peerData.setLastAttempted(ntpNow);
-            this.peerData.setLastConnected(ntpNow);
-            this.startPings();
-            makePeerAvailable();
+        } else {
+            // Buffer is null: either createPeerBuffer() hasn't fired yet (link just became ACTIVE),
+            // or shutdownChannel() was called (e.g., peer went unreachable) but the link is still
+            // ACTIVE. Recreate it. createPeerBuffer() uses an AtomicBoolean so only one thread
+            // calls getChannel() at a time — no synchronized(link) pile-up.
+            createPeerBuffer();
         }
         return getPeerBuffer();
     }
@@ -422,8 +459,10 @@ public class ReticulumPeer implements Peer {
     public Link getOrInitPeerLink() {
         if (this.peerLink.getStatus() == ACTIVE) {
             lastAccessTimestamp = Instant.now();
-            //return this.peerLink;
         } else {
+            // Clear stale timeout flag so prunePeers() doesn't remove this peer on the
+            // next cycle immediately after we re-initiate the link on a fresh announce.
+            this.peerTimedOut = false;
             initPeerLink();
         }
         return this.peerLink;
@@ -519,19 +558,43 @@ public class ReticulumPeer implements Peer {
     /** Link callbacks */
     public void linkEstablished(Link link) {
         this.linkEstablishedTime = System.currentTimeMillis();
+        this.lastAccessTimestamp = Instant.now(); // reset from link-creation time to link-active time
         link.setLinkClosedCallback(this::linkClosed);
-        log.info("peerLink {} established (link: {}) with peer: hash - {}, link destination hash: {}", 
+        // For incoming peers the constructor fires before the handshake, so getRemoteIdentity()
+        // was null then. Resolve it now that the link is established.
+        if (!Boolean.TRUE.equals(isInitiator) && this.serverIdentity == null) {
+            this.serverIdentity = link.getRemoteIdentity();
+        }
+        log.info("peerLink {} established (link: {}) with peer: hash - {}, link destination hash: {}",
             encodeHexString(peerLink.getLinkId()), encodeHexString(link.getLinkId()), encodeHexString(destinationHash),
             encodeHexString(link.getDestination().getHash()));
         var ntpNow = NTP.getTime();
         this.peerData.setLastConnected(ntpNow);
-        //this.peerData.setLastAttempted(ntpNow);
+
+        // Create buffer for all peers once the link is ACTIVE. For initiators this is the
+        // primary path. For non-initiators it is the fallback when baseClientConnected() fired
+        // while the link was still PENDING and createPeerBuffer() returned early.
+        // CAS guard inside createPeerBuffer() prevents double-creation.
+        createPeerBuffer();
+        if (Boolean.TRUE.equals(isInitiator)) {
+            // Arm the ping timer: schedule first ping one interval from now.
+            this.lastPingSent = ntpNow;
+        }
     }
     
     public void linkClosed(Link link) {
         if (isInitiator) {
+            // Null the buffer immediately so createPeerBuffer() works correctly if this peer's
+            // link is re-initiated before prunePeers() calls removeLinkedPeer() → shutdownChannel().
+            // Without this, createPeerBuffer() sees peerBuffer != null (stale from the old link)
+            // and returns early, leaving the re-established link with no working buffer.
+            shutdownChannel();
             disconnect("link closed");
-            //makePeerUnavailable();
+        }
+        // Kick the announce/path-recovery cycle immediately rather than waiting up to 30s
+        // for the next runBaseLoop iteration. Skip during shutdown (all links close then too).
+        if (!RNS.getInstance().isShuttingDown()) {
+            RNS.getInstance().triggerImmediateAnnounce();
         }
         if (link.getTeardownReason() == TIMEOUT) {
             log.info("linkClosed callback: The link timed out");
@@ -572,10 +635,7 @@ public class ReticulumPeer implements Peer {
             }
             if (Arrays.equals(destinationHash, targetPeerHash)) {
                 log.info("closing link: {}", peerLink.getDestination().getHexHash());
-                if (nonNull(this.peerBuffer)) {
-                    shutdownChannel();
-                    this.peerBuffer.close();
-                }
+                shutdownChannel();
                 //this.peerLink.teardown();
             }
             // Link status CLOSED means network ignores it until pruned
@@ -598,8 +658,25 @@ public class ReticulumPeer implements Peer {
      * :param readyBytes: The number of bytes ready to read
      */
     public void peerBufferReady(Integer readyBytes) {
+        // Capture peerBuffer locally — shutdownChannel() can null it from another thread
+        // (listener threads are started asynchronously by handleMessage() → new Thread(...))
+        var buf = this.peerBuffer;
+        if (buf == null) return;
         // get the message data
-        byte[] data = this.peerBuffer.read(readyBytes);
+        byte[] data;
+        try {
+            data = buf.read(readyBytes);
+        } catch (IllegalArgumentException e) {
+            // Library bug: RawChannelReader.read() computes a negative-length array slice
+            // (seen as "N > 0" from Arrays.copyOfRange). Mark for removal so prunePeers()
+            // removes this peer from getActiveImmutableLinkedPeers() — otherwise the
+            // Synchronizer keeps trying to use the dead buffer and the chain falls behind.
+            log.warn("peerBufferReady: read error for {} ({}), marking for immediate removal", encodeHexString(destinationHash), e.getMessage());
+            shutdownChannel();
+            this.deleteMe = true; // safety net if pool is full/shutting down
+            RNS.getInstance().markPeerForImmediateRemoval(this);
+            return;
+        }
         ByteBuffer bb = ByteBuffer.wrap(data);
         //log.info("data length: {}, MAGIC: {}, data: {}, ByteBuffer: {}", data.length, this.messageMagic, data, bb);
         //log.info("data length: {}, MAGIC: {}, ByteBuffer: {}", data.length, this.messageMagic, bb);
@@ -625,6 +702,10 @@ public class ReticulumPeer implements Peer {
             try {
                 //log.info("***> creating message from {} bytes", data.length);
                 Message message = Message.fromByteBuffer(bb);
+                if (message == null) {
+                    log.trace("peerBufferReady - null message from {} bytes (unrecognised magic/type?), skipping", data.length);
+                    return;
+                }
                 log.debug("*=> type {} message received ({} bytes, id: {})", message.getType(), data.length, message.getId());
 
                 // Handle message based on type
@@ -680,9 +761,8 @@ public class ReticulumPeer implements Peer {
 
                     default:
                         log.trace("default - type {} message received ({} bytes)", message.getType(), data.length);
-                        // Bump up to controller for possible action
-                        //addToQueue(message);
-                        Controller.getInstance().onNetworkMessage(this, message);
+                        // Route through pendingMessages for async processing (avoids blocking the Reticulum callback thread)
+                        addToQueue(message);
                         break;
                 }
             } catch (MessageException e) {
@@ -860,12 +940,13 @@ public class ReticulumPeer implements Peer {
     // Note: This keeps Buffer,Channel and Link alive and from timing out.
     private void onPingMessage(ReticulumPeer peer, Message message) {
         PingMessage pingMessage = (PingMessage) message;
-    
+        var buf = this.peerBuffer;
+        if (buf == null) return;
         try {
             PongMessage pongMessage = new PongMessage();
             pongMessage.setId(message.getId());  // use the ping message id (for ping getResponse)
-            this.peerBuffer.write(pongMessage.toBytes());
-            this.peerBuffer.flush();
+            buf.write(pongMessage.toBytes());
+            buf.flush();
             this.lastAccessTimestamp = Instant.now();
             setLastPingSent(Instant.now().toEpochMilli());
         } catch (MessageException e) {
@@ -964,9 +1045,13 @@ public class ReticulumPeer implements Peer {
             // TODO: Review and rewrite using sendQueue (see IPPeer)
             // send the message
             log.trace("Sending {} message with ID {} to peer {}", message.getType().name(), message.getId(), this);
-            var peerBuffer = getOrInitPeerBuffer();
-            this.peerBuffer.write(message.toBytes());
-            this.peerBuffer.flush();
+            var buf = getOrInitPeerBuffer();
+            if (buf == null) {
+                log.debug("sendMessageWithTimeout - buffer unavailable for {}", this);
+                return false;
+            }
+            buf.write(message.toBytes());
+            buf.flush();
             //// send a message to confirm receipt over the buffer
             //var messageId = message.getId();
             //var confirmData = concatArrays(SEQ_REQUEST_CONFIRM_ID,"::".getBytes(UTF_8), messageId.getBytes(UTF_8));
@@ -989,23 +1074,19 @@ public class ReticulumPeer implements Peer {
         }
     }
 
-    /**
-     * Get the current size of the send queue.
-     *
-     * @return number of messages currently queued for sending
-     */
     public int getSendQueueSize() {
-        return this.sendQueue.size();
+        return 0; // Reticulum uses Buffer for I/O, not a bounded queue
     }
 
-    /**
-     * Get the capacity of the send queue.
-     *
-     * @return maximum number of messages that can be queued
-     */
     public int getSendQueueCapacity() {
-        return this.sendQueue.remainingCapacity() + this.sendQueue.size();
+        return Integer.MAX_VALUE; // Buffer has no fixed capacity limit
     }
+
+    @Override
+    public int getPeerType() { return this.peerType; }
+
+    @Override
+    public void setPeerType(int peerType) { this.peerType = peerType; }
 
     //public boolean sendMessageWithTimeoutNow(Message message, int timeout) {
     //    if (nonNull(this.peerLink)) {
@@ -1084,6 +1165,10 @@ public class ReticulumPeer implements Peer {
                     log.trace("Sending {} message with ID {} to peer {}",
                             message.getType().name(), message.getId(), encodeHexString(getDestinationHash()));
                     var peerBuffer = getOrInitPeerBuffer();
+                    if (peerBuffer == null) {
+                        log.trace("sendMessage - buffer not available for {}", this);
+                        return false;
+                    }
                     peerBuffer.write(message.toBytes());
                     peerBuffer.flush();
                     //return true;  // done at end of method
@@ -1117,14 +1202,27 @@ public class ReticulumPeer implements Peer {
         return downloadSpeedTracker;
     }
 
+    @Override
+    public Handshake getHandshakeStatus() {
+        // Reticulum link establishment IS the handshake. Once the buffer is ready
+        // and the peer is in Network's peer lists, all messages should be routed
+        // as post-handshake (i.e. to Controller.onNetworkMessage).
+        return Handshake.COMPLETED;
+    }
+
     public void startPings() {
-        log.debug("[{}] Enabling pings for peer (link id) {}",
-                peerLink.getDestination().getHexHash(), this.toString());
-        this.lastPingSent = NTP.getTime();
-        log.debug("[{}] now: {}, lastPingSent: {}", this.lastPingSent );
+        Long ntpTime = NTP.getTime();
+        this.lastPingSent = (ntpTime != null) ? ntpTime : System.currentTimeMillis();
+        log.info("[{}] Enabling pings for peer {}, lastPingSent: {}",
+                peerLink.getDestination().getHexHash(), this.toString(), this.lastPingSent);
     }
 
     public Task getPingTask(Long now) {
+        // Only initiator peers send application-level pings; non-initiators reply to them.
+        if (!Boolean.TRUE.equals(isInitiator)) {
+            return null;
+        }
+
         // Pings not enabled yet?
         if (now == null || this.lastPingSent == null) {
             return null;
@@ -1149,7 +1247,7 @@ public class ReticulumPeer implements Peer {
         // Not strictly true, but prevents this peer from being immediately chosen again
         this.lastPingSent = now;
 
-        log.debug("Ping ReticulumPeer {}", peerLink.getDestination().getHexHash());
+        log.info("[{}] Scheduling ping to {}", getPeerConnectionId(), peerLink.getDestination().getHexHash());
         return new ReticulumPingTask(this, now);
     }
 
@@ -1271,12 +1369,13 @@ public class ReticulumPeer implements Peer {
      * legacy Peer compatibility
      */
     public Long getPeersVersion() {
-        // set to the highest value we can find in legacy stack
-        return 0x300060001L;
+        // Must be >= minPeerVersion (default "6.1.0" = 0x600010000L) so the
+        // Synchronizer's hasOldVersion predicate does not filter out Reticulum peers.
+        return 0x600010000L; // 6.1.0
     }
 
     public String getPeersVersionString() {
-        return "0x300060001L";
+        return "6.1.0";
     }
 
     public void setPeersVersion(String versionString, long version) {

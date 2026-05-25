@@ -12,9 +12,11 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.qortal.account.PrivateKeyAccount;
 import org.qortal.api.*;
 import org.qortal.api.model.SimpleTransactionSignRequest;
+import org.qortal.controller.ChatTransactionDelegate;
 import org.qortal.controller.Controller;
 import org.qortal.controller.LiteNode;
 import org.qortal.crypto.Crypto;
+import org.qortal.data.transaction.ChatTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.globalization.Translator;
 import org.qortal.repository.DataException;
@@ -832,9 +834,35 @@ public class TransactionsResource {
 		if (transactionData == null)
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_DATA);
 
-		// general chat transactions are invalid
-		if( transactionData.getType() == TransactionType.CHAT && transactionData.getTxGroupId() == 0 && transactionData.getRecipient() == null) {
-			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_DATA);
+		if( transactionData.getType() == TransactionType.CHAT ) {
+			// general chat transactions are invalid
+			if( transactionData.getTxGroupId() == 0 && transactionData.getRecipient() == null ){
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_DATA);
+			}
+			// other transactions are delegated
+			else if( transactionData instanceof ChatTransactionData ) {
+				ChatTransactionData chatTransactionData = (ChatTransactionData) transactionData;
+				ChatTransactionDelegate.getInstance().delegate(chatTransactionData);
+
+				switch (apiVersion) {
+					case 1:
+						return "true";
+
+					case 2:
+					default:
+						// Marshall transactionData to string
+						StringWriter stringWriter = new StringWriter();
+						try {
+							ApiRequest.marshall(stringWriter, transactionData);
+						} catch (IOException e) {
+							throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.TRANSFORMATION_ERROR, e);
+						}
+						return stringWriter.toString();
+				}
+			}
+			else {
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_DATA);
+			}
 		}
 
 		try (final Repository repository = RepositoryManager.getRepository()) {

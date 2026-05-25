@@ -20,7 +20,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -208,7 +207,7 @@ public class ArbitraryTransactionUtils {
      */
     public static void deleteFilesByPrefix(Path directory, String prefix, long now, long minAge) throws IOException {
         try (Stream<Path> paths = Files.list(directory)) {
-            paths.filter(path -> path.getFileName().toString().startsWith(prefix) && !ArbitraryTransactionUtils.isFileRecent(path, now, minAge))
+            paths.filter(path -> path.getFileName().toString().startsWith(prefix) && !FilesystemUtils.isFileRecent(path, now, minAge))
                 .forEach(path -> {
                     try {
                         Files.delete(path);
@@ -232,7 +231,7 @@ public class ArbitraryTransactionUtils {
      */
     public static void deleteFoldersByPrefix(Path directory, String prefix, long now, long minAge) throws IOException {
         try (Stream<Path> paths = Files.list(directory)) {
-            paths.filter(path -> path.toFile().isDirectory() && path.getFileName().toString().startsWith(prefix) && !ArbitraryTransactionUtils.isFileRecent(path, now, minAge))
+            paths.filter(path -> path.toFile().isDirectory() && path.getFileName().toString().startsWith(prefix) && !FilesystemUtils.isFileRecent(path, now, minAge))
                 .forEach(path -> {
                     try {
                         deleteDirectory(path.toFile());
@@ -284,27 +283,6 @@ public class ArbitraryTransactionUtils {
         return directory.delete();
     }
 
-    public static boolean isFileRecent(Path filePath, long now, long cleanupAfter) {
-        try {
-            BasicFileAttributes attr = Files.readAttributes(filePath, BasicFileAttributes.class);
-            long timeSinceCreated = now - attr.creationTime().toMillis();
-            long timeSinceModified = now - attr.lastModifiedTime().toMillis();
-       
-
-            // Check if the file has been created or modified recently
-            if (timeSinceCreated > cleanupAfter) {
-                return false;
-            }
-            if (timeSinceModified > cleanupAfter) {
-                return false;
-            }
-
-        } catch (IOException e) {
-            // Can't read file attributes, so assume it's recent so that we don't delete something accidentally
-        }
-        return true;
-    }
-
     public static boolean isFileHashRecent(byte[] hash, byte[] signature, long now, long cleanupAfter) throws DataException {
         ArbitraryDataFile arbitraryDataFile = ArbitraryDataFile.fromHash(hash, signature);
         if (arbitraryDataFile == null || !arbitraryDataFile.exists()) {
@@ -313,7 +291,7 @@ public class ArbitraryTransactionUtils {
         }
 
         Path filePath = arbitraryDataFile.getFilePath();
-        return ArbitraryTransactionUtils.isFileRecent(filePath, now, cleanupAfter);
+        return FilesystemUtils.isFileRecent(filePath, now, cleanupAfter);
     }
 
     /**

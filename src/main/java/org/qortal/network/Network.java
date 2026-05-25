@@ -843,7 +843,7 @@ public class Network {
                             // Add this signature to the list of pending requests for this peer
                             LOGGER.debug("Making connection to peer {} to request files for signature {}...", peerAddressString, Base58.encode(signature));
                             //Peer peer = new Peer(peerData, Peer.NETWORK);
-                            Peer peer = PeerFactory.create("peer-data", peerData);
+                            Peer peer = PeerFactory.create("peer-data", peerData, Peer.NETWORK);
                             peer.setIsDataPeer(true);
                             peer.addPendingSignatureRequest(signature);
                             return this.connectPeer(peer);
@@ -1533,13 +1533,6 @@ public class Network {
                 peers.removeIf(isSelfPeer);
             }
 
-            // Don't consider any non-IP peers (eg. ReticulumPeer)
-            Predicate<PeerData> isNotIPPeer = peerData -> {
-                PeerMetaType peerMetaType = peerData.getPeerMetaType();
-                return this.getImmutableConnectedPeers().stream().anyMatch(peer -> peerMetaType != PeerMetaType.IP);
-            };
-            peers.removeIf(isNotIPPeer);
-
             // CRITICAL FIX: Don't consider peers we're already connected to by nodeId
             // This handles cases where we have an inbound connection on an ephemeral port
             // but allKnownPeers has the listen port (common with peer discovery/persistence)
@@ -1648,7 +1641,7 @@ public class Network {
 
             // Pick candidate
             PeerData peerData = peers.get(peerIndex);
-            Peer newPeer = PeerFactory.create("peer-data", Peer.NETWORK);
+            Peer newPeer = PeerFactory.create("peer-data", peerData, Peer.NETWORK);
             newPeer.setIsDataPeer(false);
 
             // Update connection attempt info
@@ -1674,12 +1667,12 @@ public class Network {
     }
 
     public boolean connectPeer(Peer newPeer) throws InterruptedException {
-        // Also checked before creating PeerConnectTask
-        var iOHP = getImmutableHandshakedPeers().stream()
-                                                .filter(peer -> peer.getHandshakeStatus() == Handshake.COMPLETED
-                                                && peer.getPeerMetaType() == PeerMetaType.IP)
-                                                .collect(Collectors.toList());
-        if (iOHP.size() >= minOutboundPeers) {
+        // Count outbound IP peers only — Reticulum peers are in the outbound list too
+        // so we must filter by type, and we must count only outbound to match master semantics.
+        long outboundIPCount = getImmutableOutboundHandshakedPeers().stream()
+                .filter(peer -> peer.getPeerMetaType() == PeerMetaType.IP)
+                .count();
+        if (outboundIPCount >= minOutboundPeers) {
             return false;
         }
 
@@ -2392,6 +2385,8 @@ public class Network {
         // Push to NetworkData for ALL peers (inbound or outbound)
         // We want to discover all QDN-capable peers regardless of who initiated Network connection
         // Duplicate detection and direction invariant enforcement handle any race conditions
+        LOGGER.info("[QDN] onHandshakeCompleted: peer={} version={} outbound={} isAtLeastV6={}",
+                peer, peer.getPeersVersionString(), peer.isOutbound(), peer.isAtLeastVersion("6.0.0"));
         if (peer.isAtLeastVersion("6.0.0"))
             NetworkData.getInstance().addPeer(peer);
 
@@ -2564,6 +2559,10 @@ public class Network {
                     ? latestBlockSummariesMessage
                     : heightMessage
             );
+
+            // Reticulum peers bypass PeerSendManager (no TCP socket); broadcast directly.
+            final Message rnsMessage = latestBlockSummariesMessage;
+            RNS.getInstance().broadcast(reticulumPeer -> rnsMessage);
         } catch (DataException e) {
             LOGGER.warn("Couldn't broadcast our chain tip info", e);
         }
@@ -2978,6 +2977,10 @@ public class Network {
         for (Peer peer : getImmutableHandshakedPeers()) {
             if (this.isShuttingDown)
                 return;
+
+            // Reticulum peers have no TCP socket — skip PeerSendManager; RNS.broadcast() handles them.
+            if (peer.hasActivePeerLink())
+                continue;
 
             Message message = peerMessageBuilder.apply(peer);
 
