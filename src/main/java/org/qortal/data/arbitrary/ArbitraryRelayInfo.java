@@ -4,6 +4,8 @@ import org.qortal.data.network.PeerData;
 import org.qortal.network.Peer;
 import org.qortal.network.PeerList;
 
+import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -71,6 +73,23 @@ public class ArbitraryRelayInfo {
             return null;
         }
         return connectedPeers.get(peerData);
+    }
+
+    /**
+     * Resolves the Peer object, falling back to a Reticulum peer list when the TCP/IP lookup
+     * returns null (Reticulum peers have no IP host and are excluded from PeerList's map).
+     */
+    public Peer getPeer(PeerList connectedPeers, List<? extends Peer> reticulumPeers) {
+        Peer found = getPeer(connectedPeers);
+        if (found != null) return found;
+        if (reticulumPeers == null || peerData == null) return null;
+        byte[] dhash = peerData.getAddress().getDestinationHash();
+        if (dhash == null) return null;
+        for (Peer p : reticulumPeers) {
+            if (Arrays.equals(p.getPeerData().getAddress().getDestinationHash(), dhash))
+                return p;
+        }
+        return null;
     }
 
     /**
