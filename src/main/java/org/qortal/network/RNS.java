@@ -108,7 +108,6 @@ import com.google.common.collect.Maps;
 @Data
 @Slf4j
 public class RNS {
-//public class RNS extends Thread {
 
     //private static RNS instance;
     Reticulum reticulum;
@@ -168,7 +167,7 @@ public class RNS {
     //private final ExecuteProduceConsume rnsEPC;
     private ExecutorService rnsWorkerPool;
     // Dedicated single-thread executors for announce and reconnect (BASE and DATA).
-    // Root cause of prior failures: Transport.outbound() busy-waits on jobsLock (non-interruptibly).
+    // Root cause of prior failures: Transport.outbound() busy-waits on jobsLock (non-interruptible).
     // A full table cull triggered by link drops holds jobsLock for 30-60s. With a shared pool,
     // each watchdog reset spawns a new thread, creating 20+ threads all spinning on jobsLock
     // simultaneously — massively worsening contention and making the cull take even longer.
@@ -286,16 +285,6 @@ public class RNS {
         log.debug("reticulum instance created: {}", reticulum);
         //        Settings.getInstance().getMaxRNSNetworkThreadPoolSize(),
         var rnsThreadPriority = Settings.getInstance().getNetworkThreadPriority(); // default: 7
-        ////// if possible one higher than NetworkThreadPriority
-        ////if (rnsThreadPriority < 10) {
-        ////    rnsThreadPriority++;
-        ////}
-        //ExecutorService RNSExecutor = new ThreadPoolExecutor(1,
-        //        Settings.getInstance().getReticulumMaxNetworkThreadPoolSize(),  // we don't need many max threads
-        //        NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
-        //        new SynchronousQueue<Runnable>(),
-        //        new NamedThreadFactory("RNS-EPC", rnsThreadPriority));
-        //rnsEPC = new RNSProcessor(RNSExecutor);        // Worker pool: message handling only (MessageTask, ConnectTask). I/O runs on dedicated ioThread.
         this.rnsWorkerPool = new ThreadPoolExecutor(
                 3, Settings.getInstance().getReticulumMaxNetworkThreadPoolSize(),
                 NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
