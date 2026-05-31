@@ -717,7 +717,7 @@ public class Peer {
             Network.getInstance().registerPeerChannel(this.socketChannel, this);
         else
             NetworkData.getInstance().registerPeerChannel(this.socketChannel, this);
-        this.byteBuffer = null; // Defer allocation to when we need it, to save memory. Sorry GC!
+        this.byteBuffer = null; // Defer allocation until first read; kept alive for connection lifetime thereafter
 
         Random random = new SecureRandom();
         this.ourChallenge = new byte[ChallengeMessage.CHALLENGE_LENGTH];
@@ -778,7 +778,7 @@ public class Peer {
                     return;
                 }
 
-                // Do we need to allocate byteBuffer?
+                // Allocate once per connection; never released until the Peer is GC'd
                 if (this.byteBuffer == null) {
                     this.byteBuffer = ByteBuffer.allocate(Network.getInstance().getMaxMessageSize());
                 }
@@ -812,8 +812,6 @@ public class Peer {
                                 bytesRead, priorPosition, this);
                     }
                 }
-                final boolean wasByteBufferFull = !this.byteBuffer.hasRemaining();
-
                 while (true) {
                     final Message message;
 
@@ -839,15 +837,6 @@ public class Peer {
                 if (message == null && bytesRead == 0) {
                     // No complete message and no bytes available right now.
                     // Return so selector can re-arm OP_READ without busy looping.
-                    if (!wasByteBufferFull) {
-                        // If byteBuffer is completely empty, deallocate it to save memory
-                        // This helps reduce memory usage when peers are idle
-                        // The buffer will be reallocated on next read if needed
-                        if (this.byteBuffer.remaining() == this.byteBuffer.capacity()) {
-                            this.byteBuffer = null;
-                            LOGGER.trace("[{}] Deallocated empty byteBuffer for peer {}", this.peerConnectionId, this);
-                        }
-                    }
                     return;
                 }
 
