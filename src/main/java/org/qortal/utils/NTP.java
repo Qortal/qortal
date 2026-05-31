@@ -58,6 +58,7 @@ public class NTP implements Runnable {
 		public Double offset;
 		public Double jitter;
 
+		private final NTPUDPClient client;
 		private final Deque<Double> offsets = new LinkedList<>();
 		private double totalSquareOffsets = 0.0;
 		private long nextPoll = 0;
@@ -65,9 +66,15 @@ public class NTP implements Runnable {
 
 		public NTPServer(String remote) {
 			this.remote = remote;
+			this.client = new NTPUDPClient();
+			this.client.setDefaultTimeout(2000);
 		}
 
-		public boolean doPoll(NTPUDPClient client, final long now) {
+		public void close() {
+			try { client.close(); } catch (Exception ignored) {}
+		}
+
+		public boolean doPoll(final long now) {
 			Thread.currentThread().setName(String.format("NTP: %s", this.remote));
 
 			try {
@@ -81,13 +88,7 @@ public class NTP implements Runnable {
 					if (!isOffsetSet)
 						LOGGER.trace("NTP resolved remote={} addr={}", remote, address.getHostAddress());
 
-					// CRITICAL: NTPUDPClient is backed by ONE UDP socket. If you call getTime()
-					// concurrently, replies can mismatch requests ("Originate time does not match the request").
-					// So we MUST serialize getTime() calls.
-					final TimeInfo timeInfo;
-					synchronized (client) {
-						timeInfo = client.getTime(address);
-					}
+					final TimeInfo timeInfo = client.getTime(address);
 
 					timeInfo.computeDetails();
 					NtpV3Packet ntpMessage = timeInfo.getMessage();
@@ -147,14 +148,10 @@ public class NTP implements Runnable {
 		}
 	}
 
-	private final NTPUDPClient client;
 	private final List<NTPServer> ntpServers = new ArrayList<>();
 	private final ExecutorService serverExecutor;
 
 	private NTP(String[] serverNames) {
-		client = new NTPUDPClient();
-		client.setDefaultTimeout(2000);
-
 		for (String serverName : serverNames)
 			ntpServers.add(new NTPServer(serverName));
 
@@ -263,7 +260,7 @@ public class NTP implements Runnable {
 				return false;
 
 			try {
-				ecs.submit(() -> server.doPoll(client, now));
+				ecs.submit(() -> server.doPoll(now));
 			} catch (RejectedExecutionException e) {
 				// Executor is shutting down
 				return false;
@@ -291,10 +288,8 @@ public class NTP implements Runnable {
 		} catch (Exception ignored) {
 		}
 
-		try {
-			client.close();
-		} catch (Exception ignored) {
-		}
+		for (NTPServer server : ntpServers)
+			server.close();
 	}
 
 	private void calculateOffset() {
