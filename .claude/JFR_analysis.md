@@ -258,3 +258,18 @@ The Arbitrary Data threads run full `IndexAVL` scans on every tick. Determine wh
 ### Fix 3 — Throttle Ed25519 verification in Foreign Fee Manager (Medium)
 
 Batch signature verification or add a rate limit / back-pressure to `processForeignFeesImportQueue()` so it does not monopolize CPU on each scheduler tick.
+
+---
+
+## 10. Implementation Status
+
+| # | Finding | Severity | Status | Commit |
+|---|---|---|---|---|
+| 1 | `Peer.readChannel()` 2 MB humongous `ByteBuffer` per message cycle | **Critical** | ✅ Fixed | `b0895f02` |
+| 2 | Max GC pause 5.93 s; 8% of runtime in STW pauses | **Critical** | ✅ Resolved by #1 | — |
+| 3 | Old Gen growing ~100 MB/min; Full GC imminent | **High** | ✅ Resolved by #1 | — |
+| 4 | Physical RAM exhausted; JVM committed memory exceeds RAM → OS paging | **High** | ✅ Fixed | `4134edb6` |
+| 5 | Arbitrary Data subsystem runs continuous full AVL index scans on disk-backed HSQLDB | **High** | ✅ Fixed | `e3de6944` |
+| 6 | HSQLDB `DataFileCache` under constant `WriteLock` contention across 4+ threads | **Medium** | ✅ Resolved by #5 | — |
+| 7 | `Foreign Fee Manager` verifies Ed25519 signatures in a tight scheduler loop | **Medium** | ✅ Fixed | `2ef1e3f8` |
+| 8 | 89.7% of Young Gen promotions go directly to Old Gen | **Medium** | ✅ Resolved by #1 | — |
