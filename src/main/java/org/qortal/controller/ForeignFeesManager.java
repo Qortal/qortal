@@ -71,6 +71,9 @@ public class ForeignFeesManager implements Listener {
 
     private static final Logger LOGGER = LogManager.getLogger(ForeignFeesManager.class);
 
+    // Ed25519 verification is expensive; cap per-run to avoid CPU spikes on the scheduler thread
+    private static final int MAX_VERIFICATIONS_PER_RUN = 50;
+
     public static final DateTimeFormatter TIMESTAMP_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     public static final String SIGNED_FOREIGN_FEES_TYPE = "signedForeignFees";
@@ -391,6 +394,7 @@ public class ForeignFeesManager implements Listener {
         LOGGER.debug("Processing foreign fee import queue (size: {})", this.foreignFeesImportQueue.size());
 
         Set<ForeignFeeDecodedData> foreignFeesToRemove = new HashSet<>(this.foreignFeesImportQueue.size());
+        int verificationsThisRun = 0;
 
         try (final Repository repository = RepositoryManager.getRepository()) {
 
@@ -418,6 +422,13 @@ public class ForeignFeesManager implements Listener {
                     // if AT data is not available, then continue on to the next AT
                     if( atData == null ) continue;
 
+                    // Ed25519 verification is expensive; stop here and let the next scheduled run continue
+                    if (verificationsThisRun >= MAX_VERIFICATIONS_PER_RUN) {
+                        LOGGER.debug("Reached max verifications per run ({}), deferring {} remaining items",
+                                MAX_VERIFICATIONS_PER_RUN, this.foreignFeesImportQueue.size() - foreignFeesToRemove.size());
+                        break;
+                    }
+
                     LOGGER.debug("verify signer for atAddress = " + atAddress);
 
                     // determine if the creator authorized the foreign fee
@@ -429,6 +440,8 @@ public class ForeignFeesManager implements Listener {
                             atAddress,
                             foreignFeeToImport.getFee()
                         );
+
+                    verificationsThisRun++;
 
                     // if trade offer creator authorized the imported fee,
                     // then finish the import and clear it from the unsigned mapping
