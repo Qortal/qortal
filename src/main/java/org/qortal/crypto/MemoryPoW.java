@@ -7,6 +7,17 @@ import java.util.concurrent.TimeoutException;
 
 public class MemoryPoW {
 
+	private static final ThreadLocal<long[]> THREAD_WORK_BUFFER = new ThreadLocal<>();
+
+	private static long[] getOrResizeThreadBuffer(int longBufferLength) {
+		long[] buf = THREAD_WORK_BUFFER.get();
+		if (buf == null || buf.length < longBufferLength) {
+			buf = new long[longBufferLength];
+			THREAD_WORK_BUFFER.set(buf);
+		}
+		return buf;
+	}
+
 	/**
 	 * Compute a MemoryPoW nonce
 	 *
@@ -51,7 +62,7 @@ public class MemoryPoW {
 		byteBuffer = null;
 
 		int longBufferLength = workBufferLength / 8;
-		long[] workBuffer = new long[longBufferLength];
+		long[] workBuffer = getOrResizeThreadBuffer(longBufferLength);
 		long[] state = new long[4];
 
 		long seed = 8682522807148012L;
@@ -82,13 +93,13 @@ public class MemoryPoW {
 			state[3] = longHash[3] ^ seed;
 
 			// Fill work buffer with random
-			for (int i = 0; i < workBuffer.length; ++i)
+			for (int i = 0; i < longBufferLength; ++i)
 				workBuffer[i] = xoshiro256p(state);
 
 			// Random bounce through whole buffer
 			result = workBuffer[0];
 			for (int i = 0; i < 1024; ++i) {
-				int index = (int) (xoshiro256p(state) & Integer.MAX_VALUE) % workBuffer.length;
+				int index = (int) (xoshiro256p(state) & Integer.MAX_VALUE) % longBufferLength;
 				result ^= workBuffer[index];
 			}
 
@@ -117,7 +128,7 @@ public class MemoryPoW {
 		int longBufferLength = workBufferLength / 8;
 
 		if (workBuffer == null)
-			workBuffer = new long[longBufferLength];
+			workBuffer = getOrResizeThreadBuffer(longBufferLength);
 
 		long[] state = new long[4];
 
@@ -133,20 +144,20 @@ public class MemoryPoW {
 		state[3] = longHash[3] ^ seed;
 
 		// Fill work buffer with random
-		for (int i = 0; i < workBuffer.length; ++i)
+		for (int i = 0; i < longBufferLength; ++i)
 			workBuffer[i] = xoshiro256p(state);
 
 		// Random bounce through whole buffer
 		long result = workBuffer[0];
 		for (int i = 0; i < 1024; ++i) {
-			int index = (int) (xoshiro256p(state) & Integer.MAX_VALUE) % workBuffer.length;
+			int index = (int) (xoshiro256p(state) & Integer.MAX_VALUE) % longBufferLength;
 			result ^= workBuffer[index];
 		}
 
 		return Long.numberOfLeadingZeros(result) >= difficulty;
 	}
 
-	private static final long xoshiro256p(long[] state) {
+	private static long xoshiro256p(long[] state) {
 		final long result = state[0] + state[3];
 		final long temp = state[1] << 17;
 
