@@ -1069,6 +1069,13 @@ public class HSQLDBDatabaseUpdates {
 
 					break;
 
+				case 52:
+					// Increase row cache size from the default 10,000 to 200,000.
+					// The default caused constant cache eviction (Cache.cleanUp) under normal load,
+					// with NodeAVLDisk/RowAVLDisk objects being churned at ~130 MB/s allocation rate.
+					stmt.execute("SET FILES CACHE SIZE 200000");
+					break;
+
 				default:
 					// nothing to do
 					return false;
