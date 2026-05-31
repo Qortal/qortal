@@ -30,16 +30,14 @@ if [ ! -e qortal.jar -a -f target/qortal*.jar ]; then
 	cp target/qortal*.jar qortal.jar
 fi
 
-# Limits Java JVM stack size and maximum heap usage.
-# Comment out for bigger systems, e.g. non-routers
-# or when API documentation is enabled
-# JAVA MEMORY SETTINGS BELOW - These settings are essentially optimized default settings.
-# Combined with the latest changes on the Qortal Core in version 4.6.6 and beyond,
-# should give a dramatic increase In performance due to optimized Garbage Collection.
-# These memory arguments should work on machines with as little as 6GB of RAM.
-# If you want to run on a machine with less than 6GB of RAM, it is suggested to increase the '50' below to '75'
-# The Qortal Core will utilize only as much RAM as it needs, but up-to the amount set in percentage below.
-JVM_MEMORY_ARGS="-XX:MaxRAMPercentage=50 -XX:+UseG1GC -Xss1024k"
+# JVM memory settings.
+# MaxRAMPercentage caps the heap at a fraction of total physical RAM.
+# 40% leaves enough room for JVM non-heap (Metaspace, CodeHeap, thread stacks)
+# and native memory (HSQLDB, gRPC, network buffers) without exhausting swap.
+# On a 8 GB machine this gives ~3.2 GB heap; on a 16 GB machine ~6.4 GB.
+# Reduce to 30 on machines with less than 6 GB of RAM.
+# MaxMetaspaceSize caps class-metadata growth; 256m is generous given observed ~80 MB usage.
+JVM_MEMORY_ARGS="-XX:MaxRAMPercentage=40 -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -Xss1024k"
 
 # Although java.net.preferIPv4Stack is supposed to be false
 # by default in Java 11, on some platforms (e.g. FreeBSD 12),

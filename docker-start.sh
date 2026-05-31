@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-DEFAULT_JVM_MEMORY_ARGS='-XX:MaxRAMPercentage=25 -XX:+UseG1GC -Xss1024k'
+DEFAULT_JVM_MEMORY_ARGS='-XX:MaxRAMPercentage=25 -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -Xss1024k'
 START_ARGS_FILE="${QORTAL_START_ARGUMENTS_FILE:-/qortal/start-arguments.txt}"
 SETTINGS_FILE="${QORTAL_SETTINGS_FILE:-/qortal/settings.json}"
 
