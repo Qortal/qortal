@@ -37,7 +37,7 @@ fi
 # On a 8 GB machine this gives ~3.2 GB heap; on a 16 GB machine ~6.4 GB.
 # Reduce to 30 on machines with less than 6 GB of RAM.
 # MaxMetaspaceSize caps class-metadata growth; 256m is generous given observed ~80 MB usage.
-JVM_MEMORY_ARGS="-XX:MaxRAMPercentage=40 -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -Xss1024k"
+JVM_MEMORY_ARGS="-XX:ConcGCThreads=2 -XX:MaxRAMPercentage=40 -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -Xss1024k"
 
 # Although java.net.preferIPv4Stack is supposed to be false
 # by default in Java 11, on some platforms (e.g. FreeBSD 12),
