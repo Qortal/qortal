@@ -73,6 +73,7 @@ public class ArbitraryIndexUtils {
 
         try (final Repository repository = RepositoryManager.getRepository()) {
 
+            final int INDEX_RESOURCE_LIMIT = 5000;
             List<ArbitraryResourceData> indexResources
                 = repository.getArbitraryRepository().searchArbitraryResources(
                     Service.JSON,
@@ -93,9 +94,12 @@ public class ArbitraryIndexUtils {
                     null,
                     null,
                     null,
-                    null,
+                    INDEX_RESOURCE_LIMIT,
                     null,
                     true);
+
+            if (indexResources.size() == INDEX_RESOURCE_LIMIT)
+                LOGGER.warn("Index cache hit resource limit ({}); some index resources may be excluded", INDEX_RESOURCE_LIMIT);
 
             List<ArbitraryDataIndexDetail> indexDetails = new ArrayList<>();
 
