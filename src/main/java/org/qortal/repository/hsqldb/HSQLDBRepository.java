@@ -55,9 +55,8 @@ public class HSQLDBRepository implements Repository {
 	/** True from first execute until commit/rollback/close; used for rollback-on-close. */
 	private boolean inTransaction = false;
 	protected final Map<String, PreparedStatement> preparedStatementCache = new HashMap<>();
-	// We want the same object corresponding to the actual DB
-	protected final Object trimHeightsLock = RepositoryManager.getRepositoryFactory();
-	protected final Object latestATStatesLock = RepositoryManager.getRepositoryFactory();
+	protected final Object trimHeightsLock = RepositoryManager.TRIM_HEIGHTS_LOCK;
+	protected final Object latestATStatesLock = RepositoryManager.LATEST_AT_STATES_LOCK;
 
 	private final ATRepository atRepository = new HSQLDBATRepository(this);
 	private final AccountRepository accountRepository = new HSQLDBAccountRepository(this);
