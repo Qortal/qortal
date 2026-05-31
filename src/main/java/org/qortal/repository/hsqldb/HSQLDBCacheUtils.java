@@ -682,6 +682,13 @@ public class HSQLDBCacheUtils {
                 // remove invalidated dynamics, on or after current height
                 BalanceRecorderUtils.removeDynamicsOnOrAboveHeight(currentHeight, balanceDynamics);
 
+                // Always evict snapshots outside the rollback window so balancesByHeight
+                // stays bounded even when produceBalanceDynamics is not called
+                // (e.g. between reward-distribution events when isRewardRecordingOnly=true).
+                BalanceRecorderUtils.removeRecordingsBelowHeight(
+                        currentHeight - Settings.getInstance().getBalanceRecorderRollbackAllowance(),
+                        balancesByHeight);
+
                 // if there are 2 or more recordings, then produce balance dynamics for the first 2 recordings
                 if( balancesByHeight.size() > 1 ) {
 
