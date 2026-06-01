@@ -596,6 +596,20 @@ public class Settings {
 	 */
 	private int threadDumpExpiration = 24;
 
+	/**
+	 * Data Storage Size Calculation Hour
+	 *
+	 * The local hour in the day to scan for the data directory size.
+	 */
+	private int dataStorageSizeCalculationHour = 23;
+
+	/**
+	 * Data Storage Size Calculation Frequency
+	 *
+	 * The time in days between each calculation.
+	 */
+	private int dataStorageSizeCalculationFrequency = 1;
+
 	// Domain mapping
 	public static class ThreadLimit {
 		private String messageType;
@@ -1550,5 +1564,13 @@ public class Settings {
 
 	public int getThreadDumpExpiration() {
 		return threadDumpExpiration;
+	}
+
+	public int getDataStorageSizeCalculationHour() {
+		return dataStorageSizeCalculationHour;
+	}
+
+	public int getDataStorageSizeCalculationFrequency() {
+		return dataStorageSizeCalculationFrequency;
 	}
 }

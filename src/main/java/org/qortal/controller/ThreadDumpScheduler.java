@@ -120,6 +120,10 @@ public class ThreadDumpScheduler {
                 writer.newLine();
                 writer.newLine();
 
+                writer.write("Available Processors: " + Runtime.getRuntime().availableProcessors());
+                writer.newLine();
+                writer.newLine();
+
                 Map<Long, Long> cpuTimeLapsedById = new HashMap<>(threadInfos.length);
                 Map<Long, ThreadInfo> infoById = new HashMap<>(threadInfos.length);
 
