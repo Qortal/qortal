@@ -155,7 +155,14 @@ public class NTP implements Runnable {
 		for (String serverName : serverNames)
 			ntpServers.add(new NTPServer(serverName));
 
-		serverExecutor = Executors.newCachedThreadPool();
+		// Bounded, named pool sized to the server count. The previous newCachedThreadPool()
+		// was unbounded and unnamed (showed up as anonymous "pool-N-thread-M"): because per-server
+		// poll intervals can exceed the cached-pool 60s keepalive, its threads kept dying between
+		// polls and being recreated, churning ThreadLocalMap. A fixed pool reuses warm threads each
+		// poll (no churn), caps concurrency at the number of servers, and names threads for profiling.
+		serverExecutor = Executors.newFixedThreadPool(
+				Math.max(1, ntpServers.size()),
+				new DaemonThreadFactory("NTP-poll", Thread.NORM_PRIORITY));
 	}
 
 	public static synchronized void start(String[] serverNames) {
