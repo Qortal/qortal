@@ -2562,8 +2562,8 @@ public class NetworkData {
             // Use PeerSendManager for retry logic and backpressure handling
             try {
                 PeerSendManager sendManager = PeerSendManagement.getInstance().getOrCreateSendManager(peer, true);
-                
-                
+
+
                 // Calculate estimated message size for queue management
                 int estimatedSize;
                 try {
@@ -2573,7 +2573,7 @@ public class NetworkData {
                     LOGGER.warn("Failed to calculate message size for broadcast, using default: {}", e.getMessage());
                     estimatedSize = 1024;
                 }
-                
+
                 // Use HIGH_PRIORITY for broadcasts since they're important (file list requests, etc.)
                 sendManager.queueMessageFactoryWithPriority(
                     PeerSendManager.HIGH_PRIORITY,
@@ -2584,13 +2584,24 @@ public class NetworkData {
             } catch (MessageException e) {
                 // PeerSendManager rejected the message (cooldown, etc.)
                 LOGGER.debug("PeerSendManager rejected broadcast message to {}: {}", peer, e.getMessage());
-                
+
                 // Only disconnect if the socket is actually gone
                 if (peer.getSocketChannel() == null || !peer.getSocketChannel().isOpen()) {
                     LOGGER.trace("Failed to broadcast message to {} - socket closed", peer);
                     peer.disconnect("failed to broadcast message");
                 }
             }
+        }
+
+        // Reticulum DATA peers bypass PeerSendManager (no TCP socket); send directly via buffer.
+        for (org.qortal.network.ReticulumPeer rPeer : RNS.getInstance().getActiveDataPeers()) {
+            if (this.isShuttingDown)
+                return;
+            Message message = peerMessageBuilder.apply(rPeer);
+            if (message == null)
+                continue;
+            LOGGER.trace("Broadcasting Message {} to Reticulum DATA peer {}", message.getType(), rPeer);
+            rPeer.sendMessage(message);
         }
     }
 

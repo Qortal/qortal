@@ -108,7 +108,6 @@ import com.google.common.collect.Maps;
 @Data
 @Slf4j
 public class RNS {
-//public class RNS extends Thread {
 
     //private static RNS instance;
     Reticulum reticulum;
@@ -118,6 +117,7 @@ public class RNS {
     //static final String defaultConfigPath = ".reticulum"; // if empty will look in Reticulums default paths
     static final String defaultConfigPath = Settings.getInstance().isTestNet() ? RNSCommon.defaultRNSConfigPathTestnet: RNSCommon.defaultRNSConfigPath;
     static final String CORE_ASPECT = "qortal.core";
+    static final String QDN_ASPECT  = "qortal.qdn";
     private final int MAX_PEERS = Settings.getInstance().getReticulumMaxPeers();
     private final int MIN_DESIRED_CORE_PEERS = Settings.getInstance().getReticulumMinDesiredCorePeers();
     private final int MIN_DESIRED_DATA_PEERS = Settings.getInstance().getReticulumMinDesiredDataPeers();
@@ -163,10 +163,11 @@ public class RNS {
 
     /** Produces Connect tasks for the baseDestination and submits to worker pool. */
     private Thread rnsBaseThread;
+    private Thread rnsDataThread;
     //private final ExecuteProduceConsume rnsEPC;
     private ExecutorService rnsWorkerPool;
-    // Dedicated single-thread executors for announce and reconnect.
-    // Root cause of prior failures: Transport.outbound() busy-waits on jobsLock (non-interruptibly).
+    // Dedicated single-thread executors for announce and reconnect (BASE and DATA).
+    // Root cause of prior failures: Transport.outbound() busy-waits on jobsLock (non-interruptible).
     // A full table cull triggered by link drops holds jobsLock for 30-60s. With a shared pool,
     // each watchdog reset spawns a new thread, creating 20+ threads all spinning on jobsLock
     // simultaneously — massively worsening contention and making the cull take even longer.
@@ -174,6 +175,8 @@ public class RNS {
     // spin on jobsLock; tasks queue up naturally and complete when the cull finishes.
     private ExecutorService announceExecutor;
     private ExecutorService reconnectExecutor;
+    private ExecutorService dataAnnounceExecutor;
+    private ExecutorService dataReconnectExecutor;
     private static final long NETWORK_EPC_KEEPALIVE = 5L; // 1 second
     //private int totalThreadCount = 0;
     private final int reticulumMaxNetworkThreadPoolSize = Settings.getInstance().getReticulumMaxNetworkThreadPoolSize();
@@ -217,6 +220,23 @@ public class RNS {
     // library's built-in auto-reconnect rather than spinning on a stuck jobsLock forever.
     private volatile int consecutiveStuckTasks = 0;
     private static final int BACKBONE_FORCE_RECONNECT_THRESHOLD = 2;
+
+    // DATA loop timing — mirrors BASE, separate so DATA and BASE don't interfere
+    private static final long DATA_LOOP_ANNOUNCE_INTERVAL_MS  = 30_000L;
+    private static final long DATA_LOOP_RECONNECT_INTERVAL_MS = 15_000L;
+    private volatile long lastDataLoopAnnounceMs  = 0;
+    private volatile long lastDataLoopReconnectMs = 0;
+    private volatile long dataAnnounceTaskStartedMs  = 0L;
+    private volatile long dataReconnectTaskStartedMs = 0L;
+    private volatile java.util.concurrent.Future<?> dataAnnounceTaskFuture  = null;
+    private volatile java.util.concurrent.Future<?> dataReconnectTaskFuture = null;
+
+    // Persisted DATA peer hashes — same semantics as knownPeerHashes / loadedPeerHashes for BASE
+    private static final String KNOWN_DATA_PEERS_FILE = "known_data_peer_hashes.txt";
+    private final Set<String> knownDataPeerHashes  = Collections.synchronizedSet(new HashSet<>());
+    private final Set<String> loadedDataPeerHashes = Collections.synchronizedSet(new HashSet<>());
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> pendingDataLinkFailureMs =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     /** Called by ReticulumPeer.linkClosed() to kick the announce/path-recovery cycle soon.
      *  Uses a 5s delay rather than 0 to avoid tight reconnect loops when links close rapidly
@@ -265,16 +285,6 @@ public class RNS {
         log.debug("reticulum instance created: {}", reticulum);
         //        Settings.getInstance().getMaxRNSNetworkThreadPoolSize(),
         var rnsThreadPriority = Settings.getInstance().getNetworkThreadPriority(); // default: 7
-        ////// if possible one higher than NetworkThreadPriority
-        ////if (rnsThreadPriority < 10) {
-        ////    rnsThreadPriority++;
-        ////}
-        //ExecutorService RNSExecutor = new ThreadPoolExecutor(1,
-        //        Settings.getInstance().getReticulumMaxNetworkThreadPoolSize(),  // we don't need many max threads
-        //        NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
-        //        new SynchronousQueue<Runnable>(),
-        //        new NamedThreadFactory("RNS-EPC", rnsThreadPriority));
-        //rnsEPC = new RNSProcessor(RNSExecutor);        // Worker pool: message handling only (MessageTask, ConnectTask). I/O runs on dedicated ioThread.
         this.rnsWorkerPool = new ThreadPoolExecutor(
                 3, Settings.getInstance().getReticulumMaxNetworkThreadPoolSize(),
                 NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
@@ -290,6 +300,14 @@ public class RNS {
                 NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
                 new LinkedBlockingQueue<>(1),
                 new NamedThreadFactory("RNS-Reconnect", rnsThreadPriority));
+        this.dataAnnounceExecutor = new ThreadPoolExecutor(1, 1,
+                NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(1),
+                new NamedThreadFactory("RNS-DataAnnounce", rnsThreadPriority));
+        this.dataReconnectExecutor = new ThreadPoolExecutor(1, 1,
+                NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(1),
+                new NamedThreadFactory("RNS-DataReconnect", rnsThreadPriority));
     }
 
     // Note: potentially create persistent serverIdentity (utility rnid) and load it from file
@@ -339,42 +357,39 @@ public class RNS {
    
         baseDestination.setProofStrategy(ProofStrategy.PROVE_ALL);
         baseDestination.setAcceptLinkRequests(true);
-        //dataDestination.setProofStrategy(ProofStrategy.PROVE_ALL);
-        //dataDestination.setAcceptLinkRequests(true);
-        
+        dataDestination.setProofStrategy(ProofStrategy.PROVE_ALL);
+        dataDestination.setAcceptLinkRequests(true);
+
         baseDestination.setLinkEstablishedCallback(this::baseClientConnected);
-        //dataDestination.setLinkEstablishedCallback(this::dataClientConnected);
+        dataDestination.setLinkEstablishedCallback(this::dataClientConnected);
         //Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler());
         Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler("qortal.core"));
         Transport.getInstance().registerAnnounceHandler(new QAnnounceHandler("qortal.qdn"));
         log.debug("announceHandlers: {}", Transport.getInstance().getAnnounceHandlers());
         // Load peer hashes persisted from previous run so we can call requestPath() fast on restart.
         loadKnownPeerHashes();
+        loadKnownDataPeerHashes();
         // do a first announce (across all configured interfaces)
         baseDestination.announce();
         log.info("Sent initial announce from {} ({})", encodeHexString(baseDestination.getHash()), baseDestination.getName());
-        // Seed the base-loop announce timer. If we loaded known peer hashes (i.e. this is a restart),
-        // fire path requests at t=15s to give the backbone time to connect — much faster than
-        // waiting 30s with zero peers. On a first-ever start knownPeerHashes is empty so we use
-        // the normal 30s window.
+        dataDestination.announce();
+        log.info("Sent initial announce from {} ({})", encodeHexString(dataDestination.getHash()), dataDestination.getName());
+        // Seed loop announce timers. On restart (non-empty loaded hashes) fire path requests
+        // at t=15s; on first-ever start use the full 30s window.
         this.lastBaseLoopAnnounceMs = loadedPeerHashes.isEmpty()
                 ? System.currentTimeMillis()
                 : System.currentTimeMillis() - BASE_LOOP_ANNOUNCE_INTERVAL_MS + 15_000L;
-        // announce QDN destination (across all configured interfaces)
-        //dataDestination.announce();
-        //log.debug("Sent initial announce from {} ({})", encodeHexString(dataDestination.getHash()), dataDestination.getName());
+        this.lastDataLoopAnnounceMs = loadedDataPeerHashes.isEmpty()
+                ? System.currentTimeMillis()
+                : System.currentTimeMillis() - DATA_LOOP_ANNOUNCE_INTERVAL_MS + 15_000L;
 
-        // Start up first networking thread (the RNS main thread, similar to the "server loop" in a standalone Reticulum app)
-        //rnsEPC.start();
-
-        // Start up "main" thread, one for each destination to handle aspects separately.
-        // Note: Each such thread is equivalent to the peerTypes "NETWORK" and "NETWORKDATA".
+        // Start up "main" threads, one per destination / peer aspect.
         this.rnsBaseThread = new Thread(this::runBaseLoop, "rnsMesh-BASE");
-        this.rnsBaseThread.setDaemon(true); // daemon so SIGTERM doesn't hang JVM exit
+        this.rnsBaseThread.setDaemon(true);
         this.rnsBaseThread.start();
-        //this.rnsDataThread = new Thread(this::runDataLoop, "rnsMesh-DATA");
-        //this.rnsDataThread.setDaemon(false);
-        //this.rnsDataThread.start();
+        this.rnsDataThread = new Thread(this::runDataLoop, "rnsMesh-DATA");
+        this.rnsDataThread.setDaemon(true);
+        this.rnsDataThread.start();
 
         this.meshStarted = true;
         log.info("RNS mesh started, baseDestination: {}", encodeHexString(baseDestination.getHash()));
@@ -703,10 +718,166 @@ public class RNS {
         log.debug("Mesh loop for destination {} exiting.", baseDestination.getName());
     }
 
-    //// "main" loop for dataDestination (QDN tasks)
-    //private void runDataLoop() {
-    //    //... TODO (similar to runBaseLoop()
-    //}
+    /** Kick the DATA announce/reconnect cycle within ~5s (mirrors triggerImmediateAnnounce()). */
+    public void triggerImmediateDataAnnounce() {
+        this.lastDataLoopAnnounceMs = System.currentTimeMillis() - DATA_LOOP_ANNOUNCE_INTERVAL_MS + 5_000L;
+    }
+
+    // "main" loop for dataDestination (QDN tasks) — mirrors runBaseLoop() for DATA aspect
+    private void runDataLoop() {
+        while (!isShuttingDown && !Thread.currentThread().isInterrupted()) {
+            try {
+                final List<ReticulumPeer> peersThisRound = Stream.concat(
+                        this.getActiveImmutableLinkedPeers().stream()
+                                .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.DATA),
+                        this.getImmutableIncomingPeers().stream()
+                                .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.DATA)
+                                .filter(p -> {
+                                    var pl = p.getPeerLink();
+                                    return nonNull(pl) && pl.getStatus() == ACTIVE;
+                                })
+                ).collect(Collectors.toList());
+
+                final Long now = NTP.getTime();
+                for (ReticulumPeer peer : peersThisRound) {
+                    ExecuteProduceConsume.Task task;
+                    // DATA messages are routed to NetworkData.onMessage() via MessageTask(NETWORKDATA)
+                    while ((task = peer.getMessageTask(Peer.NETWORKDATA)) != null) {
+                        final ExecuteProduceConsume.Task t = task;
+                        try {
+                            rnsWorkerPool.execute(() -> {
+                                try {
+                                    t.perform();
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                } catch (Exception e) {
+                                    log.warn("Reticulum DATA worker task threw: {}", e.getMessage(), e);
+                                }
+                            });
+                        } catch (java.util.concurrent.RejectedExecutionException e) {
+                            log.warn("[{}] Reticulum DATA worker pool rejected message task", peer.getPeerConnectionId());
+                            break;
+                        }
+                    }
+
+                    ExecuteProduceConsume.Task pingTask = peer.getPingTask(now);
+                    if (pingTask != null) {
+                        final ExecuteProduceConsume.Task pt = pingTask;
+                        try {
+                            rnsWorkerPool.execute(() -> {
+                                try {
+                                    pt.perform();
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                } catch (Exception e) {
+                                    log.warn("Reticulum DATA ping task threw: {}", e.getMessage(), e);
+                                }
+                            });
+                        } catch (java.util.concurrent.RejectedExecutionException e) {
+                            log.warn("[{}] Reticulum DATA worker pool rejected ping task", peer.getPeerConnectionId());
+                        }
+                    }
+                }
+
+                long nowMs = System.currentTimeMillis();
+
+                // Periodic DATA announce
+                if (nowMs - lastDataLoopAnnounceMs >= DATA_LOOP_ANNOUNCE_INTERVAL_MS) {
+                    lastDataLoopAnnounceMs = nowMs;
+                    if (dataAnnounceTaskStartedMs == 0L) {
+                        dataAnnounceTaskStartedMs = nowMs;
+                        try {
+                            dataAnnounceTaskFuture = dataAnnounceExecutor.submit(() -> {
+                                Thread.interrupted();
+                                try {
+                                    maybeAnnounce(dataDestination, RNSCommon.PeerAspect.DATA);
+                                } catch (Exception e) {
+                                    log.warn("Exception in data loop announce: {}", e.getMessage(), e);
+                                } finally {
+                                    if (dataAnnounceTaskStartedMs != 0L) {
+                                        dataAnnounceTaskStartedMs = 0L;
+                                    }
+                                }
+                            });
+                        } catch (java.util.concurrent.RejectedExecutionException e) {
+                            dataAnnounceTaskStartedMs = 0L;
+                        }
+                    }
+                }
+
+                // Periodic DATA peer reconnect
+                if (nowMs - lastDataLoopReconnectMs >= DATA_LOOP_RECONNECT_INTERVAL_MS) {
+                    lastDataLoopReconnectMs = nowMs;
+                    if (dataReconnectTaskStartedMs == 0L) {
+                        dataReconnectTaskStartedMs = nowMs;
+                        final int activeData = (int) getActiveImmutableLinkedPeers().stream()
+                                .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.DATA).count();
+                        final List<ReticulumPeer> currentDataLinked = getImmutableLinkedPeers().stream()
+                                .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.DATA)
+                                .collect(Collectors.toList());
+                        final Set<String> dataTargets = new HashSet<>(knownDataPeerHashes);
+                        dataTargets.addAll(loadedDataPeerHashes);
+                        try {
+                            dataReconnectTaskFuture = dataReconnectExecutor.submit(() -> {
+                                Thread.interrupted();
+                                try {
+                                    if (activeData < MIN_DESIRED_DATA_PEERS && !dataTargets.isEmpty()) {
+                                        log.info("Active DATA peers {} < desired {} (data loop); requesting paths to {} known peers",
+                                                activeData, MIN_DESIRED_DATA_PEERS, dataTargets.size());
+                                        for (String hashHex : dataTargets) {
+                                            try {
+                                                byte[] dhash = org.apache.commons.codec.binary.Hex.decodeHex(hashHex);
+                                                boolean tracked = currentDataLinked.stream()
+                                                        .anyMatch(p -> Arrays.equals(p.getDestinationHash(), dhash));
+                                                if (tracked) continue;
+                                                long lastFailure = pendingDataLinkFailureMs.getOrDefault(hashHex, 0L);
+                                                boolean recentlyFailed = (System.currentTimeMillis() - lastFailure) < PENDING_FAILURE_BACKOFF_MS;
+                                                Identity cachedIdentity = recentlyFailed ? null
+                                                        : IdentityKnownDestination.recall(dhash);
+                                                if (cachedIdentity != null) {
+                                                    log.info("DATA: proactively connecting to {} via cached identity", hashHex);
+                                                    createLinkedDataPeerFromIdentity(dhash, cachedIdentity);
+                                                } else {
+                                                    if (recentlyFailed)
+                                                        log.info("DATA: backing off to requestPath for {} (recent PENDING failure)", hashHex);
+                                                    else
+                                                        log.info("DATA: requestPath for {} (no cached identity)", hashHex);
+                                                    Transport.getInstance().requestPath(dhash);
+                                                }
+                                            } catch (Exception e) {
+                                                log.warn("DATA path request/reconnect failed for {}: {}", hashHex, e.getMessage());
+                                            }
+                                        }
+                                    }
+                                } catch (Exception e) {
+                                    log.warn("Exception in data loop reconnect: {}", e.getMessage(), e);
+                                } finally {
+                                    if (dataReconnectTaskStartedMs != 0L) {
+                                        dataReconnectTaskStartedMs = 0L;
+                                    }
+                                }
+                            });
+                        } catch (java.util.concurrent.RejectedExecutionException e) {
+                            dataReconnectTaskStartedMs = 0L;
+                        }
+                    }
+                }
+
+            } catch (Exception e) {
+                log.error("runDataLoop: unexpected exception — loop continues", e);
+            }
+
+            if (!isShuttingDown && !Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        log.debug("Data mesh loop for destination {} exiting.", dataDestination.getName());
+    }
 
     public void broadcast(Function<ReticulumPeer, Message> peerMessageBuilder) {
         List<ReticulumPeer> allPeers = Stream.concat(
@@ -756,19 +927,12 @@ public class RNS {
 
     public void shutdown() {
         this.isShuttingDown = true;
-        saveKnownPeerHashes(); // Persist before shutting down so next restart reconnects fast.
+        saveKnownPeerHashes();
+        saveKnownDataPeerHashes();
         log.info("shutting down Reticulum");
         baseDestination.setProofStrategy(ProofStrategy.PROVE_NONE);
-        //dataDestination.setProofStrategy(ProofStrategy.PROVE_NONE);
+        dataDestination.setProofStrategy(ProofStrategy.PROVE_NONE);
 
-        // Stop processing threads
-        //try {
-        //    if (!this.rnsEPC.shutdown(5000)) {
-        //        log.warn("Reticulum threads failed to terminate");
-        //    }
-        //} catch (InterruptedException e) {
-        //    log.warn("Interrupted while waiting for rnsEPC threads to terminate");
-        //}
         if (this.rnsBaseThread != null && this.rnsBaseThread.isAlive()) {
             this.rnsBaseThread.interrupt();
             try {
@@ -779,16 +943,16 @@ public class RNS {
                 log.warn("Interrupted while waiting for RNS base thread");
             }
         }
-        //if (this.rnsDataThread != null && this.rnsDataThread.isAlive()) {
-        //    this.rnsDataThread.interrupt();
-        //    try {
-        //        this.rnsDataThread.join(5000);
-        //        if (this.rnsDataThread.isAlive())
-        //            log.warn("RNS base thread did not terminate in time");
-        //    } catch (InterruptedException e) {
-        //        log.warn("Interrupted while waiting for RNS base thread");
-        //    }
-        //}
+        if (this.rnsDataThread != null && this.rnsDataThread.isAlive()) {
+            this.rnsDataThread.interrupt();
+            try {
+                this.rnsDataThread.join(5000);
+                if (this.rnsDataThread.isAlive())
+                    log.warn("RNS data thread did not terminate in time");
+            } catch (InterruptedException e) {
+                log.warn("Interrupted while waiting for RNS data thread");
+            }
+        }
         
         // gracefully close links of peers that point to us
         for (ReticulumPeer p: incomingPeers) {
@@ -813,6 +977,8 @@ public class RNS {
         this.rnsWorkerPool.shutdown();
         this.announceExecutor.shutdown();
         this.reconnectExecutor.shutdown();
+        this.dataAnnounceExecutor.shutdown();
+        this.dataReconnectExecutor.shutdown();
         try {
             if (!this.rnsWorkerPool.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS))
                 this.rnsWorkerPool.shutdownNow();
@@ -820,10 +986,16 @@ public class RNS {
                 this.announceExecutor.shutdownNow();
             if (!this.reconnectExecutor.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS))
                 this.reconnectExecutor.shutdownNow();
+            if (!this.dataAnnounceExecutor.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS))
+                this.dataAnnounceExecutor.shutdownNow();
+            if (!this.dataReconnectExecutor.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS))
+                this.dataReconnectExecutor.shutdownNow();
         } catch (InterruptedException e) {
             this.rnsWorkerPool.shutdownNow();
             this.announceExecutor.shutdownNow();
             this.reconnectExecutor.shutdownNow();
+            this.dataAnnounceExecutor.shutdownNow();
+            this.dataReconnectExecutor.shutdownNow();
         }
 
         // exitHandler() can block indefinitely if a zombie link's channel holds a lock
@@ -967,14 +1139,17 @@ public class RNS {
             }
 
             // add to peer list if we can use more peers
+            boolean isDataAspect = "qortal.qdn".equals(this.aspectFilter);
+            int peerLimit = isDataAspect ? MIN_DESIRED_DATA_PEERS : MIN_DESIRED_CORE_PEERS;
+            RNSCommon.PeerAspect matchAspect = isDataAspect ? RNSCommon.PeerAspect.DATA : RNSCommon.PeerAspect.BASE;
             var lps =  RNS.getInstance().getImmutableLinkedPeers();
             for (ReticulumPeer p: lps) {
                 var pl = p.getPeerLink();
-                if ((nonNull(pl) && (pl.getStatus() == ACTIVE))) {
+                if (nonNull(pl) && pl.getStatus() == ACTIVE && p.getPeerAspect() == matchAspect) {
                     activePeerCount = activePeerCount + 1;
                 }
             }
-            if (activePeerCount < MAX_PEERS) {
+            if (activePeerCount < peerLimit) {
                 for (ReticulumPeer p: lps) {
                     if (Arrays.equals(p.getDestinationHash(), destinationHash)) {
                         log.info("QAnnounceHandler - peer exists - found peer matching destinationHash");
@@ -1014,19 +1189,12 @@ public class RNS {
         }
 
         private ReticulumPeer getNewPeer(byte[] destinationHash, Identity announcedIdentity) {
-            ReticulumPeer newPeer = new ReticulumPeer(destinationHash);
+            boolean isDataAspect = "qortal.qdn".equals(this.aspectFilter);
+            RNSCommon.PeerAspect aspect = isDataAspect ? RNSCommon.PeerAspect.DATA : RNSCommon.PeerAspect.BASE;
+            ReticulumPeer newPeer = new ReticulumPeer(destinationHash, aspect);
             newPeer.setServerIdentity(announcedIdentity);
-
             newPeer.setIsInitiator(true);
-            if ("qortal.qdn".equals(this.aspectFilter)) {
-                // data peer
-                newPeer.setPeerAspect(RNSCommon.PeerAspect.DATA);
-                newPeer.setIsDataPeer(true);
-            } else {
-                // core peer
-                newPeer.setPeerAspect(RNSCommon.PeerAspect.BASE);
-                newPeer.setIsDataPeer(false);
-            }
+            newPeer.setIsDataPeer(isDataAspect);
             newPeer.setMessageMagic(getMessageMagic());
             log.debug(">>> ReticulumPeer created - PeerData: {} - {}", newPeer.getPeerData().toString(), newPeer.getPeerAddress().getDestinationHash());
             return newPeer;
@@ -1060,6 +1228,23 @@ public class RNS {
             log.warn("createLinkedPeerFromIdentity: LINKREQUEST to {} failed immediately — switching to requestPath backoff",
                     encodeHexString(destinationHash));
             pendingLinkFailureMs.put(encodeHexString(destinationHash), System.currentTimeMillis());
+        }
+    }
+
+    // Mirror of createLinkedPeerFromIdentity() for DATA-aspect peers.
+    private void createLinkedDataPeerFromIdentity(byte[] destinationHash, Identity identity) {
+        ReticulumPeer newPeer = new ReticulumPeer(destinationHash, RNSCommon.PeerAspect.DATA);
+        newPeer.setServerIdentity(identity);
+        newPeer.setIsInitiator(true);
+        newPeer.setIsDataPeer(true);
+        newPeer.setMessageMagic(getMessageMagic());
+        addLinkedPeer(newPeer);
+        log.info("DATA: proactively connecting to known peer {} via cached identity", encodeHexString(destinationHash));
+        Link lnk = newPeer.getPeerLink();
+        if (lnk != null && lnk.getStatus() == CLOSED) {
+            log.warn("createLinkedDataPeerFromIdentity: LINKREQUEST to {} failed immediately — switching to requestPath backoff",
+                    encodeHexString(destinationHash));
+            pendingDataLinkFailureMs.put(encodeHexString(destinationHash), System.currentTimeMillis());
         }
     }
 
@@ -1277,19 +1462,24 @@ public class RNS {
     //}
 
     public void addIncomingPeer(ReticulumPeer peer) {
-        // Dedup by remote identity: if a stale incoming peer from the same node already exists
-        // (e.g. rapid reconnects leave old ACTIVE links lingering for up to 3 min), replace it.
-        // This prevents incomingPeers from growing to 10+ during a reconnect storm.
+        // Dedup by remote identity + aspect: evict any existing incoming peer from the same
+        // node with the same aspect. Called from linkEstablished() where identity is known.
+        // Using CORE_ASPECT for both aspects would incorrectly match CORE/DATA peer pairs
+        // from the same remote node and evict the wrong one.
         Identity newId = peer.getServerIdentity();
+        String newAspect = (peer.getPeerAspect() == RNSCommon.PeerAspect.DATA) ? QDN_ASPECT : CORE_ASPECT;
         synchronized (this.incomingPeers) {
             if (newId != null) {
-                byte[] newHash = hashFromNameAndIdentity(CORE_ASPECT, newId);
+                byte[] newHash = hashFromNameAndIdentity(newAspect, newId);
                 Iterator<ReticulumPeer> it = this.incomingPeers.iterator();
                 while (it.hasNext()) {
                     ReticulumPeer existing = it.next();
                     Identity existingId = existing.getServerIdentity();
-                    if (existingId != null && Arrays.equals(hashFromNameAndIdentity(CORE_ASPECT, existingId), newHash)) {
-                        log.info("addIncomingPeer: replacing stale incoming peer from {}", encodeHexString(newHash));
+                    String existingAspect = (existing.getPeerAspect() == RNSCommon.PeerAspect.DATA) ? QDN_ASPECT : CORE_ASPECT;
+                    if (existingId != null && existingAspect.equals(newAspect)
+                            && Arrays.equals(hashFromNameAndIdentity(existingAspect, existingId), newHash)) {
+                        log.info("addIncomingPeer: replacing stale {} incoming peer from {}",
+                                newAspect, encodeHexString(newHash));
                         it.remove();
                         existing.shutdownChannel();
                     }
@@ -1425,7 +1615,12 @@ public class RNS {
                         p.setIsPeerAvailable(false);
                         // Record failure so the reconnect loop backs off to requestPath() for this
                         // peer for PENDING_FAILURE_BACKOFF_MS, avoiding the cull cascade.
-                        pendingLinkFailureMs.put(encodeHexString(p.getDestinationHash()), System.currentTimeMillis());
+                        String phex = encodeHexString(p.getDestinationHash());
+                        if (p.getPeerAspect() == RNSCommon.PeerAspect.DATA) {
+                            pendingDataLinkFailureMs.put(phex, System.currentTimeMillis());
+                        } else {
+                            pendingLinkFailureMs.put(phex, System.currentTimeMillis());
+                        }
                         removeLinkedPeer(p);
                         // Do NOT call pLink.teardown() here.
                         // teardown() sets status=CLOSED → jobs() finds CLOSED link in pendingLinks
@@ -1468,7 +1663,8 @@ public class RNS {
                 if (nonNull(pl) && pl.getStatus() == ACTIVE) {
                     Identity remoteId = p.getServerIdentity();
                     if (remoteId != null) {
-                        String key = encodeHexString(hashFromNameAndIdentity(CORE_ASPECT, remoteId));
+                        String aspect = (p.getPeerAspect() == RNSCommon.PeerAspect.DATA) ? QDN_ASPECT : CORE_ASPECT;
+                        String key = encodeHexString(hashFromNameAndIdentity(aspect, remoteId));
                         byIdentity.computeIfAbsent(key, k -> new ArrayList<>()).add(p);
                     }
                 }
@@ -1536,10 +1732,21 @@ public class RNS {
                 log.error("Cannot announce - destination is null");
             }
         }
-        //if ((dataPeerCount <= MIN_DESIRED_DATA_PEERS) && (pa == RNSCommon.PeerAspect.DATA)) {
-        //    log.info("Active qdn peers ({}) <= desired data peers ({}). Announcing", dataPeerCount, MIN_DESIRED_CORE_PEERS);
-        //    d.announce();
-        //}
+        if ((dataPeerCount <= MIN_DESIRED_DATA_PEERS) && (pa == RNSCommon.PeerAspect.DATA)) {
+            log.info("Active DATA peers ({}) <= desired data peers ({}). Announcing (dest={})",
+                    dataPeerCount, MIN_DESIRED_DATA_PEERS, d != null ? encodeHexString(d.getHash()) : "null");
+            if (nonNull(d)) {
+                long announceT0 = System.currentTimeMillis();
+                d.announce();
+                long announceMs = System.currentTimeMillis() - announceT0;
+                log.info("DATA announce attempt completed in {}ms", announceMs);
+                if (announceMs > 5_000) {
+                    log.warn("DATA announce took {}ms — possible jobsLock contention", announceMs);
+                }
+            } else {
+                log.error("Cannot announce DATA - destination is null");
+            }
+        }
     }
 
     /**
@@ -1562,11 +1769,19 @@ public class RNS {
 
     // Called from ReticulumPeer.createPeerBuffer() when a peer's buffer is confirmed ACTIVE.
     // Only initiator peers call this (non-initiators have our own destination hash, not the remote's).
-    void confirmPeerHash(String hashHex) {
-        boolean isNew = this.knownPeerHashes.add(hashHex);
-        if (isNew) {
-            saveKnownPeerHashes();
-            log.debug("Confirmed ACTIVE peer hash {}", hashHex);
+    void confirmPeerHash(String hashHex, RNSCommon.PeerAspect aspect) {
+        if (aspect == RNSCommon.PeerAspect.DATA) {
+            boolean isNew = this.knownDataPeerHashes.add(hashHex);
+            if (isNew) {
+                saveKnownDataPeerHashes();
+                log.debug("Confirmed ACTIVE DATA peer hash {}", hashHex);
+            }
+        } else {
+            boolean isNew = this.knownPeerHashes.add(hashHex);
+            if (isNew) {
+                saveKnownPeerHashes();
+                log.debug("Confirmed ACTIVE peer hash {}", hashHex);
+            }
         }
     }
 
@@ -1589,6 +1804,40 @@ public class RNS {
             }
         } catch (IOException e) {
             log.warn("Failed to load known peer hashes: {}", e.getMessage());
+        }
+    }
+
+    private void saveKnownDataPeerHashes() {
+        if (reticulum == null) return;
+        try {
+            Path file = reticulum.getStoragePath().resolve(KNOWN_DATA_PEERS_FILE);
+            Set<String> toSave = knownDataPeerHashes.isEmpty() ? loadedDataPeerHashes : knownDataPeerHashes;
+            Files.write(file, toSave, UTF_8);
+            log.debug("Saved {} known DATA peer hashes to {}", toSave.size(), file);
+        } catch (IOException e) {
+            log.warn("Failed to save known DATA peer hashes: {}", e.getMessage());
+        }
+    }
+
+    private void loadKnownDataPeerHashes() {
+        if (reticulum == null) return;
+        try {
+            Path file = reticulum.getStoragePath().resolve(KNOWN_DATA_PEERS_FILE);
+            if (!Files.isReadable(file)) return;
+            List<String> lines = Files.readAllLines(file, UTF_8);
+            int loaded = 0;
+            for (String line : lines) {
+                String hex = line.trim();
+                if (!hex.isEmpty()) {
+                    loadedDataPeerHashes.add(hex);
+                    loaded++;
+                }
+            }
+            if (loaded > 0) {
+                log.info("Loaded {} known DATA peer hashes from {}", loaded, file);
+            }
+        } catch (IOException e) {
+            log.warn("Failed to load known DATA peer hashes: {}", e.getMessage());
         }
     }
 
@@ -1642,6 +1891,21 @@ public class RNS {
                 .filter(p -> p.isDataPeer())
                 .map(ReticulumPeer::getPeerData)
                 .collect(Collectors.toList());
+    }
+
+    // Returns all active DATA-aspect ReticulumPeers (both initiator and incoming).
+    // Used by NetworkData for outbound QDN dispatch over Reticulum.
+    public List<ReticulumPeer> getActiveDataPeers() {
+        return Stream.concat(
+                getActiveImmutableLinkedPeers().stream()
+                        .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.DATA),
+                getImmutableIncomingPeers().stream()
+                        .filter(p -> p.getPeerAspect() == RNSCommon.PeerAspect.DATA)
+                        .filter(p -> {
+                            var pl = p.getPeerLink();
+                            return nonNull(pl) && pl.getStatus() == ACTIVE;
+                        })
+        ).collect(Collectors.toList());
     }
 
     public ReticulumPeer findPeerByLink(Link link) {

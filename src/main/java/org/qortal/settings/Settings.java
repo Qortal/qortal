@@ -696,7 +696,7 @@ public class Settings {
 			""
 	};
 	private String[] reticulumBackboneGatewayServers = new String[]{
-			"phantom.mobilefabrik.com:4242"
+			""
 	};
 	/** There is a Python rnsd running on the node with a gateway inteface to use */
 	private boolean reticulumUsePythonRNS = false;

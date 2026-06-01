@@ -231,6 +231,11 @@ public class ReticulumPeer implements Peer {
      */
     @PeerCtor("destination-hash")
     public ReticulumPeer(byte[] dhash) {
+        this(dhash, RNSCommon.PeerAspect.BASE);
+    }
+
+    public ReticulumPeer(byte[] dhash, RNSCommon.PeerAspect aspect) {
+        this.peerAspect = aspect;
         this.destinationHash = dhash;
         this.serverIdentity = recall(dhash);
         //this.sendStreamId = getRandomStreamId();
@@ -302,10 +307,10 @@ public class ReticulumPeer implements Peer {
     public void initPeerLink() {
         peerDestination = new Destination(
             this.serverIdentity,
-            Direction.OUT, 
+            Direction.OUT,
             DestinationType.SINGLE,
             APP_NAME,
-            "core"
+            peerAspect == RNSCommon.PeerAspect.DATA ? "qdn" : "core"
         );
         peerDestination.setProofStrategy(ProofStrategy.PROVE_ALL);
 
@@ -414,7 +419,7 @@ public class ReticulumPeer implements Peer {
             // Record this peer's hash as confirmed-active so it's saved for fast reconnect on restart.
             // Only initiator peers have the remote's destination hash; non-initiators have our own hash.
             if (Boolean.TRUE.equals(isInitiator)) {
-                RNS.getInstance().confirmPeerHash(encodeHexString(destinationHash));
+                RNS.getInstance().confirmPeerHash(encodeHexString(destinationHash), this.peerAspect);
             }
             // Chain tip is NOT sent here — sending immediately on link establishment caused
             // Channel "retry count exceeded" teardowns. broadcastOurChain() delivers it shortly.
@@ -469,17 +474,11 @@ public class ReticulumPeer implements Peer {
     }
 
     public void disconnect(String reason) {
-        log.debug("@@@-> Disconnecting peer {} after {} - reason: {}", this.toString(), getConnectionAge(), reason);
+        log.info("@@@-> Disconnecting peer {} after {} - reason: {}", this.toString(), getConnectionAge(), reason);
         var isShuttingDown = RNS.getInstance().isShuttingDown();
         log.debug("ReticulumPeer disconnect, RNS isShuttingDown: {}", isShuttingDown);
         if (!isShuttingDown) {
             makePeerUnavailable();
-            //if (nonNull(this.peerBuffer)) {
-            //    shutdownChannel();
-            //    this.peerBuffer.close();
-            ////    this.peerBuffer = null;
-            //}
-            //this.peerLink.teardown();
         }
         this.isPeerAvailable = false;
     }
@@ -536,19 +535,27 @@ public class ReticulumPeer implements Peer {
     }
 
     public void makePeerAvailable() {
-        var network = Network.getInstance();
-        network.addConnectedPeer(this);
-        network.addOutboundHandshakedPeer(this);
-        network.addHandshakedPeer(this);
+        if (this.peerAspect != RNSCommon.PeerAspect.DATA) {
+            // DATA peers are tracked by RNS's own linkedPeers/incomingPeers lists.
+            // NetworkData accesses them via RNS.getActiveDataPeers() — no registration here.
+            var network = Network.getInstance();
+            network.addConnectedPeer(this);
+            network.addHandshakedPeer(this);
+            if (Boolean.TRUE.equals(this.isInitiator)) {
+                network.addOutboundHandshakedPeer(this);
+            }
+        }
         this.isPeerAvailable = true;
     }
 
     public void makePeerUnavailable() {
         this.isPeerAvailable = false;
-        var network = Network.getInstance();
-        network.removeHandshakedPeer(this);
-        network.removeOutboundHandshakedPeer(this);
-        network.removeConnectedPeer(this);
+        if (this.peerAspect != RNSCommon.PeerAspect.DATA) {
+            var network = Network.getInstance();
+            network.removeHandshakedPeer(this);
+            network.removeOutboundHandshakedPeer(this);
+            network.removeConnectedPeer(this);
+        }
         this.isPeerAvailable = false;
     }
 
@@ -615,8 +622,16 @@ public class ReticulumPeer implements Peer {
         } else {
             log.info("linkClosed callback: no handled standard reason");
         }
+        // Remove incoming peers immediately when their link closes, so reconnecting nodes
+        // don't accumulate stale-but-still-ACTIVE entries in incomingPeers between pruning
+        // cycles (which run every ~60s). Submitted to rnsWorkerPool to avoid calling
+        // removeIncomingPeer() directly from the Reticulum I/O thread while prunePeers()
+        // may be iterating the list on the Controller thread.
+        if (!Boolean.TRUE.equals(isInitiator) && !RNS.getInstance().isShuttingDown()) {
+            RNS.getInstance().markPeerForImmediateRemoval(this);
+        }
     }
-    
+
     public void linkPacketReceived(byte[] message, Packet packet) {
         var msgText = new String(message, StandardCharsets.UTF_8);
         if (msgText.equals("ping")) {
@@ -1062,11 +1077,10 @@ public class ReticulumPeer implements Peer {
         //    // Send failure
         //    return false;
         } catch (IllegalStateException e) {
-            //log.warn("Can't write to buffer (remote buffer down?)");
-            //shutdownChannel();
-            //this.peerLink.teardown();
-            //this.peerBuffer = null;
-            log.error("IllegalStateException - can't write to buffer: {}", e);
+            log.warn("sendMessage (queued): buffer closed for {} (link tearing down), marking for removal",
+                    encodeHexString(destinationHash));
+            this.setDeleteMe(true);
+            RNS.getInstance().markPeerForImmediateRemoval(this);
             return false;
         } catch (MessageException e) {
             log.error(e.getMessage(), e);
@@ -1178,17 +1192,18 @@ public class ReticulumPeer implements Peer {
                 return false;
             }
         } catch (IllegalStateException e) {
-            log.error("IllegalStateException - can't write to buffer: {}", e);
-            //shutdownChannel();
-            //this.peerLink.teardown();
-            //this.peerBuffer = null;
-            //return false;
+            // Buffer is closed — the link is tearing down. Mark for removal so this peer
+            // disappears from getActiveDataPeers() / getActiveImmutableLinkedPeers() on the
+            // next loop iteration without waiting for prunePeers().
+            log.warn("sendMessage: buffer closed for {} (link tearing down), marking for removal",
+                    encodeHexString(destinationHash));
+            this.setDeleteMe(true);
+            RNS.getInstance().markPeerForImmediateRemoval(this);
+            return false;
         } catch (MessageException e) {
             log.error(e.getMessage(), e);
-            //return false;
+            return false;
         }
-        // ReticulumPeer state is not governed by the network.
-        // Regardless we need to satisfy the Peer interface.
         return true;
     }
 

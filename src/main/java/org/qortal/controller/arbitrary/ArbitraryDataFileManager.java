@@ -31,6 +31,7 @@ import org.qortal.data.arbitrary.ArbitraryRelayInfo;
 import org.qortal.data.network.PeerData;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.network.NetworkData;
+import org.qortal.network.RNS;
 import org.qortal.network.Peer;
 import org.qortal.network.PeerAddress;
 import org.qortal.network.PeerList;
@@ -158,6 +159,23 @@ public class ArbitraryDataFileManager extends Thread {
      */
     private String createRelayKey(String hash58, Peer sourcePeer) {
         return hash58 + "|" + sourcePeer.getPeerData().getAddress().toString();
+    }
+
+    /**
+     * Compares two PeerAddresses for equality without assuming an IP host is present.
+     * Reticulum peers have no IP host; they're compared by destination hash.
+     * TCP/IP peers are compared by host:port.
+     */
+    private static boolean isSamePeerAddress(PeerAddress a, PeerAddress b) {
+        if (a == null || b == null) return false;
+        byte[] dhashA = a.getDestinationHash();
+        byte[] dhashB = b.getDestinationHash();
+        if (dhashA != null || dhashB != null) {
+            return Arrays.equals(dhashA, dhashB);
+        }
+        String hostA = a.getHost();
+        String hostB = b.getHost();
+        return hostA != null && hostA.equalsIgnoreCase(hostB) && a.getPort() == b.getPort();
     }
     
     /**
@@ -560,6 +578,23 @@ public class ArbitraryDataFileManager extends Thread {
 		Peer getRequestingPeer(PeerList connectedPeers) {
 			return connectedPeers.get(requestingPeerData);
 		}
+
+		/**
+		 * Resolves the Peer, falling back to a Reticulum peer list when TCP/IP lookup returns null
+		 * (Reticulum peers have no IP host and are excluded from PeerList's map).
+		 */
+		Peer getRequestingPeer(PeerList connectedPeers, List<? extends Peer> reticulumPeers) {
+			Peer found = getRequestingPeer(connectedPeers);
+			if (found != null) return found;
+			if (reticulumPeers == null || requestingPeerData == null) return null;
+			byte[] dhash = requestingPeerData.getAddress().getDestinationHash();
+			if (dhash == null) return null;
+			for (Peer p : reticulumPeers) {
+				if (Arrays.equals(p.getPeerData().getAddress().getDestinationHash(), dhash))
+					return p;
+			}
+			return null;
+		}
 	}
 
     private ArbitraryDataFileManager() {
@@ -573,13 +608,15 @@ public class ArbitraryDataFileManager extends Thread {
         cleaner.scheduleAtFixedRate(() -> {
             int totalRemoved = 0;
             PeerList connectedPeers = NetworkData.getInstance().getImmutableHandshakedPeers();
+            List<? extends Peer> rnsPeers = RNS.getInstance().isMeshStarted()
+                    ? RNS.getInstance().getActiveDataPeers() : Collections.emptyList();
             Iterator<Map.Entry<String, List<PendingRelayForward>>> iterator = pendingRelayForwards.entrySet().iterator();
-            
+
             while (iterator.hasNext()) {
                 Map.Entry<String, List<PendingRelayForward>> entry = iterator.next();
                 String compositeKey = entry.getKey();  // Format: hash58|peerAddress
                 List<PendingRelayForward> forwards = entry.getValue();
-                
+
                 // Remove stale forwards and disconnected peers from the list
                 int beforeSize = forwards.size();
                 forwards.removeIf(forward -> {
@@ -588,7 +625,7 @@ public class ArbitraryDataFileManager extends Thread {
                         return true;
                     }
                     // Remove if peer is no longer connected (prevents memory leak from stale Peer references)
-                    Peer peer = forward.getRequestingPeer(connectedPeers);
+                    Peer peer = forward.getRequestingPeer(connectedPeers, rnsPeers);
                     return peer == null;
                 });
                 int removedCount = beforeSize - forwards.size();
@@ -847,12 +884,14 @@ public class ArbitraryDataFileManager extends Thread {
         final long relayMinimumTimestamp = now - ArbitraryDataManager.getInstance().ARBITRARY_RELAY_TIMEOUT;
         // Clean up relay map: remove stale entries AND entries for disconnected peers
         PeerList connectedPeers = NetworkData.getInstance().getImmutableHandshakedPeers();
+        List<? extends Peer> rnsPeers = RNS.getInstance().isMeshStarted()
+                ? RNS.getInstance().getActiveDataPeers() : Collections.emptyList();
         arbitraryRelayMap.removeIf(entry -> {
             if (entry == null || entry.getTimestamp() == null || entry.getTimestamp() < relayMinimumTimestamp) {
                 return true; // Remove stale entries
             }
             // Also remove entries for peers that are no longer connected (prevents memory leak)
-            if (entry.getPeerData() != null && entry.getPeer(connectedPeers) == null) {
+            if (entry.getPeerData() != null && entry.getPeer(connectedPeers, rnsPeers) == null) {
                 LOGGER.trace("Removing relay map entry for disconnected peer: {}", entry.getPeerData());
                 return true;
             }
@@ -992,18 +1031,20 @@ public class ArbitraryDataFileManager extends Thread {
             
             // Get current connected peers snapshot for resolving Peer objects
             PeerList connectedPeers = NetworkData.getInstance().getImmutableHandshakedPeers();
-            
+            List<? extends Peer> rnsPeers = RNS.getInstance().isMeshStarted()
+                    ? RNS.getInstance().getActiveDataPeers() : Collections.emptyList();
+
             // Forward to all peers that requested this hash from us
             for (PendingRelayForward forward : pendingRequests) {
                 // Skip stale requests
                 if (forward.isStale()) {
-                    LOGGER.debug("Skipping stale relay forward for hash {} to peer {} (age: {}ms)", 
+                    LOGGER.debug("Skipping stale relay forward for hash {} to peer {} (age: {}ms)",
                             hash58, forward.requestingPeerData, NTP.getTime() - forward.timestamp);
                     continue;
                 }
-                
+
                 // Resolve Peer object from connected peers (filters out disconnected peers)
-                Peer requestingPeer = forward.getRequestingPeer(connectedPeers);
+                Peer requestingPeer = forward.getRequestingPeer(connectedPeers, rnsPeers);
                 if (requestingPeer == null) {
                     // Peer is no longer connected - skip this forward
                     LOGGER.debug("Skipping relay forward for hash {} - peer {} is no longer connected", 
@@ -1629,7 +1670,9 @@ public class ArbitraryDataFileManager extends Thread {
                 
                 // Get the relay peer info - resolve from connected peers to avoid stale references
                 PeerList connectedPeers = NetworkData.getInstance().getImmutableHandshakedPeers();
-                Peer relayPeer = relayInfo.getPeer(connectedPeers);
+                List<? extends Peer> rnsPeers = RNS.getInstance().isMeshStarted()
+                        ? RNS.getInstance().getActiveDataPeers() : Collections.emptyList();
+                Peer relayPeer = relayInfo.getPeer(connectedPeers, rnsPeers);
                 PeerData relayPeerData = relayInfo.getPeerData();
                 PeerAddress relayPeerAddress = relayPeerData != null ? relayPeerData.getAddress() : null;
                 
@@ -1645,18 +1688,16 @@ public class ArbitraryDataFileManager extends Thread {
                     if (relayPeer != null) {
                         PeerAddress requestingPeerAddress = peer.getPeerData().getAddress();
                         PeerAddress resolvedRelayAddress = relayPeer.getPeerData().getAddress();
-                        
-                        // Check if the relay peer is the same as the requesting peer (would create a loop)
-                        boolean isSamePeer = requestingPeerAddress.getHost().equalsIgnoreCase(resolvedRelayAddress.getHost())
-                                          && requestingPeerAddress.getPort() == resolvedRelayAddress.getPort();
-                        
+
+                        // Check if the relay peer is the same as the requesting peer (would create a loop).
+                        // Use destination hash for Reticulum peers (no IP host); host:port for TCP/IP peers.
+                        boolean isSamePeer = isSamePeerAddress(requestingPeerAddress, resolvedRelayAddress);
+
                         if (isSamePeer) {
-                            LOGGER.debug("Relay loop detected for hash {}! Optimal relay peer {} ({}:{}) is the SAME as requesting peer {} ({}:{})", 
-                                    hash58,
-                                    relayPeer, resolvedRelayAddress.getHost(), resolvedRelayAddress.getPort(),
-                                    peer, requestingPeerAddress.getHost(), requestingPeerAddress.getPort());
+                            LOGGER.debug("Relay loop detected for hash {}! Optimal relay peer {} is the SAME as requesting peer {}",
+                                    hash58, resolvedRelayAddress, requestingPeerAddress);
                             LOGGER.debug("This indicates multiple relay infos exist and hop-count optimization selected the requester");
-                            
+
                             // Try to find an alternative relay peer that ISN'T the requesting peer
                             if (allRelayInfos != null && allRelayInfos.size() > 1) {
                                 LOGGER.debug("Searching for alternative relay peer from {} available options", allRelayInfos.size());
@@ -1665,19 +1706,17 @@ public class ArbitraryDataFileManager extends Thread {
                                             PeerAddress infoAddr = info.getPeerData() != null ? info.getPeerData().getAddress() : null;
                                             if (infoAddr == null) return false;
                                             // Filter out the requesting peer to prevent loops
-                                            boolean isNotRequestingPeer = !(infoAddr.getHost().equalsIgnoreCase(requestingPeerAddress.getHost())
-                                                                         && infoAddr.getPort() == requestingPeerAddress.getPort());
-                                            return isNotRequestingPeer;
+                                            return !isSamePeerAddress(infoAddr, requestingPeerAddress);
                                         })
                                         .min(Comparator.comparingInt(info -> info.getRequestHops() != null ? info.getRequestHops() : Integer.MAX_VALUE))
                                         .orElse(null);
-                                
+
                                 if (alternativeRelayInfo != null) {
-                                    LOGGER.debug("Found alternative relay peer: {} (hops: {})", 
+                                    LOGGER.debug("Found alternative relay peer: {} (hops: {})",
                                             alternativeRelayInfo.getPeerData().getAddress(),
                                             alternativeRelayInfo.getRequestHops());
                                     relayInfo = alternativeRelayInfo;
-                                    relayPeer = relayInfo.getPeer(connectedPeers);
+                                    relayPeer = relayInfo.getPeer(connectedPeers, rnsPeers);
                                     relayPeerData = relayInfo.getPeerData();
                                     relayPeerAddress = relayPeerData != null ? relayPeerData.getAddress() : null;
                                 } else {

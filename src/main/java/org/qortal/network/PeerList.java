@@ -47,10 +47,12 @@ public class PeerList implements Iterable<Peer> {
         // Create an immutable list copy
         this.peerList = List.copyOf(sourcePeers);
 
-        // Build a map for fast lookups based on the peer's host (case-insensitive)
+        // Build a map for fast lookups based on the peer's host (case-insensitive).
+        // Peers without an IP host (e.g. Reticulum peers) are excluded from the map
+        // but remain in peerList for iteration.
         this.peerMap = this.peerList.stream()
+                .filter(peer -> peer.getPeerData().getAddress().getHost() != null)
                 .collect(Collectors.toMap(
-                        // Use the case-insensitive host as the key
                         peer -> peer.getPeerData().getAddress().getHost().toLowerCase(),
                         Function.identity(),
                         (existing, replacement) -> existing // Handle duplicates, keep existing
@@ -68,9 +70,10 @@ public class PeerList implements Iterable<Peer> {
         if (pd == null || pd.getAddress() == null) {
             return null;
         }
-        // Get host and lookup using the case-insensitive key
-        final String host = pd.getAddress().getHost().toLowerCase();
-        return peerMap.get(host);
+        // Get host and lookup using the case-insensitive key (null for Reticulum peers → not in map)
+        final String host = pd.getAddress().getHost();
+        if (host == null) return null;
+        return peerMap.get(host.toLowerCase());
     }
 
     /**
@@ -84,9 +87,10 @@ public class PeerList implements Iterable<Peer> {
         if (pa == null) {
             return null;
         }
-        // Get host and lookup using the case-insensitive key
-        final String host = pa.getHost().toLowerCase();
-        return peerMap.get(host);
+        // Get host and lookup using the case-insensitive key (null for Reticulum peers → not in map)
+        final String host = pa.getHost();
+        if (host == null) return null;
+        return peerMap.get(host.toLowerCase());
     }
 
     /**
@@ -100,9 +104,10 @@ public class PeerList implements Iterable<Peer> {
         if (pd == null || pd.getAddress() == null) {
             return false;
         }
-        // Get host and check using the case-insensitive key
-        final String host = pd.getAddress().getHost().toLowerCase();
-        return peerMap.containsKey(host);
+        // Get host and check using the case-insensitive key (null for Reticulum peers → not in map)
+        final String host = pd.getAddress().getHost();
+        if (host == null) return false;
+        return peerMap.containsKey(host.toLowerCase());
     }
 
     /**
@@ -116,9 +121,10 @@ public class PeerList implements Iterable<Peer> {
         if (pa == null) {
             return false;
         }
-        // Get host and check using the case-insensitive key
-        final String host = pa.getHost().toLowerCase();
-        return peerMap.containsKey(host);
+        // Get host and check using the case-insensitive key (null for Reticulum peers → not in map)
+        final String host = pa.getHost();
+        if (host == null) return false;
+        return peerMap.containsKey(host.toLowerCase());
     }
 
     /**

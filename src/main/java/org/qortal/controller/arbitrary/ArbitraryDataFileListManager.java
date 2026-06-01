@@ -1098,9 +1098,15 @@ public class ArbitraryDataFileListManager {
                             relayGetArbitraryDataFileListMessage.setId(message.getId());
 
                             LOGGER.debug("Rebroadcasting hash list request from peer {} for signature {} to our other peers... totalRequestTime: {}, requestHops: {}", peer, Base58.encode(signature), totalRequestTime, requestHops);
+                            final String senderHost = peer.getPeerData().getAddress().getHost();
                             NetworkData.getInstance().broadcast(
-                                    broadcastPeer ->
-                                            broadcastPeer == peer || Objects.equals(broadcastPeer.getPeerData().getAddress().getHost(), peer.getPeerData().getAddress().getHost()) ? null : relayGetArbitraryDataFileListMessage
+                                    broadcastPeer -> {
+                                        if (broadcastPeer == peer) return null;
+                                        // Skip same-IP peers (TCP/IP only; null-host Reticulum peers are excluded from this check)
+                                        String bcastHost = broadcastPeer.getPeerData().getAddress().getHost();
+                                        if (senderHost != null && senderHost.equals(bcastHost)) return null;
+                                        return relayGetArbitraryDataFileListMessage;
+                                    }
                             );
                         } else {
                             LOGGER.trace("Request has reached the maximum number of allowed hops");
