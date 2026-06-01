@@ -93,19 +93,24 @@ public class TradeOffersWebSocket extends ApiWebSocket implements Listener {
 				Map<ByteArray, Supplier<ACCT>> acctsByCodeHash = SupportedBlockchain.getFilteredAcctMap(blockchain);
 				List<CrossChainOfferSummary> crossChainOfferSummaries = new ArrayList<>();
 
+				// Do all repository/DB work OUTSIDE the cachedInfoByBlockchain monitor. Holding that
+				// lock across these AT-state queries (once per block, per blockchain, per ACCT) blocked
+				// every onWebSocketConnect() reader for the full scan duration — the source of the
+				// java.util.HashMap monitor contention seen in profiling. The lock only needs to guard
+				// the in-memory cache mutation below.
+				for (Map.Entry<ByteArray, Supplier<ACCT>> acctInfo : acctsByCodeHash.entrySet()) {
+					byte[] codeHash = acctInfo.getKey().value;
+					ACCT acct = acctInfo.getValue().get();
+
+					List<ATStateData> atStates = repository.getATRepository().getMatchingFinalATStates(codeHash, null, null,
+							isFinished, dataByteOffset, expectedValue, minimumFinalHeight,
+							null, null, null);
+
+					crossChainOfferSummaries.addAll(produceSummaries(repository, acct, atStates, blockData.getTimestamp()));
+				}
+
 				synchronized (cachedInfoByBlockchain) {
 					CachedOfferInfo cachedInfo = cachedInfoByBlockchain.computeIfAbsent(blockchain.name(), k -> new CachedOfferInfo());
-
-					for (Map.Entry<ByteArray, Supplier<ACCT>> acctInfo : acctsByCodeHash.entrySet()) {
-						byte[] codeHash = acctInfo.getKey().value;
-						ACCT acct = acctInfo.getValue().get();
-
-						List<ATStateData> atStates = repository.getATRepository().getMatchingFinalATStates(codeHash, null, null,
-								isFinished, dataByteOffset, expectedValue, minimumFinalHeight,
-								null, null, null);
-
-						crossChainOfferSummaries.addAll(produceSummaries(repository, acct, atStates, blockData.getTimestamp()));
-					}
 
 					// Remove any entries unchanged from last time
 					crossChainOfferSummaries.removeIf(offerSummary -> cachedInfo.previousAtModes.get(offerSummary.getQortalAtAddress()) == offerSummary.getMode());

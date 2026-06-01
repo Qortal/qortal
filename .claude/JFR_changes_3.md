@@ -142,6 +142,42 @@ unbounded `LinkedBlockingQueue` never grows past 10 threads) and was left alone.
 
 ---
 
+## P2 — TradeOffersWebSocket.java: DB queries under a java.util.HashMap monitor
+
+**File:** `src/main/java/org/qortal/api/websocket/TradeOffersWebSocket.java`
+**Status:** applied, **not yet committed**
+
+**Problem:** The analysis flagged `JavaMonitorEnter` contention on a raw
+`java.util.HashMap` (20 events, 5,570ms, ~278ms average wait). The `JavaMonitorEnter`
+class is the key clue: a data race *without* synchronization produces no monitor
+events, so this had to be an explicit `synchronized (someHashMap)`. After ruling out
+the wrapper-typed (`Collections$SynchronizedMap`) and non-map lock objects, and the
+plain-HashMap monitors that are only ever touched single-threaded (`AccountRefCache`,
+used solely from single-threaded `Block.process()`/`orphan()`) or hold no I/O
+(`ChatNotifier.listenersBySession`, `TradeBotWebSocket.PREVIOUS_STATES`), the culprit
+was `TradeOffersWebSocket.cachedInfoByBlockchain` (`new HashMap<>()`).
+
+Its `listen()` method (a `NewChainTipEvent` handler, fired every block) held
+`synchronized (cachedInfoByBlockchain)` across a loop of
+`repository.getATRepository().getMatchingFinalATStates(...)` + `produceSummaries(...)`
+**DB queries** — once per supported blockchain, per ACCT. Meanwhile
+`onWebSocketConnect()` also locks `cachedInfoByBlockchain` to read initial data, so
+every client connecting during a block's AT-state scan blocked for the full scan
+duration. (Not a corruption risk — it *is* synchronized — but the monitor was held
+far too long.)
+
+**Fix:** Moved all repository/DB work in `listen()` *outside* the
+`synchronized (cachedInfoByBlockchain)` block. The DB queries build the
+`crossChainOfferSummaries` list with no lock held; the monitor is then taken only for
+the fast in-memory cache mutation (diff against `previousAtModes`, update
+`currentSummaries`/`historicSummaries`, prune >24h entries). The lock's real job —
+guarding the cache structure between the `listen()` writer and the
+`onWebSocketConnect()` reader — is preserved; the slow DB scan no longer blocks
+connecting clients. Behavior (including the "skip if unchanged" `continue` and
+historic pruning) is unchanged.
+
+---
+
 ## P7 — NTP.java: unbounded, unnamed NTP poll pool (~25 threads/min)
 
 **File:** `src/main/java/org/qortal/utils/NTP.java`
@@ -175,6 +211,5 @@ next profile will name it explicitly.)
 
 | ID | Description | Notes |
 |----|-------------|-------|
-| P2 | Raw `java.util.HashMap` contention (5,570ms) | **Correctness risk** — find the unsynchronized `HashMap` shared across threads; possible data race. Needs investigation to locate. |
 | P6 | X25519 field-element allocation (BouncyCastle, 14k events) | Allocation/GC pressure only. Requires crypto-layer change (cache per-peer shared secrets or switch to JVM-native XDH). |
 | P8 | Restore heap headroom (`-Xmx`) | GC tuning — startup-script territory like P0; may already be set. |
