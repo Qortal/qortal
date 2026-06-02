@@ -299,10 +299,31 @@ public abstract class Crypto {
 		return signature;
 	}
 
-	public static byte[] getSharedSecret(byte[] privateKey, byte[] publicKey) {
+	/**
+	 * Converts an Ed25519 private key into reusable X25519 private-key parameters.
+	 * <p>
+	 * The Ed25519&rarr;X25519 derivation (a SHA-512 digest plus clamping) is deterministic, so for a
+	 * fixed private key (e.g. a node's network key, which lives for the JVM lifetime) the result can be
+	 * computed once and reused across every {@link #getSharedSecret(X25519PrivateKeyParameters, byte[])}
+	 * call instead of being re-derived on each handshake.
+	 */
+	public static X25519PrivateKeyParameters toX25519PrivateKeyParams(byte[] privateKey) {
 		byte[] x25519PrivateKey = Qortal25519Extras.toX25519PrivateKey(privateKey);
-		X25519PrivateKeyParameters xPrivateKeyParams = new X25519PrivateKeyParameters(x25519PrivateKey, 0);
+		return new X25519PrivateKeyParameters(x25519PrivateKey, 0);
+	}
 
+	public static byte[] getSharedSecret(byte[] privateKey, byte[] publicKey) {
+		return getSharedSecret(toX25519PrivateKeyParams(privateKey), publicKey);
+	}
+
+	/**
+	 * Computes the X25519 shared secret using pre-derived private-key parameters.
+	 * <p>
+	 * Callers that repeatedly use the same private key (e.g. the network handshake) should cache the
+	 * {@link X25519PrivateKeyParameters} via {@link #toX25519PrivateKeyParams(byte[])} and use this
+	 * overload, avoiding the per-call Ed25519&rarr;X25519 private-key derivation.
+	 */
+	public static byte[] getSharedSecret(X25519PrivateKeyParameters xPrivateKeyParams, byte[] publicKey) {
 		byte[] x25519PublicKey = Qortal25519Extras.toX25519PublicKey(publicKey);
 		X25519PublicKeyParameters xPublicKeyParams = new X25519PublicKeyParameters(x25519PublicKey, 0);
 

@@ -164,6 +164,15 @@ public class Peer {
 
     byte[] ourChallenge;
 
+    /**
+     * Cached X25519 shared secret for this peer's handshake.
+     * <p>
+     * The handshake computes the same shared secret twice (once when sending our RESPONSE, once when
+     * validating the peer's RESPONSE); it depends only on our fixed node key and the peer's public key,
+     * so it is computed once and reused. See {@code Handshake} RESPONSE handling.
+     */
+    private volatile byte[] handshakeSharedSecret;
+
     private boolean syncInProgress = false;
 
     /* Pending signature requests */
@@ -552,6 +561,14 @@ public class Peer {
         synchronized (this.peerInfoLock) {
             this.peersPublicKey = peerPublicKey;
         }
+    }
+
+    protected byte[] getHandshakeSharedSecret() {
+        return this.handshakeSharedSecret;
+    }
+
+    protected void setHandshakeSharedSecret(byte[] sharedSecret) {
+        this.handshakeSharedSecret = sharedSecret;
     }
 
     public String getHostName() {

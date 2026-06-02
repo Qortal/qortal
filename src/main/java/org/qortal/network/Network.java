@@ -5,6 +5,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
+import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.qortal.block.BlockChain;
 import org.qortal.controller.Controller;
 import org.qortal.controller.arbitrary.ArbitraryDataFileListManager;
@@ -118,6 +119,9 @@ public class Network {
     private final Ed25519PrivateKeyParameters edPrivateKeyParams = new Ed25519PrivateKeyParameters(new SecureRandom());
     private final Ed25519PublicKeyParameters edPublicKeyParams = edPrivateKeyParams.generatePublicKey();
     private final String ourNodeId = Crypto.toNodeAddress(edPublicKeyParams.getEncoded());
+    // Our node key is fixed for the JVM lifetime, so derive the X25519 private params once and reuse
+    // them for every handshake shared-secret rather than re-deriving (SHA-512 + clamp) on each call.
+    private final X25519PrivateKeyParameters ourX25519PrivateKeyParams = Crypto.toX25519PrivateKeyParams(edPrivateKeyParams.getEncoded());
 
     private final int maxMessageSize;
     private final int minOutboundPeers;
@@ -1830,7 +1834,7 @@ public class Network {
     }
 
     protected byte[] getSharedSecret(byte[] publicKey) {
-        return Crypto.getSharedSecret(this.edPrivateKeyParams.getEncoded(), publicKey);
+        return Crypto.getSharedSecret(this.ourX25519PrivateKeyParams, publicKey);
     }
 
     /**

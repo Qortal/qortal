@@ -207,9 +207,47 @@ next profile will name it explicitly.)
 
 ---
 
+## P6 — Redundant X25519 shared-secret computation in the handshake
+
+**Files:** `src/main/java/org/qortal/crypto/Crypto.java`,
+`src/main/java/org/qortal/network/Network.java`,
+`src/main/java/org/qortal/network/NetworkData.java`,
+`src/main/java/org/qortal/network/Peer.java`,
+`src/main/java/org/qortal/network/Handshake.java`
+**Status:** applied, **not yet committed**
+
+**Context — this is the lowest-impact JFR item.** `X25519Field.create()` (`new int[10]`)
+showed 14,124 allocation events but ranked only **14th** by allocation *weight*: ≈0.8 MB
+over the 61-min window of tiny, short-lived young-gen arrays that never reach old gen. It
+is **not a GC driver.** The real cost is the CPU of the X25519 scalar multiplication, and
+two redundancies in the handshake path. The analysis's suggested options were rejected:
+switching to JVM-native `KeyAgreement("XDH")` would risk the handshake's byte-for-byte
+compatibility (Qortal uses a custom Ed25519→X25519 birational map + SHA-512 clamping), and
+pooling `int[10]` arrays would require forking BouncyCastle — both poor trade-offs for
+~0.8 MB/h. Only the two zero-wire-change wins (A + B) were applied. (P3's reduction in
+handshake churn already lowers this proportionally.)
+
+**Fix A — derive our X25519 private params once.** The node's Ed25519 key is fixed for
+the JVM lifetime, yet `getSharedSecret` re-ran `toX25519PrivateKey` (a SHA-512 digest) and
+`new X25519PrivateKeyParameters` on every call. Added `Crypto.toX25519PrivateKeyParams(...)`
+plus a `getSharedSecret(X25519PrivateKeyParameters, byte[])` overload; `Network` and
+`NetworkData` now cache `ourX25519PrivateKeyParams` once at construction and pass it in. The
+existing `getSharedSecret(byte[], byte[])` is retained (delegates to the overload) for other
+callers (e.g. `PrivateKeyAccount`).
+
+**Fix B — compute the per-handshake secret once.** The shared secret was computed twice per
+handshake — in `RESPONSE.action()` (sending our RESPONSE) and in the RESPONSE message handler
+(validating the peer's). Both use the same `(our fixed key, peer's public key)` → identical
+result. Added a `volatile byte[] handshakeSharedSecret` field + accessors on `Peer`, and a
+`Handshake.getOrComputeSharedSecret(peer, peersPublicKey)` helper that computes once, caches
+on the peer, and reuses. The concurrent compute is benign (deterministic result; worst case
+matches the old double-compute). No wire bytes change — the secret is identical, just computed
+once and reused.
+
+---
+
 ## Remaining (not yet applied)
 
 | ID | Description | Notes |
 |----|-------------|-------|
-| P6 | X25519 field-element allocation (BouncyCastle, 14k events) | Allocation/GC pressure only. Requires crypto-layer change (cache per-peer shared secrets or switch to JVM-native XDH). |
 | P8 | Restore heap headroom (`-Xmx`) | GC tuning — startup-script territory like P0; may already be set. |
