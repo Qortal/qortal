@@ -185,6 +185,7 @@ public class RNS {
     // just in case the classic TCP/IP Networking is turned off.
     private static final byte[] MAINNET_MESSAGE_MAGIC = new byte[]{0x51, 0x4f, 0x52, 0x54}; // QORT
     private static final byte[] TESTNET_MESSAGE_MAGIC = new byte[]{0x71, 0x6f, 0x72, 0x54}; // qort
+    //private static final byte[] TESTNET_MESSAGE_MAGIC = new byte[]{0x64, 0x65, 0x76, 0x4E}; // devN with '"isTestNet": true'
     private static final int BROADCAST_CHAIN_TIP_DEPTH = 7; // (~1440 bytes)
     /**
      * How long between informational broadcasts to all ACTIVE peers, in milliseconds.
