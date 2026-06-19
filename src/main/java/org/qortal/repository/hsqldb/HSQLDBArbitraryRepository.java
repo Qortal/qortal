@@ -1101,6 +1101,10 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 			bindParams.add(service.value);
 		}
 
+		if (defaultResource) {
+			sql.append(" AND identifier='default'");
+		}
+
 		// Handle general query matches
 		if (query != null) {
 			// Search anywhere in the fields, unless "prefixOnly" has been requested
@@ -1109,8 +1113,8 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 			String queryWildcard = prefixOnly ? String.format("%s%%", query.toLowerCase()) : String.format("%%%s%%", query.toLowerCase());
 
 			if (defaultResource) {
-				// Default resource requested - use NULL identifier and search name only
-				sql.append(" AND LCASE(name) LIKE ? AND identifier='default'");
+				// Default resource requested - search name only
+				sql.append(" AND LCASE(name) LIKE ?");
 				bindParams.add(queryWildcard);
 			} else {
 				// Non-default resource requested

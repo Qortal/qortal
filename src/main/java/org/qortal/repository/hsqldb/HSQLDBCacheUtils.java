@@ -212,6 +212,10 @@ public class HSQLDBCacheUtils {
         if( service.isPresent() )
             stream = stream.filter(candidate -> candidate.service.equals(service.get()));
 
+        if (defaultResource) {
+            stream = stream.filter(candidate -> isDefaultIdentifier(candidate.identifier));
+        }
+
         // filter by query (either identifier, name, title or description)
         if (query.isPresent()) {
 
@@ -219,7 +223,7 @@ public class HSQLDBCacheUtils {
                     = prefixOnly ? getPrefixPredicate(query.get()) : getContainsPredicate(query.get());
 
             if (defaultResource) {
-                stream = stream.filter( candidate -> DEFAULT_IDENTIFIER.equals( candidate.identifier ) && predicate.test(candidate.name));
+                stream = stream.filter(candidate -> predicate.test(candidate.name));
             } else {
                 stream = stream.filter( candidate -> passQuery(predicate, candidate));
             }
@@ -445,6 +449,8 @@ public class HSQLDBCacheUtils {
                 if (r.name == null || !followedLower.contains(r.name.toLowerCase())) continue;
             }
 
+            if (defaultResource && !isDefaultIdentifier(r.identifier)) continue;
+
             if (identifier != null && !identifier.isEmpty()) {
                 String id = r.identifier;
                 if (id == null) continue;
@@ -457,7 +463,7 @@ public class HSQLDBCacheUtils {
                 String q = query.toLowerCase();
                 boolean queryMatch;
                 if (defaultResource) {
-                    queryMatch = DEFAULT_IDENTIFIER.equals(r.identifier) && r.name != null
+                    queryMatch = r.name != null
                             && (prefixOnly ? r.name.toLowerCase().startsWith(q) : r.name.toLowerCase().contains(q));
                 } else {
                     queryMatch = (r.name != null && (prefixOnly ? r.name.toLowerCase().startsWith(q) : r.name.toLowerCase().contains(q)))
@@ -535,6 +541,10 @@ public class HSQLDBCacheUtils {
         }
 
         return stream;
+    }
+
+    private static boolean isDefaultIdentifier(String identifier) {
+        return identifier == null || DEFAULT_IDENTIFIER.equals(identifier);
     }
 
     /**

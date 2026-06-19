@@ -17,7 +17,10 @@ import org.qortal.api.Security;
 import org.qortal.controller.ChatTransactionDelegate;
 import org.qortal.crypto.Crypto;
 import org.qortal.data.chat.ActiveChats;
+import org.qortal.data.chat.ChatMemoryInfo;
 import org.qortal.data.chat.ChatMessage;
+import org.qortal.data.chat.ChatStat;
+import org.qortal.data.chat.GroupChatStat;
 import org.qortal.data.transaction.ChatTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.repository.DataException;
@@ -27,6 +30,7 @@ import org.qortal.transform.TransformationException;
 import org.qortal.transform.transaction.ChatTransactionTransformer;
 import org.qortal.transform.transaction.TransactionTransformer;
 import org.qortal.utils.Base58;
+import org.qortal.utils.ChatAnalysisUtils;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.*;
@@ -111,6 +115,82 @@ public class ChatResource {
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}
+	}
+
+	@GET
+	@Path("/memory")
+	@Operation(
+			summary = "Memory Information",
+			description = "System and chat memory usage.",
+			responses = {
+					@ApiResponse(
+							description = "memory usage",
+							content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = ChatMemoryInfo.class))
+					)
+			}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE})
+	public ChatMemoryInfo getChatMemory() {
+
+		ChatMemoryInfo info
+				= new ChatMemoryInfo(
+				Runtime.getRuntime().freeMemory(),
+				Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory(),
+				Runtime.getRuntime().totalMemory(),
+				Runtime.getRuntime().maxMemory(),
+				ChatAnalysisUtils.getSize());
+
+		return info;
+	}
+
+	@GET
+	@Path("/stats")
+	@Operation(
+			summary = "Get chat stats",
+			description = "Returns CHAT statistics.",
+			responses = {
+					@ApiResponse(
+							description = "CHAT statistics",
+							content = @Content(
+									array = @ArraySchema(
+											schema = @Schema(
+													implementation = ChatStat.class
+											)
+									)
+							)
+					)
+			}
+	)
+	public List<ChatStat> getStats(@Parameter(ref = "limit") @QueryParam("limit") Integer limit,
+										@Parameter(ref = "offset") @QueryParam("offset") Integer offset,
+										@Parameter(ref = "reverse") @QueryParam("reverse") Boolean reverse) {
+
+		return ChatAnalysisUtils.getStats(limit);
+	}
+
+	@GET
+	@Path("/groupstats")
+	@Operation(
+			summary = "Get group chat stats",
+			description = "Returns Group CHAT statistics.",
+			responses = {
+					@ApiResponse(
+							description = "Group CHAT statistics",
+							content = @Content(
+									array = @ArraySchema(
+											schema = @Schema(
+													implementation = ChatStat.class
+											)
+									)
+							)
+					)
+			}
+	)
+	public List<GroupChatStat> getGroupStats(@Parameter(ref = "limit") @QueryParam("limit") Integer limit,
+										@Parameter(ref = "offset") @QueryParam("offset") Integer offset,
+										@Parameter(ref = "reverse") @QueryParam("reverse") Boolean reverse) {
+
+		return ChatAnalysisUtils.getGroupStats(limit);
 	}
 
 	@GET
@@ -271,7 +351,7 @@ public class ChatResource {
 		Security.checkApiCallAllowed(request);
 
 		try {
-			ValidationResult result = ChatTransactionDelegate.getInstance().isValid(transactionData, false);
+			ValidationResult result = ChatTransactionDelegate.getInstance().isValid(transactionData, false, false);
 			if (result != ValidationResult.OK)
 				throw TransactionsResource.createTransactionInvalidException(request, result);
 
@@ -332,7 +412,7 @@ public class ChatResource {
 			ChatTransactionData chatTransactionData = (ChatTransactionData) transactionData;
 
 			// Quicker validity check first before we compute nonce
-			ValidationResult result = ChatTransactionDelegate.getInstance().isValid(chatTransactionData, false);
+			ValidationResult result = ChatTransactionDelegate.getInstance().isValid(chatTransactionData, false, false);
 			if (result != ValidationResult.OK)
 				throw TransactionsResource.createTransactionInvalidException(request, result);
 

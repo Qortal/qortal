@@ -2,6 +2,7 @@ package org.qortal.controller.arbitrary;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.qortal.arbitrary.ArbitraryDataFolderSizeEstimator;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.event.DataMonitorEvent;
@@ -436,8 +437,12 @@ public class ArbitraryDataCleanupManager extends Thread {
 
 				LOGGER.debug("Deleting random file {} because we have reached max storage capacity...", randomItem.toString());
 
+				long diskUsage = FilesystemUtils.getDiskUsage(randomItem);
+
 				boolean success = randomItem.delete();
 				if (success) {
+
+					ArbitraryDataFolderSizeEstimator.getInstance().subtract(diskUsage);
 					try {
 						FilesystemUtils.safeDeleteEmptyParentDirectories(randomItem.toPath().getParent());
 					} catch (IOException e) {

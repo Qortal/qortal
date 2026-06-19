@@ -231,8 +231,17 @@ public class ArbitraryResource {
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
 
+			// Treat empty identifier as null
+			if (identifier != null && identifier.isEmpty()) {
+				identifier = null;
+			}
+
 			boolean defaultRes = Boolean.TRUE.equals(defaultResource);
 			boolean usePrefixOnly = Boolean.TRUE.equals(prefixOnly);
+
+			if (defaultRes && identifier != null) {
+				throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.INVALID_CRITERIA, "identifier cannot be specified when requesting a default resource");
+			}
 
 			List<String> exactMatchNames = new ArrayList<>();
 

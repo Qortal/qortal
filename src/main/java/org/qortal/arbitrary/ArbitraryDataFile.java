@@ -144,6 +144,8 @@ public class ArbitraryDataFile {
         try (FileOutputStream outputStream = new FileOutputStream(outputFile)) {
             outputStream.write(fileContent);
             this.filePath = outputFilePath;
+
+            ArbitraryDataFolderSizeEstimator.getInstance().add(FilesystemUtils.getDiskUsage(outputFile));
         } catch (IOException e) {
             this.delete();
             throw new DataException(String.format("Unable to write data with hash %s: %s", this.hash58, e.getMessage()));
@@ -560,7 +562,11 @@ public class ArbitraryDataFile {
         if (FilesystemUtils.pathInsideDataOrTempPath(this.filePath)) {
             if (Files.exists(this.filePath)) {
                 try {
+                    long diskUsage = FilesystemUtils.getDiskUsage(this.filePath.toFile());
+
                     Files.delete(this.filePath);
+
+                    ArbitraryDataFolderSizeEstimator.getInstance().subtract(diskUsage);
                     this.cleanupFilesystem();
                     LOGGER.debug("Deleted file {}", this.filePath);
                     return true;

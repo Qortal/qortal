@@ -12,11 +12,18 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
 import java.text.SimpleDateFormat;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 public class ThreadDumpScheduler {
 
@@ -29,6 +36,8 @@ public class ThreadDumpScheduler {
 
     private ScheduledExecutorService scheduler;
     private File threadDumpDir;
+
+    private Map<Long, Long> cpuTimeById = new HashMap<>();
 
     private static ThreadDumpScheduler singleton;
 
@@ -88,7 +97,8 @@ public class ThreadDumpScheduler {
             File threadDumpFile = new File(threadDumpDir, fileName);
             
             // Get the thread dump
-            ThreadInfo[] threadInfos = ManagementFactory.getThreadMXBean().dumpAllThreads(true, true);
+            ThreadMXBean threadMXBean = ManagementFactory.getThreadMXBean();
+            ThreadInfo[] threadInfos = threadMXBean.dumpAllThreads(true, true);
 
             // Write to file
             try (BufferedWriter writer = new BufferedWriter(new FileWriter(threadDumpFile))) {
@@ -110,8 +120,39 @@ public class ThreadDumpScheduler {
                 writer.newLine();
                 writer.newLine();
 
+                writer.write("Available Processors: " + Runtime.getRuntime().availableProcessors());
+                writer.newLine();
+                writer.newLine();
+
+                Map<Long, Long> cpuTimeLapsedById = new HashMap<>(threadInfos.length);
+                Map<Long, ThreadInfo> infoById = new HashMap<>(threadInfos.length);
+
                 // Write each thread's information
                 for (ThreadInfo threadInfo : threadInfos) {
+                    long cpuTime = threadMXBean.getThreadCpuTime(threadInfo.getThreadId());
+                    long cpuTimeLapsed = cpuTime - this.cpuTimeById.getOrDefault(threadInfo.getThreadId(), 0L);
+                    this.cpuTimeById.put(threadInfo.getThreadId(), cpuTime);
+                    cpuTimeLapsedById.put(threadInfo.getThreadId(), cpuTimeLapsed);
+                    infoById.put(threadInfo.getThreadId(), threadInfo);
+                }
+
+                List<Long> threadIds
+                    = cpuTimeLapsedById.entrySet().stream()
+                        .sorted(Comparator.comparingLong(Map.Entry::getValue))
+                        .map(Map.Entry::getKey)
+                        .collect(Collectors.toList());
+                Collections.reverse(threadIds);
+
+                long interval = Settings.getInstance().getThreadDumpInterval() * 60;
+
+                for( Long threadId : threadIds ) {
+                    ThreadInfo threadInfo = infoById.get(threadId);
+                    long cpuTimeLapsed = cpuTimeLapsedById.get(threadId) / 1_000_000_000;
+                    long percentage = (100 * cpuTimeLapsed) / interval;
+
+                    writer.write(String.valueOf(percentage));
+                    writer.write( "% CPU Usage Time Relative To Total Time" );
+                    writer.newLine();
                     writer.write(threadInfo.toString());
                     writer.newLine();
                     writer.newLine();
@@ -120,6 +161,8 @@ public class ThreadDumpScheduler {
             
             LOGGER.info("Thread dump generated: {}", threadDumpFile.getAbsolutePath());
         } catch (IOException e) {
+            LOGGER.error(e.getMessage(), e);
+        } catch (Exception e) {
             LOGGER.error(e.getMessage(), e);
         }
     }

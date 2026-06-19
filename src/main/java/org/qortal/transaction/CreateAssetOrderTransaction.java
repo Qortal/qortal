@@ -3,6 +3,7 @@ package org.qortal.transaction;
 import org.qortal.account.Account;
 import org.qortal.asset.Asset;
 import org.qortal.asset.Order;
+import org.qortal.block.BlockChain;
 import org.qortal.data.asset.AssetData;
 import org.qortal.data.asset.OrderData;
 import org.qortal.data.transaction.CreateAssetOrderTransactionData;
@@ -63,6 +64,15 @@ public class CreateAssetOrderTransaction extends Transaction {
 		if (this.createOrderTransactionData.getPrice() <= 0)
 			return ValidationResult.NEGATIVE_PRICE;
 
+		boolean boundsFixEnabled = this.repository.getBlockRepository().getBlockchainHeight() + 1 >= BlockChain.getInstance().getAssetOrderBoundsHeight();
+		if (boundsFixEnabled) {
+			if (this.createOrderTransactionData.getAmount() > Asset.MAX_QUANTITY)
+				return ValidationResult.INVALID_AMOUNT;
+
+			if (this.createOrderTransactionData.getPrice() > Asset.MAX_QUANTITY)
+				return ValidationResult.INVALID_AMOUNT;
+		}
+
 		AssetRepository assetRepository = this.repository.getAssetRepository();
 
 		// Check "have" asset exists
@@ -96,20 +106,37 @@ public class CreateAssetOrderTransaction extends Transaction {
 		BigInteger price = BigInteger.valueOf(this.createOrderTransactionData.getPrice());
 
 		BigInteger committedCost;
+		BigInteger roundedCommittedCost;
 		BigInteger maxOtherAmount;
 
 		if (isAmountWantAsset) {
 			// have/commit 49200 QORT, want/return 123 GOLD
 			committedCost = amount.multiply(price).divide(Amounts.MULTIPLIER_BI);
+			roundedCommittedCost = amount.multiply(price).add(Amounts.ROUNDING).divide(Amounts.MULTIPLIER_BI);
 			maxOtherAmount = amount;
 		} else {
 			// have/commit 123 GOLD, want/return 49200 QORT
 			committedCost = amount;
+			roundedCommittedCost = committedCost;
 			maxOtherAmount = amount.multiply(price).divide(Amounts.MULTIPLIER_BI);
 		}
 
+		Long committedCostAsLong = null;
+		Long maxOtherAmountAsLong = null;
+		if (boundsFixEnabled) {
+			committedCostAsLong = toPositiveLongOrNull(roundedCommittedCost);
+			if (committedCostAsLong == null)
+				return ValidationResult.INVALID_AMOUNT;
+
+			maxOtherAmountAsLong = toPositiveLongOrNull(maxOtherAmount);
+			if (maxOtherAmountAsLong == null)
+				return ValidationResult.INVALID_AMOUNT;
+		}
+
+		BigInteger divisibilityCommittedCost = boundsFixEnabled ? roundedCommittedCost : committedCost;
+
 		// Check amount is integer if amount's asset is not divisible
-		if (!haveAssetData.isDivisible() && committedCost.mod(Amounts.MULTIPLIER_BI).signum() != 0)
+		if (!haveAssetData.isDivisible() && divisibilityCommittedCost.mod(Amounts.MULTIPLIER_BI).signum() != 0)
 			return ValidationResult.INVALID_AMOUNT;
 
 		// Check total return from fulfilled order would be integer if return's asset is not divisible
@@ -119,12 +146,19 @@ public class CreateAssetOrderTransaction extends Transaction {
 		// Check order creator has enough asset balance AFTER removing fee, in case asset is QORT
 		// If asset is QORT then we need to check amount + fee in one go
 		if (haveAssetId == Asset.QORT) {
+			long committedCostLong = boundsFixEnabled ? committedCostAsLong : committedCost.longValue();
+
+			if (boundsFixEnabled && Long.MAX_VALUE - committedCostLong < this.createOrderTransactionData.getFee())
+				return ValidationResult.NO_BALANCE;
+
 			// Check creator has enough funds for amount + fee in QORT
-			if (creator.getConfirmedBalance(Asset.QORT) < committedCost.longValue() + this.createOrderTransactionData.getFee())
+			if (creator.getConfirmedBalance(Asset.QORT) < committedCostLong + this.createOrderTransactionData.getFee())
 				return ValidationResult.NO_BALANCE;
 		} else {
+			long committedCostLong = boundsFixEnabled ? committedCostAsLong : committedCost.longValue();
+
 			// Check creator has enough funds for amount in whatever asset
-			if (creator.getConfirmedBalance(haveAssetId) < committedCost.longValue())
+			if (creator.getConfirmedBalance(haveAssetId) < committedCostLong)
 				return ValidationResult.NO_BALANCE;
 
 			// Check creator has enough funds for fee in QORT
@@ -133,6 +167,13 @@ public class CreateAssetOrderTransaction extends Transaction {
 		}
 
 		return ValidationResult.OK;
+	}
+
+	private static Long toPositiveLongOrNull(BigInteger value) {
+		if (value.signum() <= 0 || value.bitLength() > 63)
+			return null;
+
+		return value.longValue();
 	}
 
 	@Override
