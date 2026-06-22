@@ -1069,6 +1069,24 @@ public class HSQLDBDatabaseUpdates {
 
 					break;
 
+				case 52:
+					// Raise the cache BYTE budget (hsqldb.cache_size) from the default 10,000 KB to
+					// 200,000 KB (~200 MB). NOTE: "CACHE SIZE" is in kilobytes, not rows — see case 53,
+					// which raises the separate row-count limit so this byte budget can actually be used.
+					stmt.execute("SET FILES CACHE SIZE 200000");
+					break;
+
+				case 53:
+					// Raise the cache ROW-COUNT limit (hsqldb.cache_rows) from the default 50,000 to
+					// 200,000. The cache evicts (Cache.cleanUp -> BaseHashMap.clearToHalf) when EITHER
+					// the row count OR the byte size limit is hit. Case 52 raised only the byte limit,
+					// so the working set kept hitting the unchanged 50,000-row limit first, causing
+					// constant clearToHalf thrashing (~10% CPU in profiling). Raising the row limit lets
+					// the cache grow into the 200 MB byte budget set in case 52; memory stays bounded by
+					// that byte cap.
+					stmt.execute("SET FILES CACHE ROWS 200000");
+					break;
+
 				default:
 					// nothing to do
 					return false;

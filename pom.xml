@@ -31,6 +31,7 @@
 		<java-diff-utils.version>4.15</java-diff-utils.version>
 		<javax.servlet-api.version>4.0.1</javax.servlet-api.version>
 		<jaxb-runtime.version>2.3.9</jaxb-runtime.version>
+		<jackson.version>2.18.2</jackson.version> <!-- Aligns whole Jackson stack via jackson-bom; must match swagger-core's jackson modules -->
 		<jersey.version>2.47</jersey.version>
 		<jetty.version>10.0.26</jetty.version> <!-- Next logical jump -->
 		<json-simple.version>1.1.1</json-simple.version>
@@ -457,6 +458,25 @@
 			<url>https://repo.maven.apache.org/maven2</url>
 		</repository>
 	</repositories>
+	<dependencyManagement>
+		<dependencies>
+			<!--
+				Force all com.fasterxml.jackson.* modules to one version.
+				swagger-core 2.2.30 pulls jackson-jaxrs-json-provider (and friends) at 2.18.2,
+				while jackson-databind/core/annotations were pinned at 2.15.2. The 2.18.x JAX-RS
+				provider is compiled against 2.18.x databind, so running it against 2.15.2 threw
+				NoSuchMethodError / IncompatibleClassChangeError on every JSON API response.
+				The BOM aligns the whole Jackson stack and stops the split from recurring.
+			-->
+			<dependency>
+				<groupId>com.fasterxml.jackson</groupId>
+				<artifactId>jackson-bom</artifactId>
+				<version>${jackson.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
 	<dependencies>
 		<!-- <dependency>
 			<groupId>org.glassfish.jersey.media</groupId>
@@ -848,7 +868,7 @@
 		<dependency>
 			<groupId>com.fasterxml.jackson.core</groupId>
 			<artifactId>jackson-databind</artifactId>
-			<version>2.15.2</version> <!-- Use the latest stable version -->
+			<!-- version managed by jackson-bom (see dependencyManagement) -->
 		</dependency>
 	</dependencies>
 </project>

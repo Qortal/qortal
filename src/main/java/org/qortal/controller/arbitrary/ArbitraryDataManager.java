@@ -233,30 +233,22 @@ public class ArbitraryDataManager extends Thread {
 		final int limit = 100;
 		int offset = 0;
 
-		List<ArbitraryTransactionDataHashWrapper> allArbitraryTransactionsInDescendingOrder;
-
-		try (final Repository repository = RepositoryManager.getRepository()) {
-
-			if( name == null ) {
-				// Lightweight fetch — only (signature, service, name, identifier) loaded per row
-				allArbitraryTransactionsInDescendingOrder
-						= repository.getArbitraryRepository()
-						.getArbitraryTransactionSignaturesLite();
+		// For name-bounded queries the result set is small; load once and paginate in memory.
+		// For unbounded queries use DB-level pagination to avoid full table scans.
+		List<ArbitraryTransactionDataHashWrapper> namePageCache = null;
+		if (name != null) {
+			try (final Repository repository = RepositoryManager.getRepository()) {
+				namePageCache = repository.getArbitraryRepository()
+						.getLatestArbitraryTransactionsByName(name)
+						.stream()
+						.map(tx -> new ArbitraryTransactionDataHashWrapper(
+								tx.getSignature(), tx.getService().value, tx.getName(), tx.getIdentifier(),
+								tx.getMetadataHash(), tx.getTimestamp()))
+						.collect(Collectors.toList());
+			} catch (Exception e) {
+				LOGGER.error(e.getMessage(), e);
+				namePageCache = new ArrayList<>(0);
 			}
-			else {
-				// Bounded by name — convert full objects to lite wrappers
-			allArbitraryTransactionsInDescendingOrder
-					= repository.getArbitraryRepository()
-					.getLatestArbitraryTransactionsByName(name)
-					.stream()
-					.map(tx -> new ArbitraryTransactionDataHashWrapper(
-							tx.getSignature(), tx.getService().value, tx.getName(), tx.getIdentifier(),
-							tx.getMetadataHash(), tx.getTimestamp()))
-					.collect(Collectors.toList());
-			}
-		} catch( Exception e) {
-			LOGGER.error(e.getMessage(), e);
-			allArbitraryTransactionsInDescendingOrder = new ArrayList<>(0);
 		}
 
 		// collect processed transactions in a set to ensure outdated data transactions do not get fetched
@@ -268,7 +260,16 @@ public class ArbitraryDataManager extends Thread {
 			// Any arbitrary transactions we want to fetch data for?
 			List<DataMonitorEvent> pendingEvents = new ArrayList<>();
 			try (final Repository repository = RepositoryManager.getRepository()) {
-			List<ArbitraryTransactionDataHashWrapper> wrappers = processLiteTransactionsForSignatures(limit, offset, allArbitraryTransactionsInDescendingOrder, processedTransactions);
+			List<ArbitraryTransactionDataHashWrapper> wrappers;
+			if (name != null) {
+				wrappers = processLiteTransactionsForSignatures(limit, offset, namePageCache, processedTransactions);
+			} else {
+				List<ArbitraryTransactionDataHashWrapper> page = repository.getArbitraryRepository()
+						.getArbitraryTransactionSignaturesLite(limit, offset);
+				page.removeIf(processedTransactions::contains);
+				processedTransactions.addAll(page);
+				wrappers = page;
+			}
 
 			if (wrappers == null || wrappers.isEmpty()) {
 					offset = 0;
@@ -406,17 +407,6 @@ public class ArbitraryDataManager extends Thread {
 		final int limit = 100;
 		int offset = 0;
 
-		List<ArbitraryTransactionDataHashWrapper> allArbitraryTransactionsInDescendingOrder;
-
-		try (final Repository repository = RepositoryManager.getRepository()) {
-			allArbitraryTransactionsInDescendingOrder
-					= repository.getArbitraryRepository()
-						.getArbitraryTransactionSignaturesLite();
-		} catch( Exception e) {
-			LOGGER.error(e.getMessage(), e);
-			allArbitraryTransactionsInDescendingOrder = new ArrayList<>(0);
-		}
-
 		// collect processed transactions in a set to ensure outdated data transactions do not get fetched
 		Set<ArbitraryTransactionDataHashWrapper> processedTransactions = new HashSet<>();
 
@@ -429,7 +419,17 @@ public class ArbitraryDataManager extends Thread {
 			// Any arbitrary transactions we want to fetch data for?
 			DataMonitorEvent pendingEvent = null;
 			try {
-				List<ArbitraryTransactionDataHashWrapper> wrappers = processLiteTransactionsForSignatures(limit, offset, allArbitraryTransactionsInDescendingOrder, processedTransactions);
+				List<ArbitraryTransactionDataHashWrapper> wrappers;
+				try (final Repository repository = RepositoryManager.getRepository()) {
+					List<ArbitraryTransactionDataHashWrapper> page = repository.getArbitraryRepository()
+							.getArbitraryTransactionSignaturesLite(limit, offset);
+					page.removeIf(processedTransactions::contains);
+					processedTransactions.addAll(page);
+					wrappers = page;
+				} catch (Exception e) {
+					LOGGER.error(e.getMessage(), e);
+					wrappers = new ArrayList<>(0);
+				}
 
 				if (wrappers == null || wrappers.isEmpty()) {
 					offset = 0;

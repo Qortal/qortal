@@ -164,6 +164,15 @@ public class Peer {
 
     byte[] ourChallenge;
 
+    /**
+     * Cached X25519 shared secret for this peer's handshake.
+     * <p>
+     * The handshake computes the same shared secret twice (once when sending our RESPONSE, once when
+     * validating the peer's RESPONSE); it depends only on our fixed node key and the peer's public key,
+     * so it is computed once and reused. See {@code Handshake} RESPONSE handling.
+     */
+    private volatile byte[] handshakeSharedSecret;
+
     private boolean syncInProgress = false;
 
     /* Pending signature requests */
@@ -554,6 +563,14 @@ public class Peer {
         }
     }
 
+    protected byte[] getHandshakeSharedSecret() {
+        return this.handshakeSharedSecret;
+    }
+
+    protected void setHandshakeSharedSecret(byte[] sharedSecret) {
+        this.handshakeSharedSecret = sharedSecret;
+    }
+
     public String getHostName() {
         // Get the string representation of the PeerAddress
         String addressString = this.peerData.getAddress().toString();
@@ -717,7 +734,7 @@ public class Peer {
             Network.getInstance().registerPeerChannel(this.socketChannel, this);
         else
             NetworkData.getInstance().registerPeerChannel(this.socketChannel, this);
-        this.byteBuffer = null; // Defer allocation to when we need it, to save memory. Sorry GC!
+        this.byteBuffer = null; // Defer allocation until first read; kept alive for connection lifetime thereafter
 
         Random random = new SecureRandom();
         this.ourChallenge = new byte[ChallengeMessage.CHALLENGE_LENGTH];
@@ -778,7 +795,7 @@ public class Peer {
                     return;
                 }
 
-                // Do we need to allocate byteBuffer?
+                // Allocate once per connection; never released until the Peer is GC'd
                 if (this.byteBuffer == null) {
                     this.byteBuffer = ByteBuffer.allocate(Network.getInstance().getMaxMessageSize());
                 }
@@ -812,8 +829,6 @@ public class Peer {
                                 bytesRead, priorPosition, this);
                     }
                 }
-                final boolean wasByteBufferFull = !this.byteBuffer.hasRemaining();
-
                 while (true) {
                     final Message message;
 
@@ -839,15 +854,6 @@ public class Peer {
                 if (message == null && bytesRead == 0) {
                     // No complete message and no bytes available right now.
                     // Return so selector can re-arm OP_READ without busy looping.
-                    if (!wasByteBufferFull) {
-                        // If byteBuffer is completely empty, deallocate it to save memory
-                        // This helps reduce memory usage when peers are idle
-                        // The buffer will be reallocated on next read if needed
-                        if (this.byteBuffer.remaining() == this.byteBuffer.capacity()) {
-                            this.byteBuffer = null;
-                            LOGGER.trace("[{}] Deallocated empty byteBuffer for peer {}", this.peerConnectionId, this);
-                        }
-                    }
                     return;
                 }
 

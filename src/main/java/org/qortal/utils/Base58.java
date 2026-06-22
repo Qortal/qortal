@@ -16,8 +16,12 @@
  */
 package org.qortal.utils;
 
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
+
 import java.io.UnsupportedEncodingException;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 /**
@@ -41,6 +45,16 @@ public class Base58 {
             INDEXES[ALPHABET[i]] = i;
     }
 
+    // Key is an ISO-8859-1 String built from the raw bytes — gives content-based equality
+    // without needing a custom wrapper, at the cost of one lightweight String allocation per miss.
+    private static final Cache<String, String> ENCODE_CACHE = CacheBuilder.newBuilder()
+            .maximumSize(10_000)
+            .build();
+
+    private static final Cache<String, byte[]> DECODE_CACHE = CacheBuilder.newBuilder()
+            .maximumSize(10_000)
+            .build();
+
     /**
      * Encodes a byte array as a Base58 string
      *
@@ -54,6 +68,13 @@ public class Base58 {
         //
         if (bytes.length == 0)
             return "";
+        //
+        // Return cached result if available
+        //
+        String cacheKey = new String(bytes, StandardCharsets.ISO_8859_1);
+        String cached = ENCODE_CACHE.getIfPresent(cacheKey);
+        if (cached != null)
+            return cached;
         //
         // Make a copy of the input since we will be modifying it as we go along
         //
@@ -97,6 +118,7 @@ public class Base58 {
         } catch (UnsupportedEncodingException exc) {
             encodedResult = "";             // Should never happen
         }
+        ENCODE_CACHE.put(cacheKey, encodedResult);
         return encodedResult;
     }
 
@@ -113,6 +135,12 @@ public class Base58 {
         //
         if (string.isEmpty())
             return null;
+        //
+        // Return a copy of the cached result if available
+        //
+        byte[] cachedDecode = DECODE_CACHE.getIfPresent(string);
+        if (cachedDecode != null)
+            return cachedDecode.clone();
         //
         // Convert the input string to a byte sequence
         //
@@ -156,7 +184,8 @@ public class Base58 {
         // that were in the original string
         //
         byte[] output = Arrays.copyOfRange(decoded, decodedOffset-zeroCount, decoded.length);
-        return output;
+        DECODE_CACHE.put(string, output);
+        return output.clone();
     }
 
     /**

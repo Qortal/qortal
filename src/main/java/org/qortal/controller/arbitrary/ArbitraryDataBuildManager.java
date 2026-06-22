@@ -5,9 +5,8 @@ import org.apache.logging.log4j.Logger;
 import org.qortal.arbitrary.ArbitraryDataBuildQueueItem;
 import org.qortal.utils.NTP;
 
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -23,12 +22,12 @@ public class ArbitraryDataBuildManager extends Thread {
     /**
      * Map to keep track of arbitrary transaction resources currently being built (or queued).
      */
-    public Map<String, ArbitraryDataBuildQueueItem> arbitraryDataBuildQueue = Collections.synchronizedMap(new HashMap<>());
+    public Map<String, ArbitraryDataBuildQueueItem> arbitraryDataBuildQueue = new ConcurrentHashMap<>();
 
     /**
      * Map to keep track of failed arbitrary transaction builds.
      */
-    public Map<String, ArbitraryDataBuildQueueItem> arbitraryDataFailedBuilds = Collections.synchronizedMap(new HashMap<>());
+    public Map<String, ArbitraryDataBuildQueueItem> arbitraryDataFailedBuilds = new ConcurrentHashMap<>();
 
 
     public ArbitraryDataBuildManager() {

@@ -25,6 +25,12 @@ public abstract class RepositoryManager {
 
 	private static RepositoryFactory repositoryFactory = null;
 
+	/** Shared lock for LatestATStates table mutations (rebuildLatestAtStates, trimAtStates, pruneAtStates). */
+	public static final Object LATEST_AT_STATES_LOCK = new Object();
+
+	/** Shared lock for DatabaseInfo trim/prune height columns (setAtTrimHeight, setBlockTrimHeight, etc.). */
+	public static final Object TRIM_HEIGHTS_LOCK = new Object();
+
 	/** null if no checkpoint requested, TRUE for quick checkpoint, false for slow/full checkpoint. */
 	private static Boolean quickCheckpointRequested = null;
 

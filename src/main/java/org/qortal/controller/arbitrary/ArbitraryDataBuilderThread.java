@@ -98,16 +98,16 @@ public class ArbitraryDataBuilderThread implements Runnable {
                         continue;
                     }
 
-                    // Get status before build
-                    ArbitraryResourceStatus arbitraryResourceStatus = ArbitraryTransactionUtils.getStatus(queueItem.getService(), queueItem.getResourceId(), queueItem.getIdentifier(), false, true);
-                    if (arbitraryResourceStatus.getStatus() == NOT_PUBLISHED) {
-                        // No point in building a non-existent resource
-                        this.removeFromQueue(queueItem);
-                        continue;
-                    }
-
-                    // Set the start timestamp, to prevent other threads from building it at the same time
+                    // Reserve item immediately so other threads skip it while we check status below
                     queueItem.prepareForBuild();
+                }
+
+                // Check status OUTSIDE the lock — this hits the DB and must not hold the queue monitor
+                ArbitraryResourceStatus arbitraryResourceStatus = ArbitraryTransactionUtils.getStatus(queueItem.getService(), queueItem.getResourceId(), queueItem.getIdentifier(), false, true);
+                if (arbitraryResourceStatus.getStatus() == NOT_PUBLISHED) {
+                    // No point in building a non-existent resource
+                    this.removeFromQueue(queueItem);
+                    continue;
                 }
 
                 try {

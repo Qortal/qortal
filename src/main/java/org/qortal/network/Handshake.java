@@ -410,16 +410,7 @@ public enum Handshake {
 			}
 
 			// Use same key as CHALLENGE: NetworkData for NetworkData connections, Network for Network
-			byte[] sharedSecret;
-			switch (peer.getPeerType()) {
-				case Peer.NETWORKDATA:
-					sharedSecret = NetworkData.getInstance().getSharedSecret(peersPublicKey);
-					break;
-				case Peer.NETWORK:
-				default:
-					sharedSecret = Network.getInstance().getSharedSecret(peersPublicKey);
-					break;
-			}
+			byte[] sharedSecret = getOrComputeSharedSecret(peer, peersPublicKey);
 			final byte[] expectedData = Crypto.digest(Bytes.concat(sharedSecret, ourChallenge));
 
 			byte[] data = responseMessage.getData();
@@ -473,16 +464,7 @@ public enum Handshake {
 			}
 
 			// Use same key as CHALLENGE: NetworkData for NetworkData connections, Network for Network
-			byte[] sharedSecret;
-			switch (peer.getPeerType()) {
-				case Peer.NETWORKDATA:
-					sharedSecret = NetworkData.getInstance().getSharedSecret(peersPublicKey);
-					break;
-				case Peer.NETWORK:
-				default:
-					sharedSecret = Network.getInstance().getSharedSecret(peersPublicKey);
-					break;
-			}
+			byte[] sharedSecret = getOrComputeSharedSecret(peer, peersPublicKey);
 			final byte[] data = Crypto.digest(Bytes.concat(sharedSecret, peersChallenge));
 
 			// We do this in a new thread as it can take a while...
@@ -562,6 +544,31 @@ public enum Handshake {
 				NetworkData.getInstance().onHandshakeCompleted(peer);
 				break;
 		}
+	}
+
+	/**
+	 * Returns the X25519 shared secret for this peer's handshake, computing it once and caching it on
+	 * the peer. The handshake needs the same secret both when sending our RESPONSE and when validating
+	 * the peer's RESPONSE; the value depends only on our (fixed) node key and the peer's public key, so
+	 * the second caller reuses the first's result rather than repeating the X25519 agreement.
+	 */
+	private static byte[] getOrComputeSharedSecret(Peer peer, byte[] peersPublicKey) {
+		byte[] sharedSecret = peer.getHandshakeSharedSecret();
+		if (sharedSecret != null)
+			return sharedSecret;
+
+		switch (peer.getPeerType()) {
+			case Peer.NETWORKDATA:
+				sharedSecret = NetworkData.getInstance().getSharedSecret(peersPublicKey);
+				break;
+			case Peer.NETWORK:
+			default:
+				sharedSecret = Network.getInstance().getSharedSecret(peersPublicKey);
+				break;
+		}
+
+		peer.setHandshakeSharedSecret(sharedSecret);
+		return sharedSecret;
 	}
 
 	/** Maximum allowed difference between peer's reported timestamp and when they connected, in milliseconds. */

@@ -5,6 +5,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
+import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.qortal.block.BlockChain;
 import org.qortal.controller.Controller;
 import org.qortal.controller.arbitrary.ArbitraryDataFileListManager;
@@ -94,7 +95,17 @@ public class Network {
 
 
 
-    private static final long NETWORK_EPC_KEEPALIVE = 5L; // seconds
+    // Keep idle worker threads alive long enough to be reused across the EPC's frequent
+    // spawn/exit cycles. The old 5s value let threads die between bursts and be recreated
+    // constantly (~53/min in profiling), churning ThreadLocalMap. 60s lets burst-overflow
+    // threads (those above the core size) be reused instead of respawned.
+    private static final long NETWORK_EPC_KEEPALIVE = 60L; // seconds
+
+    // Warm baseline of always-on worker threads. The EPC spawns a new thread whenever every
+    // active thread becomes a consumer; with only 2 core threads almost every spawn created a
+    // brand-new Thread. A larger pinned core (these never time out) absorbs steady-state load
+    // with zero thread churn; the pool can still grow to maxNetworkThreadPoolSize under burst.
+    private static final int NETWORK_EPC_CORE_THREADS = 10;
 
     public static final int MAX_SIGNATURES_PER_REPLY = 500;
     public static final int MAX_BLOCK_SUMMARIES_PER_REPLY = 500;
@@ -108,6 +119,9 @@ public class Network {
     private final Ed25519PrivateKeyParameters edPrivateKeyParams = new Ed25519PrivateKeyParameters(new SecureRandom());
     private final Ed25519PublicKeyParameters edPublicKeyParams = edPrivateKeyParams.generatePublicKey();
     private final String ourNodeId = Crypto.toNodeAddress(edPublicKeyParams.getEncoded());
+    // Our node key is fixed for the JVM lifetime, so derive the X25519 private params once and reuse
+    // them for every handshake shared-secret rather than re-deriving (SHA-512 + clamp) on each call.
+    private final X25519PrivateKeyParameters ourX25519PrivateKeyParams = Crypto.toX25519PrivateKeyParams(edPrivateKeyParams.getEncoded());
 
     private final int maxMessageSize;
     private final int minOutboundPeers;
@@ -281,7 +295,7 @@ public class Network {
 
         // Worker pool: message handling only (MessageTask, PingTask, ConnectTask, BroadcastTask).
         // I/O (select/read/write) runs on dedicated ioThread; workers never touch sockets.
-        this.networkWorkerPool = new ThreadPoolExecutor(2,
+        this.networkWorkerPool = new ThreadPoolExecutor(NETWORK_EPC_CORE_THREADS,
                 Settings.getInstance().getMaxNetworkThreadPoolSize(),
                 NETWORK_EPC_KEEPALIVE, TimeUnit.SECONDS,
                 new SynchronousQueue<Runnable>(),
@@ -1820,7 +1834,7 @@ public class Network {
     }
 
     protected byte[] getSharedSecret(byte[] publicKey) {
-        return Crypto.getSharedSecret(this.edPrivateKeyParams.getEncoded(), publicKey);
+        return Crypto.getSharedSecret(this.ourX25519PrivateKeyParams, publicKey);
     }
 
     /**

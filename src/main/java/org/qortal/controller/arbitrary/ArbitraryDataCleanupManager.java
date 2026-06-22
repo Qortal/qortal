@@ -88,17 +88,6 @@ public class ArbitraryDataCleanupManager extends Thread {
 		final int limit = 100;
 		int offset = 0;
 
-		List<ArbitraryTransactionData> allArbitraryTransactionsInDescendingOrder;
-
-		try (final Repository repository = RepositoryManager.getRepository()) {
-			allArbitraryTransactionsInDescendingOrder
-					= repository.getArbitraryRepository()
-					.getLatestArbitraryTransactions();
-		} catch( Exception e) {
-			LOGGER.error(e.getMessage(), e);
-			allArbitraryTransactionsInDescendingOrder = new ArrayList<>(0);
-		}
-
 		Set<ArbitraryTransactionDataHashWrapper> processedTransactions = new HashSet<>();
 
 		try {
@@ -134,17 +123,16 @@ public class ArbitraryDataCleanupManager extends Thread {
 
 				// Any arbitrary transactions we want to fetch data for?
 				try (final Repository repository = RepositoryManager.getRepository()) {
-					List<ArbitraryTransactionData> transactions = allArbitraryTransactionsInDescendingOrder.stream().skip(offset).limit(limit).collect(Collectors.toList());
+					List<ArbitraryTransactionData> transactions = repository.getArbitraryRepository()
+							.getLatestArbitraryTransactions(limit, offset);
 					if (isStopping) {
 						return;
 					}
 
 					if (transactions == null || transactions.isEmpty()) {
 						offset = 0;
-						allArbitraryTransactionsInDescendingOrder
-								= repository.getArbitraryRepository()
-								.getLatestArbitraryTransactions();
-						transactions = allArbitraryTransactionsInDescendingOrder.stream().limit(limit).collect(Collectors.toList());
+						transactions = repository.getArbitraryRepository()
+								.getLatestArbitraryTransactions(limit, offset);
 						processedTransactions.clear();
 					}
 

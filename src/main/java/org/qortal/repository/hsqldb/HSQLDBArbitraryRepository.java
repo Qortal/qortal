@@ -235,6 +235,11 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 
 	@Override
 	public List<ArbitraryTransactionData> getLatestArbitraryTransactions(Integer limit) throws DataException {
+		return getLatestArbitraryTransactions(limit, null);
+	}
+
+	@Override
+	public List<ArbitraryTransactionData> getLatestArbitraryTransactions(Integer limit, Integer offset) throws DataException {
 		String sql = "SELECT type, reference, signature, creator, created_when, fee, " +
 				"tx_group_id, block_height, approval_status, approval_height, " +
 				"version, nonce, service, size, is_data_raw, data, metadata_hash, " +
@@ -242,7 +247,8 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 				"JOIN Transactions USING (signature) " +
 				"WHERE name IS NOT NULL " +
 				"ORDER BY created_when DESC" +
-				(limit != null ? " LIMIT " + limit : "");
+				(limit != null ? " LIMIT " + limit : "") +
+				(offset != null ? " OFFSET " + offset : "");
 		List<ArbitraryTransactionData> arbitraryTransactionData = new ArrayList<>();
 
 		try (ResultSet resultSet = this.repository.checkedExecute(sql)) {
@@ -305,11 +311,18 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 
 	@Override
 	public List<ArbitraryTransactionDataHashWrapper> getArbitraryTransactionSignaturesLite() throws DataException {
+		return getArbitraryTransactionSignaturesLite(null, null);
+	}
+
+	@Override
+	public List<ArbitraryTransactionDataHashWrapper> getArbitraryTransactionSignaturesLite(Integer limit, Integer offset) throws DataException {
 		String sql = "SELECT signature, service, name, identifier, metadata_hash, created_when " +
 				"FROM ArbitraryTransactions " +
 				"JOIN Transactions USING (signature) " +
 				"WHERE name IS NOT NULL " +
-				"ORDER BY created_when DESC";
+				"ORDER BY created_when DESC" +
+				(limit != null ? " LIMIT " + limit : "") +
+				(offset != null ? " OFFSET " + offset : "");
 
 		List<ArbitraryTransactionDataHashWrapper> results = new ArrayList<>();
 		try (ResultSet resultSet = this.repository.checkedExecute(sql)) {

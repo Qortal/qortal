@@ -32,8 +32,12 @@ public interface ArbitraryRepository {
 
 	List<ArbitraryTransactionData> getLatestArbitraryTransactions(Integer limit) throws DataException;
 
+	List<ArbitraryTransactionData> getLatestArbitraryTransactions(Integer limit, Integer offset) throws DataException;
+
 	/** Lightweight fetch — returns only (signature, service, name, identifier) ordered newest-first. */
 	List<ArbitraryTransactionDataHashWrapper> getArbitraryTransactionSignaturesLite() throws DataException;
+
+	List<ArbitraryTransactionDataHashWrapper> getArbitraryTransactionSignaturesLite(Integer limit, Integer offset) throws DataException;
 
 	List<ArbitraryTransactionData> getLatestArbitraryTransactionsByName(String name) throws DataException;
 
