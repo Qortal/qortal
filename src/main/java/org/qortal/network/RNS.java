@@ -3,6 +3,8 @@ package org.qortal.network;
 import io.reticulum.Reticulum;
 import io.reticulum.Transport;
 import io.reticulum.interfaces.ConnectionInterface;
+import io.reticulum.interfaces.backbone.BackboneClientInterface;
+import io.reticulum.utils.InterfaceUtils;
 import io.reticulum.destination.Destination;
 import io.reticulum.destination.DestinationType;
 import io.reticulum.destination.Direction;
@@ -76,6 +78,8 @@ import java.util.concurrent.atomic.AtomicLong;
 //import java.util.concurrent.locks.ReentrantLock;
 //import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Function;
+import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -160,6 +164,19 @@ public class RNS {
     private List<ReticulumPeer> immutableLinkedPeers = Collections.emptyList();
     private final List<ReticulumPeer> incomingPeers = Collections.synchronizedList(new ArrayList<>());
     private List<ReticulumPeer> immutableIncomingPeers = Collections.emptyList();
+
+    // ── Gateway announce (reticulumAnnounceGateway) ──────────────────────────
+    // When enabled, the node embeds its own backbone server endpoint as an
+    // appData payload on each announce; peers receiving the announce can then
+    // dynamically add a BackboneClientInterface to discover gateways without
+    // every node needing them hardcoded in settings.
+    private static final byte[] GW_APPDATA_MAGIC = { 'Q', 'G', 'W', '1' };
+    private static final int GW_APPDATA_MIN_LEN = GW_APPDATA_MAGIC.length + 1 /*hostLen*/ + 2 /*port*/;
+    private static final Duration GATEWAY_COOLDOWN = Duration.ofMinutes(10);
+    /** host:port → last time we considered adding (success or skip), to throttle churn. */
+    private final Map<String, Instant> recentGatewayAttempts = new ConcurrentHashMap<>();
+    /** Local FQDN cached at first announce build; used for self-skip on the receive side. */
+    private volatile String localFqdn;
 
     /** Produces Connect tasks for the baseDestination and submits to worker pool. */
     private Thread rnsBaseThread;
@@ -371,9 +388,10 @@ public class RNS {
         loadKnownPeerHashes();
         loadKnownDataPeerHashes();
         // do a first announce (across all configured interfaces)
-        baseDestination.announce();
+        byte[] initialAppData = buildGatewayAppData();
+        baseDestination.announce(initialAppData);
         log.info("Sent initial announce from {} ({})", encodeHexString(baseDestination.getHash()), baseDestination.getName());
-        dataDestination.announce();
+        dataDestination.announce(initialAppData);
         log.info("Sent initial announce from {} ({})", encodeHexString(dataDestination.getHash()), dataDestination.getName());
         // Seed loop announce timers. On restart (non-empty loaded hashes) fire path requests
         // at t=15s; on first-ever start use the full 30s window.
@@ -1089,6 +1107,175 @@ public class RNS {
     //    getBaseDestination().announce();
     //}
 
+    // ── reticulumAnnounceGateway: send / receive / dispatch ──────────────────
+
+    /**
+     * Build the AppData payload to attach to outbound announces, advertising
+     * this node's backbone server endpoint to the mesh. Returns {@code null}
+     * (which {@code Destination.announce(byte[])} accepts as "no appData", i.e.
+     * identical to the no-arg form) when the feature is disabled or this node
+     * has no backbone server to advertise.
+     *
+     * Wire format (custom binary, designed to be tiny and recognisable):
+     *   off  bytes  meaning
+     *    0    4     magic "QGW1"
+     *    4    1     host length n  (1..255)
+     *    5    n     host UTF-8
+     *   5+n   2     port (big-endian unsigned 16-bit)
+     * Other (future) appData formats can be distinguished by a different prefix.
+     */
+    private byte[] buildGatewayAppData() {
+        if (!Settings.getInstance().getReticulumAnnounceGateway()) return null;
+        if (!Settings.getInstance().getReticulumIsGateway())       return null;
+
+        String host = getLocalFqdn();
+        if (host == null || host.isEmpty()) return null;
+
+        byte[] hostBytes = host.getBytes(StandardCharsets.UTF_8);
+        if (hostBytes.length < 1 || hostBytes.length > 255) {
+            log.warn("Skipping gateway appData: host '{}' encoded length {} not in 1..255",
+                    host, hostBytes.length);
+            return null;
+        }
+        int port = TARGET_PORT;
+        if (port < 1 || port > 0xFFFF) return null;
+
+        ByteBuffer buf = ByteBuffer.allocate(GW_APPDATA_MIN_LEN + hostBytes.length);
+        buf.put(GW_APPDATA_MAGIC);
+        buf.put((byte) hostBytes.length);
+        buf.put(hostBytes);
+        buf.putShort((short) port);
+        return buf.array();
+    }
+
+    /**
+     * Decode gateway info from an announce's appData. Returns {@code null} if
+     * the payload doesn't start with our magic, is malformed, or carries
+     * out-of-range values. Returning null is always safe — caller skips.
+     *
+     * @return {@code new String[] {host, portStr}} on success, else {@code null}
+     */
+    private static String[] decodeGatewayAppData(byte[] appData) {
+        if (appData == null || appData.length < GW_APPDATA_MIN_LEN) return null;
+        for (int i = 0; i < GW_APPDATA_MAGIC.length; i++) {
+            if (appData[i] != GW_APPDATA_MAGIC[i]) return null;
+        }
+        int hostLen = appData[GW_APPDATA_MAGIC.length] & 0xFF;
+        int hostStart = GW_APPDATA_MAGIC.length + 1;
+        if (hostLen < 1 || appData.length < hostStart + hostLen + 2) return null;
+        String host;
+        try {
+            host = new String(appData, hostStart, hostLen, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return null;
+        }
+        int port = ((appData[hostStart + hostLen] & 0xFF) << 8)
+                 | (appData[hostStart + hostLen + 1] & 0xFF);
+        if (port < 1 || port > 0xFFFF) return null;
+        return new String[] { host, String.valueOf(port) };
+    }
+
+    /**
+     * Cached on first use. Reads canonical hostname so a peer hearing our
+     * announce echo (looped back via a relay) doesn't trigger a self-connect.
+     */
+    private String getLocalFqdn() {
+        String fqdn = localFqdn;
+        if (fqdn == null) {
+            try {
+                fqdn = InetAddress.getLocalHost().getCanonicalHostName();
+            } catch (Exception e) {
+                log.warn("Cannot resolve local FQDN for gateway announce: {}", e.getMessage());
+                fqdn = "";
+            }
+            localFqdn = fqdn;
+        }
+        return fqdn;
+    }
+
+    /**
+     * Decide whether to dial a peer-advertised gateway and, if yes, dynamically
+     * register a {@link BackboneClientInterface}. Enforces:
+     *   - self-skip (advertised host == our FQDN)
+     *   - dedup against existing interfaces (same target host/port)
+     *   - per-endpoint cooldown to prevent churn from repeated announces
+     *   - total initiator backbone-client cap = reticulumDesiredClientInterfaces
+     *   - IFAC setup using the configured passphrase and network name
+     *
+     * All failure paths log at WARN/DEBUG and return — never throw to caller.
+     */
+    private void maybeAddDynamicGateway(String host, int port) {
+        if (host == null || host.isEmpty() || port < 1 || port > 0xFFFF) return;
+        String endpoint = host + ":" + port;
+
+        // Self-skip
+        if (host.equalsIgnoreCase(getLocalFqdn())) {
+            log.debug("Gateway announce: ignoring self ({}:{})", host, port);
+            return;
+        }
+
+        // Cooldown: skip if we've considered this endpoint recently.
+        Instant now = Instant.now();
+        Instant last = recentGatewayAttempts.get(endpoint);
+        if (last != null && Duration.between(last, now).compareTo(GATEWAY_COOLDOWN) < 0) {
+            return; // silently — this is the steady-state path on repeated announces
+        }
+        recentGatewayAttempts.put(endpoint, now);
+
+        // Already have an interface to this endpoint? (Static, prior-dynamic, or
+        // matching by autoconnect hash.)
+        for (ConnectionInterface iface : Transport.getInstance().getInterfaces()) {
+            if (host.equalsIgnoreCase(iface.getTargetHost()) && port == iface.getTargetPort()) {
+                log.debug("Gateway {} already has a configured interface; skipping", endpoint);
+                return;
+            }
+        }
+
+        // Cap: count initiator BackboneClientInterface instances (static + dynamic);
+        // the user-configured cap caps the total, not just the dynamic share.
+        int maxClients = Settings.getInstance().getReticulumDesiredClientInterfaces();
+        long currentInitiators = Transport.getInstance().getInterfaces().stream()
+                .filter(i -> i instanceof BackboneClientInterface
+                        && ((BackboneClientInterface) i).isInitiator())
+                .count();
+        if (currentInitiators >= maxClients) {
+            log.debug("Gateway {}: at client interface cap ({} >= {}); not adding",
+                    endpoint, currentInitiators, maxClients);
+            return;
+        }
+
+        log.info("Dynamically adding announced backbone gateway {} (initiators {}/{})",
+                endpoint, currentInitiators + 1, maxClients);
+
+        try {
+            BackboneClientInterface iface = new BackboneClientInterface();
+            iface.setInterfaceName("Backbone Client Interface qortal " + host + " (announced)");
+            iface.setTargetHost(host);
+            iface.setTargetPort(port);
+            iface.setEnabled(true);
+
+            // IFAC setup — same passphrase as the static interfaces, otherwise
+            // the handshake against an IFAC-protected backbone server will fail.
+            String networkName = Settings.getInstance().getReticulumNetworkName();
+            if (networkName == null || networkName.isEmpty()) networkName = APP_NAME;
+            iface.setIfacNetName(networkName);
+            String passphrase = Settings.getInstance().getReticulumPassphrase();
+            if (passphrase != null && !passphrase.isEmpty()) {
+                iface.setIfacNetKey(passphrase);
+            }
+            if (!InterfaceUtils.initIFac(iface)) {
+                log.warn("Gateway {}: IFAC init returned false; aborting dynamic add", endpoint);
+                return;
+            }
+
+            Transport.getInstance().getInterfaces().add(iface);
+            iface.launch();
+        } catch (Exception e) {
+            log.warn("Gateway {}: failed to register dynamic backbone client interface: {}",
+                    endpoint, e.getMessage());
+        }
+    }
+
     private class QAnnounceHandler implements AnnounceHandler {
         String aspectFilter;
 
@@ -1137,6 +1324,12 @@ public class RNS {
 
             if (nonNull(appData)) {
                 log.debug("The announce contained the following app data: {}", new String(appData, UTF_8));
+                // If the announce advertises a Qortal gateway (QGW1 appData),
+                // optionally dial it as a dynamic backbone client interface.
+                String[] gw = decodeGatewayAppData(appData);
+                if (gw != null) {
+                    maybeAddDynamicGateway(gw[0], Integer.parseInt(gw[1]));
+                }
             }
 
             // add to peer list if we can use more peers
@@ -1721,7 +1914,7 @@ public class RNS {
                     corePeerCount, MIN_DESIRED_CORE_PEERS, d != null ? encodeHexString(d.getHash()) : "null");
             if (nonNull(d)) {
                 long announceT0 = System.currentTimeMillis();
-                d.announce();
+                d.announce(buildGatewayAppData());
                 long announceMs = System.currentTimeMillis() - announceT0;
                 // d.announce() always returns null when send=true — see Destination.java:675.
                 // Real failures are logged by Packet.java as "No interfaces could process".
@@ -1738,7 +1931,7 @@ public class RNS {
                     dataPeerCount, MIN_DESIRED_DATA_PEERS, d != null ? encodeHexString(d.getHash()) : "null");
             if (nonNull(d)) {
                 long announceT0 = System.currentTimeMillis();
-                d.announce();
+                d.announce(buildGatewayAppData());
                 long announceMs = System.currentTimeMillis() - announceT0;
                 log.info("DATA announce attempt completed in {}ms", announceMs);
                 if (announceMs > 5_000) {

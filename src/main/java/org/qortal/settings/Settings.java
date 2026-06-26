@@ -722,6 +722,11 @@ public class Settings {
 	private String reticulumNetworkName = "";
 	/** Regenerate .reticulum/config.yml on every startup instead of only when missing. */
 	private boolean reticulumRegenerateConfigOnRestart = false;
+	/** Announce us as routing gateway.
+	 * Prerequisite: Transport has to be enabled (enable_transport: ture) and
+	 *               there has to be a server interface configured.
+	 **/
+	private boolean reticulumAnnounceGateway = false;
 
 	// Constructors
 
@@ -1620,6 +1625,8 @@ public class Settings {
 	public String getReticulumNetworkName() { return this.reticulumNetworkName; }
 
 	public boolean isReticulumRegenerateConfigOnRestart() { return this.reticulumRegenerateConfigOnRestart; }
+
+	public boolean getReticulumAnnounceGateway() { return this.reticulumAnnounceGateway; }
 
 	public int getBuildArbitraryResourcesBatchSize() {
 		return buildArbitraryResourcesBatchSize;
