@@ -175,8 +175,12 @@ public class RNS {
     private static final Duration GATEWAY_COOLDOWN = Duration.ofMinutes(10);
     /** host:port → last time we considered adding (success or skip), to throttle churn. */
     private final Map<String, Instant> recentGatewayAttempts = new ConcurrentHashMap<>();
-    /** Local FQDN cached at first announce build; used for self-skip on the receive side. */
+    /** Local FQDN cached at first use (whatever JDK returns — used only for self-skip). */
     private volatile String localFqdn;
+    /** Host this node will advertise (either explicit setting or validated auto-detect). null = don't advertise. */
+    private volatile String advertiseHost;
+    /** Guards one-time logging of the chosen advertise host. */
+    private volatile boolean advertiseHostResolved = false;
 
     /** Produces Connect tasks for the baseDestination and submits to worker pool. */
     private Thread rnsBaseThread;
@@ -1128,7 +1132,7 @@ public class RNS {
         if (!Settings.getInstance().getReticulumAnnounceGateway()) return null;
         if (!Settings.getInstance().getReticulumIsGateway())       return null;
 
-        String host = getLocalFqdn();
+        String host = getAdvertiseHost();
         if (host == null || host.isEmpty()) return null;
 
         byte[] hostBytes = host.getBytes(StandardCharsets.UTF_8);
@@ -1146,6 +1150,74 @@ public class RNS {
         buf.put(hostBytes);
         buf.putShort((short) port);
         return buf.array();
+    }
+
+    /**
+     * Whether a host string is suitable to advertise as a gateway or to dial
+     * as a dynamically-announced gateway. Rejects:
+     *   - null/empty
+     *   - "localhost" (case-insensitive)
+     *   - loopback IPv4 (127.x.x.x) and IPv6 (::1)
+     *   - bare single-label names with no dot — not an FQDN, not resolvable
+     *     for arbitrary peers
+     * The check is best-effort: we cannot tell from inside the process whether
+     * a name actually resolves for any given peer, only catch the obvious cases
+     * that the auto-detection commonly produces on desktops, VMs and NAT'd hosts.
+     */
+    private static boolean isUsableAdvertiseHost(String host) {
+        if (host == null) return false;
+        String h = host.trim();
+        if (h.isEmpty()) return false;
+        if (h.equalsIgnoreCase("localhost")) return false;
+        if (h.startsWith("127.")) return false;
+        if (h.equals("::1")) return false;
+        // Require at least one dot. Catches "dev-vm-2-desktop" and similar
+        // local hostnames; both real FQDNs and IPv4/IPv6 literals have dots
+        // (or colons — we accept ':' too for raw IPv6, though that is unusual).
+        if (h.indexOf('.') < 0 && h.indexOf(':') < 0) return false;
+        return true;
+    }
+
+    /**
+     * Returns the host string this node will advertise (explicit setting, or
+     * validated auto-detect), or null if no usable host could be determined.
+     * Logs the decision once at first call. Cached for subsequent calls.
+     */
+    private String getAdvertiseHost() {
+        if (advertiseHostResolved) return advertiseHost;
+
+        synchronized (this) {
+            if (advertiseHostResolved) return advertiseHost;
+
+            String explicit = Settings.getInstance().getReticulumAnnouncedHost();
+            String chosen;
+            String source;
+            if (explicit != null && !explicit.trim().isEmpty()) {
+                chosen = explicit.trim();
+                source = "reticulumAnnouncedHost setting";
+            } else {
+                String detected = getLocalFqdn();
+                if (isUsableAdvertiseHost(detected)) {
+                    chosen = detected;
+                    source = "auto-detected FQDN";
+                } else {
+                    chosen = null;
+                    source = "auto-detected FQDN '" + detected + "' is not usable";
+                }
+            }
+
+            if (chosen != null) {
+                log.info("Reticulum gateway announce: will advertise host '{}:{}' (source: {})",
+                        chosen, TARGET_PORT, source);
+            } else {
+                log.warn("Reticulum gateway announce: no usable host to advertise ({}); "
+                        + "set reticulumAnnouncedHost to your publicly-resolvable FQDN to enable",
+                        source);
+            }
+            advertiseHost = chosen;
+            advertiseHostResolved = true;
+            return chosen;
+        }
     }
 
     /**
@@ -1208,9 +1280,25 @@ public class RNS {
         if (host == null || host.isEmpty() || port < 1 || port > 0xFFFF) return;
         String endpoint = host + ":" + port;
 
-        // Self-skip
+        // Reject misconfigured peer announces (localhost, loopback, single-label
+        // names). Without this guard, a sender whose auto-detected FQDN was bad
+        // would have every receiver pointlessly try to dial 127.0.0.1, its own
+        // hostname, etc.
+        if (!isUsableAdvertiseHost(host)) {
+            log.debug("Gateway announce: dropping unusable host '{}' (likely misconfigured peer)", host);
+            return;
+        }
+
+        // Self-skip: compare against both our advertised name (if any) and our
+        // local FQDN (whatever JDK returned, even if not usable for advertising).
+        // Belt-and-suspenders so we don't dial ourselves via either route.
         if (host.equalsIgnoreCase(getLocalFqdn())) {
-            log.debug("Gateway announce: ignoring self ({}:{})", host, port);
+            log.debug("Gateway announce: ignoring self via local FQDN ({}:{})", host, port);
+            return;
+        }
+        String myAdvertise = getAdvertiseHost();
+        if (myAdvertise != null && host.equalsIgnoreCase(myAdvertise)) {
+            log.debug("Gateway announce: ignoring self via advertised host ({}:{})", host, port);
             return;
         }
 
