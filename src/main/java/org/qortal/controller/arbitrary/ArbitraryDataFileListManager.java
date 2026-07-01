@@ -159,7 +159,7 @@ public class ArbitraryDataFileListManager {
 
         long timeSinceLastAttempt = NTP.getTime() - lastAttemptTimestamp;
 
-        // Allow a second attempt after 15 seconds, and another after 30 seconds
+        // Initial retry tier: allow frequent retries up to 12 total attempts
         if (timeSinceLastAttempt > 15 * 1000L) {
             // We haven't tried for at least 15 seconds
 
@@ -169,7 +169,7 @@ public class ArbitraryDataFileListManager {
             }
         }
 
-        // Then allow another 5 attempts, each 1 minute apart
+        // Mid retry tier: allow retries up to 40 total attempts, each 1 minute apart
         if (timeSinceLastAttempt > 60 * 1000L) {
             // We haven't tried for at least 1 minute
 
@@ -179,12 +179,12 @@ public class ArbitraryDataFileListManager {
             }
         }
 
-        // Then allow another 8 attempts, each 15 minutes apart
+        // Late retry tier: allow another 8 attempts (up to 48 total), each 15 minutes apart
         if (timeSinceLastAttempt > 15 * 60 * 1000L) {
             // We haven't tried for at least 15 minutes
 
-            if (networkBroadcastCount < 16) {
-                // We've made less than 16 total attempts
+            if (networkBroadcastCount < 48) {
+                // We've made less than 48 total attempts
                 return true;
             }
         }
@@ -341,7 +341,7 @@ public class ArbitraryDataFileListManager {
             long timeSinceLastAttempt = now - lastAttemptTimestamp;
             
             // Rate limiting logic (same as shouldMakeFileListRequestForSignature)
-            // Allow a second attempt after 15 seconds, and another after 30 seconds
+            // Initial retry tier: allow frequent retries up to 12 total attempts
             if (timeSinceLastAttempt > 15 * 1000L) {
                 // We haven't tried for at least 15 seconds
                 if (networkBroadcastCount < 12) {
@@ -349,8 +349,8 @@ public class ArbitraryDataFileListManager {
                     return new Triple<>(networkBroadcastCount + 1, directPeerRequestCount, now);
                 }
             }
-            
-            // Then allow another 5 attempts, each 1 minute apart
+
+            // Mid retry tier: allow retries up to 40 total attempts, each 1 minute apart
             if (timeSinceLastAttempt > 60 * 1000L) {
                 // We haven't tried for at least 1 minute
                 if (networkBroadcastCount < 40) {
@@ -358,12 +358,12 @@ public class ArbitraryDataFileListManager {
                     return new Triple<>(networkBroadcastCount + 1, directPeerRequestCount, now);
                 }
             }
-            
-            // Then allow another 8 attempts, each 15 minutes apart
+
+            // Late retry tier: allow another 8 attempts (up to 48 total), each 15 minutes apart
             if (timeSinceLastAttempt > 15 * 60 * 1000L) {
                 // We haven't tried for at least 15 minutes
-                if (networkBroadcastCount < 16) {
-                    // We've made less than 16 total attempts - allow it
+                if (networkBroadcastCount < 48) {
+                    // We've made less than 48 total attempts - allow it
                     return new Triple<>(networkBroadcastCount + 1, directPeerRequestCount, now);
                 }
             }
