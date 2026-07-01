@@ -29,14 +29,17 @@ public class AtTestTransaction extends TestTransaction {
 	}
 
 	public static TransactionData messageType(Repository repository, PrivateKeyAccount account, boolean wantValid) throws DataException {
+		byte[] message = new byte[32];
+		random.nextBytes(message);
+
+		return messageType(repository, account, wantValid, message);
+	}
+
+	public static TransactionData messageType(Repository repository, PrivateKeyAccount account, boolean wantValid, byte[] message) throws DataException {
 		byte[] signature = new byte[64];
 		random.nextBytes(signature);
 		String atAddress = Crypto.toATAddress(signature);
 		String recipient = account.getAddress();
-
-		// Use MESSAGE-type
-		byte[] message = new byte[32];
-		random.nextBytes(message);
 
 		return new ATTransactionData(generateBase(account), atAddress, recipient, message);
 	}

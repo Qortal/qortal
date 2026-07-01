@@ -532,7 +532,7 @@ public class ArbitraryDataStorageManager extends Thread {
         if (tempDirectoryPath.toFile().exists()) {
             if (!FilesystemUtils.isChild(tempDirectoryPath, dataDirectoryPath)) {
                 LOGGER.info("Calculating temp directory size...");
-                totalSize += FileUtils.sizeOfDirectory(dataDirectoryPath.toFile());
+                totalSize += FileUtils.sizeOfDirectory(tempDirectoryPath.toFile());
             }
         }
 

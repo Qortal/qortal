@@ -74,12 +74,14 @@ public class GetTradePresencesMessage extends Message {
 		return this.tradePresences;
 	}
 
-	public static Message fromByteBuffer(int id, ByteBuffer bytes) {
-		int groupedEntriesCount = bytes.getInt();
+	public static Message fromByteBuffer(int id, ByteBuffer bytes) throws MessageException {
+		int groupedEntriesCount = GroupedMessageUtils.readInitialGroupCount(bytes, Transformer.PUBLIC_KEY_LENGTH, "invalid grouped entries count");
+		if (groupedEntriesCount == 0)
+			return new GetTradePresencesMessage(id, List.of());
 
 		List<TradePresenceData> tradePresences = new ArrayList<>(groupedEntriesCount);
 
-		while (groupedEntriesCount > 0) {
+		while (true) {
 			long timestamp = bytes.getLong();
 
 			for (int i = 0; i < groupedEntriesCount; ++i) {
@@ -89,12 +91,10 @@ public class GetTradePresencesMessage extends Message {
 				tradePresences.add(new TradePresenceData(timestamp, publicKey));
 			}
 
-			if (bytes.hasRemaining()) {
-				groupedEntriesCount = bytes.getInt();
-			} else {
-				// we've finished
-				groupedEntriesCount = 0;
-			}
+			if (!bytes.hasRemaining())
+				break;
+
+			groupedEntriesCount = GroupedMessageUtils.readNextGroupCount(bytes, Transformer.PUBLIC_KEY_LENGTH, "invalid grouped entries count");
 		}
 
 		return new GetTradePresencesMessage(id, tradePresences);

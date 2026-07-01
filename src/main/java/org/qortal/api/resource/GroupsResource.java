@@ -12,6 +12,7 @@ import org.qortal.api.ApiError;
 import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.model.GroupKickInfo;
+import org.qortal.api.model.GroupMembershipValidation;
 import org.qortal.api.model.GroupMembers;
 import org.qortal.api.model.GroupMembers.MemberInfo;
 import org.qortal.api.model.GroupWithJoinRequests;
@@ -34,9 +35,11 @@ import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -352,6 +355,59 @@ public class GroupsResource {
 			}
 
 			return new GroupMembers(membersInfo, memberCount, adminCount);
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@POST
+	@Path("/members/{groupid}/validate")
+	@Operation(
+		summary = "Validate group membership for a list of addresses",
+		requestBody = @RequestBody(
+			required = true,
+			content = @Content(
+				mediaType = MediaType.APPLICATION_JSON,
+				array = @ArraySchema(schema = @Schema(implementation = String.class))
+			)
+		),
+		responses = {
+			@ApiResponse(
+				description = "membership validation results",
+				content = @Content(
+					mediaType = MediaType.APPLICATION_JSON,
+					array = @ArraySchema(schema = @Schema(implementation = GroupMembershipValidation.class))
+				)
+			)
+		}
+	)
+	@ApiErrors({ApiError.INVALID_ADDRESS, ApiError.GROUP_UNKNOWN, ApiError.REPOSITORY_ISSUE})
+	public List<GroupMembershipValidation> validateGroupMembership(@PathParam("groupid") int groupId, List<String> addresses) {
+		if (addresses == null)
+			addresses = Collections.emptyList();
+
+		Set<String> uniqueAddresses = new LinkedHashSet<>();
+		for (String address : addresses) {
+			if (!Crypto.isValidAddress(address))
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
+
+			uniqueAddresses.add(address);
+		}
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			if (!repository.getGroupRepository().groupExists(groupId))
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.GROUP_UNKNOWN);
+
+			Set<String> memberAddresses = repository.getGroupRepository().getGroupMemberAddresses(groupId, uniqueAddresses);
+			Set<String> adminAddresses = repository.getGroupRepository().getGroupAdminAddresses(groupId, memberAddresses);
+
+			return addresses.stream()
+					.map(address -> {
+						boolean isMember = memberAddresses.contains(address);
+						Boolean isAdmin = isMember ? adminAddresses.contains(address) : null;
+						return new GroupMembershipValidation(address, isMember, isAdmin);
+					})
+					.collect(Collectors.toList());
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}
