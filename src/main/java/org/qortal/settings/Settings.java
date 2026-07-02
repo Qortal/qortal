@@ -723,7 +723,7 @@ public class Settings {
 	/** Regenerate .reticulum/config.yml on every startup instead of only when missing. */
 	private boolean reticulumRegenerateConfigOnRestart = false;
 	/** Announce us as routing gateway.
-	 * Prerequisite: Transport has to be enabled (enable_transport: ture) and
+	 * Prerequisite: Transport has to be enabled (enable_transport: true) and
 	 *               there has to be a server interface configured.
 	 **/
 	private boolean reticulumAnnounceGateway = false;
