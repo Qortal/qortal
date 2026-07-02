@@ -76,6 +76,11 @@ public abstract class Qortal25519Extras extends BouncyCastleEd25519 {
 		return new PointAccum();
 	}
 
+	// Mostly for test support
+	public static PointAffine newPointAffine() {
+		return new PointAffine();
+	}
+
 	public static byte[] aggregatePublicKeys(Collection<byte[]> publicKeys) {
 		PointAccum rAccum = null;
 
@@ -230,5 +235,33 @@ public abstract class Qortal25519Extras extends BouncyCastleEd25519 {
 			return false;
 
 		return Arrays.equals(check, R);
+	}
+
+	/**
+	 * Produce a standard Ed25519 signature over {@code message}.
+	 * <p>
+	 * Unlike {@link #signForAggregation(byte[], byte[])}, the challenge here is bound to the
+	 * nonce point {@code R} and the public key {@code A} (i.e. {@code k = H(R || A || message)}),
+	 * as required for a secure Schnorr/EdDSA signature. This replaces the forgeable
+	 * aggregate-signature scheme on the online-accounts consensus path.
+	 * <p>
+	 * The private key is the same 32-byte seed used by {@link #signForAggregation(byte[], byte[])},
+	 * so the resulting public key is identical.
+	 */
+	public static byte[] sign(byte[] privateKey, byte[] message) {
+		byte[] signature = new byte[SIGNATURE_SIZE];
+		Ed25519.sign(privateKey, 0, message, 0, message.length, signature, 0);
+		return signature;
+	}
+
+	/**
+	 * Verify a standard Ed25519 signature (challenge bound to {@code R} and {@code A}) over {@code message}.
+	 * <p>
+	 * This is the secure replacement for {@link #verifyAggregated(byte[], byte[], byte[])} on the
+	 * online-accounts path: each online account's signature is verified individually against its own
+	 * public key, so the universal forgery (which relied on a challenge independent of {@code R}) is closed.
+	 */
+	public static boolean verify(byte[] publicKey, byte[] signature, byte[] message) {
+		return Ed25519.verify(signature, 0, publicKey, 0, message, 0, message.length);
 	}
 }

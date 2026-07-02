@@ -638,6 +638,15 @@ public class Controller extends Thread {
             PirateChainWalletController.getInstance().start();
         }
 
+	    if( Settings.getInstance().isDbCacheEnabled() ) {
+				LOGGER.info("Starting Db Cache...");
+				HSQLDBDataCacheManager hsqldbDataCacheManager = new HSQLDBDataCacheManager();
+				hsqldbDataCacheManager.start();
+		}
+		else {
+				LOGGER.info("Db Cache Disabled");
+		}
+
 		LOGGER.info(String.format("Starting API on port %d", Settings.getInstance().getApiPort()));
 		try {
 			ApiService apiService = ApiService.getInstance();

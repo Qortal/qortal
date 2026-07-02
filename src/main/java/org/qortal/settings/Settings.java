@@ -236,7 +236,7 @@ public class Settings {
 	public long recoveryModeTimeout = 9999999999999L;
 
 	/** Minimum peer version number required in order to sync with them */
-	private String minPeerVersion = "6.1.0";
+	private String minPeerVersion = "6.1.6";
 
 	/** Whether to allow connections with peers below minPeerVersion
 	 * If true, we won't sync with them but they can still sync with us, and will show in the peers list
@@ -600,6 +600,20 @@ public class Settings {
 	 */
 	private int threadDumpExpiration = 24;
 
+	/**
+	 * Data Storage Size Calculation Hour
+	 *
+	 * The local hour in the day to scan for the data directory size.
+	 */
+	private int dataStorageSizeCalculationHour = 23;
+
+	/**
+	 * Data Storage Size Calculation Frequency
+	 *
+	 * The time in days between each calculation.
+	 */
+	private int dataStorageSizeCalculationFrequency = 1;
+
 	// Domain mapping
 	public static class ThreadLimit {
 		private String messageType;
@@ -708,6 +722,21 @@ public class Settings {
 	private String reticulumNetworkName = "";
 	/** Regenerate .reticulum/config.yml on every startup instead of only when missing. */
 	private boolean reticulumRegenerateConfigOnRestart = false;
+	/** Announce us as routing gateway.
+	 * Prerequisite: Transport has to be enabled (enable_transport: true) and
+	 *               there has to be a server interface configured.
+	 **/
+	private boolean reticulumAnnounceGateway = false;
+	/**
+	 * Host (FQDN or IP) that this node should advertise to peers when
+	 * reticulumAnnounceGateway is enabled. When empty (default), the node tries
+	 * to auto-detect via InetAddress.getLocalHost().getCanonicalHostName() and
+	 * rejects unusable results (localhost, 127.x, single-label names) — it then
+	 * skips advertising rather than poisoning the mesh with a name peers cannot
+	 * resolve. Set explicitly when running behind a NAT-traversed public name
+	 * or anywhere the local hostname does not match the public DNS entry.
+	 */
+	private String reticulumAnnouncedHost = "";
 
 	// Constructors
 
@@ -1607,6 +1636,10 @@ public class Settings {
 
 	public boolean isReticulumRegenerateConfigOnRestart() { return this.reticulumRegenerateConfigOnRestart; }
 
+	public boolean getReticulumAnnounceGateway() { return this.reticulumAnnounceGateway; }
+
+	public String getReticulumAnnouncedHost() { return this.reticulumAnnouncedHost; }
+
 	public int getBuildArbitraryResourcesBatchSize() {
 		return buildArbitraryResourcesBatchSize;
 	}
@@ -1645,5 +1678,13 @@ public class Settings {
 
 	public int getThreadDumpExpiration() {
 		return threadDumpExpiration;
+	}
+
+	public int getDataStorageSizeCalculationHour() {
+		return dataStorageSizeCalculationHour;
+	}
+
+	public int getDataStorageSizeCalculationFrequency() {
+		return dataStorageSizeCalculationFrequency;
 	}
 }

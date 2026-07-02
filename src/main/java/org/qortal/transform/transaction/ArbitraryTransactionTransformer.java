@@ -15,6 +15,7 @@ import org.qortal.transaction.Transaction;
 import org.qortal.transaction.Transaction.TransactionType;
 import org.qortal.transform.PaymentTransformer;
 import org.qortal.transform.TransformationException;
+import org.qortal.transform.Transformer;
 import org.qortal.utils.Serialization;
 
 import java.io.ByteArrayOutputStream;
@@ -112,7 +113,12 @@ public class ArbitraryTransactionTransformer extends TransactionTransformer {
 
 			int secretLength = byteBuffer.getInt();
 
-			if (secretLength > 0) {
+			if(secretLength > 0) {
+
+				if(secretLength > TransactionTransformer.PRIVATE_KEY_LENGTH) {
+					throw new TransformationException("excessive secret length " + secretLength);
+				}
+
 				secret = new byte[secretLength];
 				byteBuffer.get(secret);
 			}
@@ -152,7 +158,12 @@ public class ArbitraryTransactionTransformer extends TransactionTransformer {
 
 			int metadataHashLength = byteBuffer.getInt();
 
-			if (metadataHashLength > 0) {
+			if(metadataHashLength > 0) {
+
+				if(metadataHashLength > Transformer.SHA256_LENGTH) {
+					throw new TransformationException("excessive metadata hash length " + metadataHashLength);
+				}
+
 				metadataHash = new byte[metadataHashLength];
 				byteBuffer.get(metadataHash);
 			}

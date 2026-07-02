@@ -122,7 +122,9 @@
 		"adminQueryFixHeight": 2012800,
 		"multipleNamesPerAccountHeight": 2206300,
 		"mintedBlocksAdjustmentRemovalHeight": 2206300,
-		"atValidateHeight": 2521500
+		"atValidateHeight": 2521500,
+		"onlineAccountsSignatureV2Height": 2618180,
+		"assetOrderBoundsHeight": 2618180
 	},
 	"checkpoints": [
 		{ "height": 1136300, "signature": "3BbwawEF2uN8Ni5ofpJXkukoU8ctAPxYoFB7whq9pKfBnjfZcpfEJT4R95NvBDoTP8WDyWvsUvbfHbcr9qSZuYpSKZjUQTvdFf6eqznHGEwhZApWfvXu6zjGCxYCp65F4jsVYYJjkzbjmkCg5WAwN5voudngA23kMK6PpTNygapCzXt" }

@@ -95,7 +95,9 @@ public class BlockChain {
 		adminQueryFixHeight,
 		multipleNamesPerAccountHeight,
 		mintedBlocksAdjustmentRemovalHeight,
-		atValidateHeight
+		atValidateHeight,
+		onlineAccountsSignatureV2Height,
+		assetOrderBoundsHeight
 	}
 
     // V5.5 Default List of Historic Triggers
@@ -354,8 +356,10 @@ public class BlockChain {
 		}
 
         // Load in the default feature triggers
-        defaultFeatureTriggerHeight.put(FeatureTrigger.multipleNamesPerAccountHeight, 2206300L);
-        defaultFeatureTriggerHeight.put(FeatureTrigger.mintedBlocksAdjustmentRemovalHeight, 2206300L);
+		defaultFeatureTriggerHeight.put(FeatureTrigger.multipleNamesPerAccountHeight, 2206300L);
+		defaultFeatureTriggerHeight.put(FeatureTrigger.mintedBlocksAdjustmentRemovalHeight, 2206300L);
+		defaultFeatureTriggerHeight.put(FeatureTrigger.onlineAccountsSignatureV2Height, 9999999999999L);
+		defaultFeatureTriggerHeight.put(FeatureTrigger.assetOrderBoundsHeight, 9999999999999L);
 
 		try  {
 			// Attempt to unmarshal JSON stream to BlockChain config
@@ -432,6 +436,10 @@ public class BlockChain {
 
 	public long getOnlineAccountsModulusV3Timestamp() {
 		return this.onlineAccountsModulusV3Timestamp;
+	}
+
+	public long getOnlineAccountsSignatureV2Height() {
+		return this.featureTriggers.get(FeatureTrigger.onlineAccountsSignatureV2Height.name()).longValue();
 	}
 
 	/* Block reward batching */
@@ -709,6 +717,10 @@ public class BlockChain {
 
 	public int getAtValidateHeight() {
 		return this.featureTriggers.get(FeatureTrigger.atValidateHeight.name()).intValue();
+	}
+
+	public long getAssetOrderBoundsHeight() {
+		return this.featureTriggers.get(FeatureTrigger.assetOrderBoundsHeight.name()).longValue();
 	}
 
 	// More complex getters for aspects that change by height or timestamp

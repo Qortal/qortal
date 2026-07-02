@@ -371,4 +371,33 @@ public class FilesystemUtils {
                     });
         }
     }
+
+    /**
+     * Get Disk Usage
+     *
+     * @param file the file
+     *
+     * @return the size in bytes, zero if an i/o exception is thrown
+     */
+    public static long getDiskUsage(File file) {
+        try {
+            // Logical file size in bytes
+            long logicalSize = file.length();
+
+            // Get file store information to estimate actual disk usage
+            Path path = Paths.get(file.getAbsolutePath());
+            FileStore store = Files.getFileStore(path);
+
+            // Get cluster/allocation unit size
+            long blockSize = store.getBlockSize();
+
+            // Calculate approximate actual disk usage
+            long blocksUsed = (logicalSize + blockSize - 1) / blockSize; // Ceiling division
+            long actualDiskUsage = blocksUsed * blockSize;
+
+            return actualDiskUsage;
+        } catch (IOException e) {
+            return 0;
+        }
+    }
 }
