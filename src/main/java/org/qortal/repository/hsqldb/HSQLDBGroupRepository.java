@@ -8,12 +8,17 @@ import org.qortal.repository.GroupRepository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public class HSQLDBGroupRepository implements GroupRepository {
+
+	private static final int GROUP_MEMBER_ADDRESS_BATCH_SIZE = 500;
 
 	protected HSQLDBRepository repository;
 
@@ -511,6 +516,45 @@ public class HSQLDBGroupRepository implements GroupRepository {
 	}
 
 	@Override
+	public Set<String> getGroupAdminAddresses(int groupId, Collection<String> addresses) throws DataException {
+		Set<String> admins = new HashSet<>();
+		if (addresses == null || addresses.isEmpty())
+			return admins;
+
+		List<String> addressList = addresses instanceof List<?> ? (List<String>) addresses : new ArrayList<>(addresses);
+		for (int offset = 0; offset < addressList.size(); offset += GROUP_MEMBER_ADDRESS_BATCH_SIZE) {
+			int end = Math.min(offset + GROUP_MEMBER_ADDRESS_BATCH_SIZE, addressList.size());
+			List<String> batch = addressList.subList(offset, end);
+
+			StringBuilder sql = new StringBuilder(128);
+			sql.append("SELECT admin FROM GroupAdmins WHERE group_id = ? AND admin IN (");
+			for (int i = 0; i < batch.size(); ++i) {
+				if (i > 0)
+					sql.append(", ");
+				sql.append("?");
+			}
+			sql.append(")");
+
+			List<Object> bindParams = new ArrayList<>(1 + batch.size());
+			bindParams.add(groupId);
+			bindParams.addAll(batch);
+
+			try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), bindParams.toArray())) {
+				if (resultSet == null)
+					continue;
+
+				do {
+					admins.add(resultSet.getString(1));
+				} while (resultSet.next());
+			} catch (SQLException e) {
+				throw new DataException("Unable to fetch group admin addresses from repository", e);
+			}
+		}
+
+		return admins;
+	}
+
+	@Override
 	public List<GroupAdminData> getGroupAdmins(int groupId, Integer limit, Integer offset, Boolean reverse) throws DataException {
 		StringBuilder sql = new StringBuilder(256);
 
@@ -604,6 +648,45 @@ public class HSQLDBGroupRepository implements GroupRepository {
 		} catch (SQLException e) {
 			throw new DataException("Unable to check for group member in repository", e);
 		}
+	}
+
+	@Override
+	public Set<String> getGroupMemberAddresses(int groupId, Collection<String> addresses) throws DataException {
+		Set<String> members = new HashSet<>();
+		if (addresses == null || addresses.isEmpty())
+			return members;
+
+		List<String> addressList = addresses instanceof List<?> ? (List<String>) addresses : new ArrayList<>(addresses);
+		for (int offset = 0; offset < addressList.size(); offset += GROUP_MEMBER_ADDRESS_BATCH_SIZE) {
+			int end = Math.min(offset + GROUP_MEMBER_ADDRESS_BATCH_SIZE, addressList.size());
+			List<String> batch = addressList.subList(offset, end);
+
+			StringBuilder sql = new StringBuilder(128);
+			sql.append("SELECT address FROM GroupMembers WHERE group_id = ? AND address IN (");
+			for (int i = 0; i < batch.size(); ++i) {
+				if (i > 0)
+					sql.append(", ");
+				sql.append("?");
+			}
+			sql.append(")");
+
+			List<Object> bindParams = new ArrayList<>(1 + batch.size());
+			bindParams.add(groupId);
+			bindParams.addAll(batch);
+
+			try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), bindParams.toArray())) {
+				if (resultSet == null)
+					continue;
+
+				do {
+					members.add(resultSet.getString(1));
+				} while (resultSet.next());
+			} catch (SQLException e) {
+				throw new DataException("Unable to fetch group member addresses from repository", e);
+			}
+		}
+
+		return members;
 	}
 
 	@Override

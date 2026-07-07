@@ -3,6 +3,7 @@ package org.qortal.test;
 import com.google.common.hash.HashCode;
 import com.google.common.primitives.Bytes;
 import com.google.common.primitives.Longs;
+import org.bouncycastle.crypto.digests.SHA512Digest;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.jsse.provider.BouncyCastleJsseProvider;
 import org.junit.Test;
@@ -12,6 +13,7 @@ import org.qortal.test.common.AccountUtils;
 import org.qortal.transform.Transformer;
 
 import java.math.BigInteger;
+import java.security.SecureRandom;
 import java.security.Security;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -163,5 +165,93 @@ public class SchnorrTests extends Qortal25519Extras {
         long timestamp = onlineAccount.getTimestamp();
         byte[] timestampBytes = Longs.toByteArray(timestamp);
         assertTrue(verifyAggregated(aggregatePublicKey, aggregateSignature, timestampBytes));
+    }
+
+    // --- C-01 fix: secure per-account Ed25519 (challenge bound to R and A) ---
+
+    @Test
+    public void testSecureSignAndVerify() {
+        byte[] privateKey = HashCode.fromString("0100000000000000000000000000000000000000000000000000000000000000".toLowerCase()).asBytes();
+        byte[] message = HashCode.fromString("01234567".toLowerCase()).asBytes();
+
+        byte[] publicKey = new byte[Transformer.PUBLIC_KEY_LENGTH];
+        Qortal25519Extras.generatePublicKey(privateKey, 0, publicKey, 0);
+
+        byte[] signature = Qortal25519Extras.sign(privateKey, message);
+
+        // Honest signature verifies
+        assertTrue(Qortal25519Extras.verify(publicKey, signature, message));
+
+        // Tampered message is rejected
+        byte[] otherMessage = message.clone();
+        otherMessage[0] ^= 0x01;
+        assertFalse(Qortal25519Extras.verify(publicKey, signature, otherMessage));
+    }
+
+    /**
+     * Reproduces the C-01 universal forgery (R = s*B - k*A, k = H(message) only) and asserts that:
+     * - the legacy {@code verifyAggregated} accepts it (demonstrating the original vulnerability), and
+     * - the secure {@code verify} (challenge bound to R and A) rejects it.
+     */
+    @Test
+    public void testForgeryRejectedBySecureVerify() {
+        byte[] message = HashCode.fromString("0000018bcfe25ac0".toLowerCase()).asBytes();
+
+        // A victim public key the attacker does NOT own
+        byte[] victimPrivateKey = new byte[Transformer.PUBLIC_KEY_LENGTH];
+        new SecureRandom().nextBytes(victimPrivateKey);
+        byte[] victimPublicKey = new byte[Transformer.PUBLIC_KEY_LENGTH];
+        Qortal25519Extras.generatePublicKey(victimPrivateKey, 0, victimPublicKey, 0);
+
+        byte[] forged = forge(victimPublicKey, message);
+
+        // Legacy scheme is forgeable...
+        assertTrue("legacy verifyAggregated should accept the forgery", verifyAggregated(victimPublicKey, forged, message));
+
+        // ...but the secure scheme rejects it (no private key was used).
+        assertFalse("secure verify must reject the forgery", Qortal25519Extras.verify(victimPublicKey, forged, message));
+    }
+
+    /** k = reduceScalar(SHA512(message)) -- exactly as the legacy verifyAggregated computes it. */
+    private static byte[] challenge(byte[] message) {
+        SHA512Digest d = new SHA512Digest();
+        byte[] h = new byte[d.getDigestSize()];
+        d.update(message, 0, message.length);
+        d.doFinal(h, 0);
+        return reduceScalar(h);
+    }
+
+    /** Pick a valid scalar s (< L) without any secret. */
+    private static byte[] anyScalar() {
+        byte[] seed = new byte[64];
+        new SecureRandom().nextBytes(seed);
+        return reduceScalar(seed);
+    }
+
+    /** Forge a signature for public key A and message with NO private key: pR = s*B - k*A. */
+    private static byte[] forge(byte[] publicKey, byte[] message) {
+        byte[] k = challenge(message);
+        byte[] s = anyScalar();
+
+        PointAffine pA = Qortal25519Extras.newPointAffine();
+        if (!decodePointVar(publicKey, 0, true, pA)) // negate=true -> pA = -A
+            throw new IllegalStateException("could not decode public key");
+
+        int[] nS = new int[SCALAR_INTS];
+        decodeScalar(s, 0, nS);
+        int[] nA = new int[SCALAR_INTS];
+        decodeScalar(k, 0, nA);
+
+        PointAccum pR = Qortal25519Extras.newPointAccum();
+        scalarMultStrausVar(nS, nA, pA, pR); // pR = s*B + k*(-A) = s*B - k*A
+
+        byte[] R = new byte[POINT_BYTES];
+        if (0 == encodePoint(pR, R, 0))
+            throw new IllegalStateException("could not encode R");
+
+        byte[] sig = new byte[SIGNATURE_SIZE];
+        System.arraycopy(R, 0, sig, 0, POINT_BYTES);
+        System.arraycopy(s, 0, sig, POINT_BYTES, SCALAR_BYTES);
+        return sig;
     }
 }

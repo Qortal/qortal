@@ -5,6 +5,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.qortal.account.Account;
 import org.qortal.account.PublicKeyAccount;
+import org.qortal.block.BlockChain;
 import org.qortal.data.asset.AssetData;
 import org.qortal.data.asset.OrderData;
 import org.qortal.data.asset.TradeData;
@@ -149,12 +150,34 @@ public class Order {
 	}
 
 	/** Returns amount of have-asset to remove from order's creator's balance on placing this order. */
-	private long calcHaveAssetCommittment() {
+	private long calcHaveAssetCommittment(boolean boundsCheckActive) throws DataException {
 		// Simple case: amount is in have asset
 		if (!this.isAmountInWantAsset)
 			return this.orderData.getAmount();
 
-		return Amounts.roundUpScaledMultiply(this.orderAmount, this.orderPrice);
+		return narrowToLong(Amounts.roundUpScaled(this.orderAmount, this.orderPrice), boundsCheckActive);
+	}
+
+	/**
+	 * Narrows a non-negative scaled amount to a signed long.
+	 * <p>
+	 * Once the asset-order bounds fix is active (see {@link org.qortal.transaction.CreateAssetOrderTransaction#isValid()}),
+	 * a value that does not fit in a positive signed long is a bug: validation should already have rejected the order.
+	 * We fail closed by throwing rather than silently wrapping into a negative, which on a credit path would mint value.
+	 * Before activation we preserve the historic wrapping behaviour so existing blocks replay identically.
+	 */
+	private static long narrowToLong(BigInteger value, boolean boundsCheckActive) throws DataException {
+		if (boundsCheckActive && value.bitLength() > 63)
+			throw new DataException("asset order amount overflows signed long");
+
+		return value.longValue();
+	}
+
+	private boolean isBoundsCheckActive(boolean processing) throws DataException {
+		// While processing, the block being applied is the next block (tip + 1).
+		// While orphaning, the block being reverted is still the current tip.
+		long blockHeight = this.repository.getBlockRepository().getBlockchainHeight() + (processing ? 1 : 0);
+		return blockHeight >= BlockChain.getInstance().getAssetOrderBoundsHeight();
 	}
 
 	private long calcHaveAssetRefund(long amount) {
@@ -254,9 +277,11 @@ public class Order {
 	}
 
 	public void process() throws DataException {
+		boolean boundsCheckActive = isBoundsCheckActive(true);
+
 		// Subtract have-asset from creator
 		Account creator = new PublicKeyAccount(this.repository, this.orderData.getCreatorPublicKey());
-		creator.modifyAssetBalance(haveAssetId, - this.calcHaveAssetCommittment());
+		creator.modifyAssetBalance(haveAssetId, - this.calcHaveAssetCommittment(boundsCheckActive));
 
 		// Save this order into repository so it's available for matching, possibly by itself
 		this.repository.getAssetRepository().save(this.orderData);
@@ -271,10 +296,10 @@ public class Order {
 		if (orders.isEmpty())
 			return;
 
-		matchOrders(orders);
+		matchOrders(orders, boundsCheckActive);
 	}
 
-	private void matchOrders(List<OrderData> orders) throws DataException {
+	private void matchOrders(List<OrderData> orders, boolean boundsCheckActive) throws DataException {
 		AssetData haveAssetData = getHaveAsset();
 		AssetData wantAssetData = getWantAsset();
 
@@ -352,7 +377,7 @@ public class Order {
 			// Trade can go ahead!
 
 			// Calculate the total cost to us, in return-asset, based on their price
-			long returnAmountTraded = Amounts.roundDownScaledMultiply(matchedAmount, theirOrderData.getPrice());
+			long returnAmountTraded = narrowToLong(Amounts.roundDownScaled(BigInteger.valueOf(matchedAmount), BigInteger.valueOf(theirOrderData.getPrice())), boundsCheckActive);
 			LOGGER.trace(() -> String.format("returnAmountTraded: %s %s", prettyAmount(returnAmountTraded), returnAssetData.getName()));
 
 			// Safety check
@@ -362,7 +387,7 @@ public class Order {
 			long tradedHaveAmount = this.isAmountInWantAsset ? returnAmountTraded : matchedAmount;
 
 			// We also need to know how much have-asset to refund based on price improvement (only one direction applies)
-			long haveAssetRefund = this.isAmountInWantAsset ? Amounts.roundDownScaledMultiply(matchedAmount, Math.abs(ourPrice - theirPrice)) : 0;
+			long haveAssetRefund = this.isAmountInWantAsset ? narrowToLong(Amounts.roundDownScaled(BigInteger.valueOf(matchedAmount), BigInteger.valueOf(Math.abs(ourPrice - theirPrice))), boundsCheckActive) : 0;
 
 			LOGGER.trace(() -> String.format("We traded %s %s (have-asset) for %s %s (want-asset), saving %s %s (have-asset)",
 					prettyAmount(tradedHaveAmount), haveAssetData.getName(),
@@ -417,8 +442,9 @@ public class Order {
 		this.repository.getAssetRepository().delete(this.orderData.getOrderId());
 
 		// Return asset to creator
+		boolean boundsCheckActive = isBoundsCheckActive(false);
 		Account creator = new PublicKeyAccount(this.repository, this.orderData.getCreatorPublicKey());
-		creator.modifyAssetBalance(haveAssetId, this.calcHaveAssetCommittment());
+		creator.modifyAssetBalance(haveAssetId, this.calcHaveAssetCommittment(boundsCheckActive));
 	}
 
 	// This is called by CancelOrderTransaction so that an Order can no longer trade

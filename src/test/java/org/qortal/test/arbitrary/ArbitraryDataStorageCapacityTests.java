@@ -5,25 +5,12 @@ import org.apache.commons.lang3.reflect.FieldUtils;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
-import org.qortal.account.PrivateKeyAccount;
-import org.qortal.arbitrary.ArbitraryDataFile;
-import org.qortal.arbitrary.misc.Service;
-import org.qortal.controller.arbitrary.ArbitraryDataCleanupManager;
 import org.qortal.controller.arbitrary.ArbitraryDataManager;
 import org.qortal.controller.arbitrary.ArbitraryDataStorageManager;
-import org.qortal.data.transaction.ArbitraryTransactionData;
-import org.qortal.data.transaction.RegisterNameTransactionData;
 import org.qortal.list.ResourceListManager;
 import org.qortal.repository.DataException;
-import org.qortal.repository.Repository;
-import org.qortal.repository.RepositoryManager;
 import org.qortal.settings.Settings;
-import org.qortal.test.common.ArbitraryUtils;
 import org.qortal.test.common.Common;
-import org.qortal.test.common.TransactionUtils;
-import org.qortal.test.common.transaction.TestTransaction;
-import org.qortal.transaction.RegisterNameTransaction;
-import org.qortal.utils.Base58;
 import org.qortal.utils.ListUtils;
 import org.qortal.utils.NTP;
 
@@ -68,7 +55,7 @@ public class ArbitraryDataStorageCapacityTests extends Common {
 
         // We need to calculate the directory size because we haven't yet
         assertTrue(storageManager.shouldCalculateDirectorySize(now));
-        storageManager.calculateDirectorySize(now);
+        storageManager.getDataDirectorySize(now);
         assertTrue(storageManager.isStorageCapacityCalculated());
 
         // Storage capacity should equal the value specified in settings
@@ -99,7 +86,7 @@ public class ArbitraryDataStorageCapacityTests extends Common {
 
         // We need to calculate the total directory size because we haven't yet
         assertTrue(storageManager.shouldCalculateDirectorySize(now));
-        storageManager.calculateDirectorySize(now);
+        storageManager.getDataDirectorySize(now);
         assertTrue(storageManager.isStorageCapacityCalculated());
 
         // Storage capacity should initially equal the total

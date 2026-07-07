@@ -430,6 +430,60 @@ public class HSQLDBCacheUtilsTests {
     }
 
     @Test
+    public void testDefaultResourceExcludesIdentifiersWithoutQuery() {
+
+        ArbitraryResourceData defaultResource = new ArbitraryResourceData();
+        defaultResource.name = "Joe";
+
+        ArbitraryResourceData identifiedResource = new ArbitraryResourceData();
+        identifiedResource.name = "Joe";
+        identifiedResource.identifier = "app";
+
+        List<ArbitraryResourceData> result = filterListByMap(
+                List.of(defaultResource, identifiedResource),
+                NAME_LEVEL, new HashMap<>(Map.of(DEFAULT_RESOURCE, true)),
+                1
+        );
+
+        Assert.assertNull(result.get(0).identifier);
+    }
+
+    @Test
+    public void testDefaultResourceQuerySearchesNameOnly() {
+
+        ArbitraryResourceData defaultResource = new ArbitraryResourceData();
+        defaultResource.name = "Joe";
+
+        ArbitraryResourceData identifiedResource = new ArbitraryResourceData();
+        identifiedResource.name = "Other";
+        identifiedResource.identifier = "Joe";
+
+        List<ArbitraryResourceData> result = filterListByMap(
+                List.of(defaultResource, identifiedResource),
+                NAME_LEVEL, new HashMap<>(Map.of(DEFAULT_RESOURCE, true, QUERY, "Joe")),
+                1
+        );
+
+        Assert.assertNull(result.get(0).identifier);
+    }
+
+    @Test
+    public void testDefaultResourceAcceptsDefaultIdentifierLiteral() {
+
+        ArbitraryResourceData data = new ArbitraryResourceData();
+        data.name = "Joe";
+        data.identifier = "default";
+
+        List<ArbitraryResourceData> result = filterListByMap(
+                List.of(data),
+                NAME_LEVEL, new HashMap<>(Map.of(DEFAULT_RESOURCE, true)),
+                1
+        );
+
+        Assert.assertEquals("default", result.get(0).identifier);
+    }
+
+    @Test
     public void testFollowedNamesNegative() {
 
         ArbitraryResourceData data = new ArbitraryResourceData();

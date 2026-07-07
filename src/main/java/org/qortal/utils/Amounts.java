@@ -34,16 +34,24 @@ public abstract class Amounts {
 		return Math.abs(a);
 	}
 
+	public static BigInteger roundUpScaled(BigInteger multiplicand, BigInteger multiplier) {
+		return multiplicand.multiply(multiplier).add(ROUNDING).divide(MULTIPLIER_BI);
+	}
+
 	public static long roundUpScaledMultiply(BigInteger multiplicand, BigInteger multiplier) {
-		return multiplicand.multiply(multiplier).add(ROUNDING).divide(MULTIPLIER_BI).longValue();
+		return roundUpScaled(multiplicand, multiplier).longValue();
 	}
 
 	public static long roundUpScaledMultiply(long multiplicand, long multiplier) {
 		return roundUpScaledMultiply(BigInteger.valueOf(multiplicand), BigInteger.valueOf(multiplier));
 	}
 
+	public static BigInteger roundDownScaled(BigInteger multiplicand, BigInteger multiplier) {
+		return multiplicand.multiply(multiplier).divide(MULTIPLIER_BI);
+	}
+
 	public static long roundDownScaledMultiply(BigInteger multiplicand, BigInteger multiplier) {
-		return multiplicand.multiply(multiplier).divide(MULTIPLIER_BI).longValue();
+		return roundDownScaled(multiplicand, multiplier).longValue();
 	}
 
 	public static long roundDownScaledMultiply(long multiplicand, long multiplier) {

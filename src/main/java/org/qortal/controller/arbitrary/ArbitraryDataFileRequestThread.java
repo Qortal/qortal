@@ -1,6 +1,7 @@
 package org.qortal.controller.arbitrary;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -24,7 +25,14 @@ import org.qortal.controller.Controller;
 import org.qortal.data.arbitrary.ArbitraryFileListResponseInfo;
 import org.qortal.data.network.PeerData;
 import org.qortal.data.transaction.ArbitraryTransactionData;
-import org.qortal.network.*;
+import org.qortal.network.NetworkData;
+import org.qortal.network.Peer;
+import org.qortal.network.PeerFactory;
+import org.qortal.network.PeerAddress;
+import org.qortal.network.PeerAddressFactory;
+import org.qortal.network.PeerList;
+import org.qortal.network.PeerSendManagement;
+import org.qortal.network.PeerSendManager;
 import org.qortal.network.message.GetArbitraryDataFileMessage;
 import org.qortal.network.message.MessageException;
 import org.qortal.network.message.MessageType;
@@ -481,6 +489,9 @@ public class ArbitraryDataFileRequestThread {
                                 ArbitraryDataFile cachedFile = new ArbitraryDataFile(cachedChunk, data.getSignature(), false);
                                 if (cachedFile.validateHash(fileHashBytes)) {
                                     cachedFile.save();
+                                    if (data.getMetadataHash() != null && Arrays.equals(data.getMetadataHash(), fileHashBytes)) {
+                                        ArbitraryDataCacheManager.getInstance().addToUpdateQueue(data);
+                                    }
                                     LOGGER.trace("Saved chunk {} from relay cache to permanent storage", fileHash);
                                     continue; // Skip adding to batch
                                 } else {

@@ -27,6 +27,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.qortal.controller.tradebot.TradeStates.State;
 
@@ -136,10 +137,6 @@ public class TradeBotUtils {
                     crossChainTradeData.expectedForeignAmount,
                     foreignKey, null, lockTimeA, receivingPublicKeyHash);
 
-            // Attempt to backup the trade bot data
-            // Include tradeBotData as an additional parameter, since it's not in the repository yet
-            TradeBot.backupTradeBotData(repository, Arrays.asList(tradeBotData));
-
             // Fee for redeem/refund is subtracted from P2SH-A balance.
             // Do not include fee for funding transaction as this is covered by buildSpend()
             long amountA = crossChainTradeData.expectedForeignAmount + p2shFee /*redeeming/refunding P2SH-A*/;
@@ -152,6 +149,10 @@ public class TradeBotUtils {
 
             dataToProcess.add(new DataCombiner(crossChainTradeData, tradeBotData, p2shAddress));
         }
+
+        // Attempt to backup the trade bot data
+        // Include tradeBotData as an additional parameter, since it's not in the repository yet
+        TradeBot.backupTradeBotData(repository, dataToProcess.stream().map( data -> data.tradeBotData).collect(Collectors.toList()));
 
         // Build transaction for funding P2SH-A
         Transaction p2shFundingTransaction = bitcoiny.buildSpendMultiple(foreignKey, valueByP2shAddress, null);
