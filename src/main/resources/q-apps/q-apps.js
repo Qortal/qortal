@@ -186,12 +186,17 @@ function httpGetAsyncWithEvent(event, url) {
       // Remove from pending cache
       pendingAsyncRequests.delete(url);
 
-      if (responseText == null) {
-        // Pass to parent (UI), in case they can fulfil this request
-        event.data.requestedHandler = "UI";
-        parent.postMessage(event.data, "*", [event.ports[0]]);
-        return null;
-      }
+            if (responseText == null) {
+                // Pass to parent (UI), in case they can fulfil this request
+                event.data.requestedHandler = "UI";
+                const port = event.ports?.[0];
+                if (port != null) {
+                    parent.postMessage(event.data, "*", [port]);
+                } else {
+                    parent.postMessage(event.data, "*");
+                }
+                return null;
+            }
 
       return responseText;
     });
@@ -254,14 +259,24 @@ function handleResponse(event, response) {
     }
   }
 
+  // A response can be delivered as a regular window message when another
+  // handler has already forwarded the request. In that case there is no
+  // MessagePort left to answer on. Avoid throwing here, which otherwise
+  // leaves the Q-App request pending until its timeout.
+  const responsePort = event.ports?.[0];
+  if (responsePort == null) {
+    console.warn("Unable to respond to Q-App request: no MessagePort", event.data);
+    return;
+  }
+
   // Respond to app
   if (responseObj.error != null) {
-    event.ports[0].postMessage({
+    responsePort.postMessage({
       result: null,
       error: responseObj,
     });
   } else {
-    event.ports[0].postMessage({
+    responsePort.postMessage({
       result: responseObj,
       error: null,
     });
@@ -361,8 +376,17 @@ window.addEventListener(
       return;
     }
     if (event.data.action == null) {
-      // This could be a response from the UI
-      handleResponse(event, event.data);
+      // Only Q-App-shaped messages can be responses from the UI. Other
+      // extensions may use window.postMessage() too (for example, Pontem's
+      // pontem-external protocol), and those messages do not contain a
+      // MessagePort or a Q-App result/error pair.
+      if (
+        Object.prototype.hasOwnProperty.call(event.data, "result") ||
+        Object.prototype.hasOwnProperty.call(event.data, "error")
+      ) {
+        handleResponse(event, event.data);
+      }
+      return;
     }
     if (
       event.data.requestedHandler != null &&
@@ -701,9 +725,46 @@ window.addEventListener(
         return;
 
       default:
+        // Gateway mode has a separate handler for interactive requests. Do
+        // not forward these requests before that handler has checked whether
+        // the Qortal extension is available, otherwise the MessagePort can
+        // be transferred away while the gateway handler is still waiting.
+        if (
+          typeof _qdnContext !== "undefined" &&
+          _qdnContext === "gateway" &&
+          [
+            "GET_USER_ACCOUNT",
+            "SAVE_FILE",
+            "SIGN_TRANSACTION",
+            "DECRYPT_DATA",
+            "PUBLISH_QDN_RESOURCE",
+            "PUBLISH_MULTIPLE_QDN_RESOURCES",
+            "SEND_CHAT_MESSAGE",
+            "CREATE_TRADE_BUY_ORDER",
+            "CREATE_TRADE_SELL_ORDER",
+            "CANCEL_TRADE_SELL_ORDER",
+            "VOTE_ON_POLL",
+            "CREATE_POLL",
+            "JOIN_GROUP",
+            "DEPLOY_AT",
+            "GET_WALLET_BALANCE",
+            "SEND_COIN",
+            "GET_LIST_ITEMS",
+            "ADD_LIST_ITEMS",
+            "DELETE_LIST_ITEM",
+          ].includes(data.action)
+        ) {
+          return;
+        }
+
         // Pass to parent (UI), in case they can fulfil this request
         event.data.requestedHandler = "UI";
-        parent.postMessage(event.data, "*", [event.ports[0]]);
+        const port = event.ports?.[0];
+        if (port != null) {
+          parent.postMessage(event.data, "*", [port]);
+        } else {
+          parent.postMessage(event.data, "*");
+        }
 
         return;
     }
