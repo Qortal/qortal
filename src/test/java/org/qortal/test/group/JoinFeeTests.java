@@ -294,8 +294,9 @@ public class JoinFeeTests extends Common {
 			
 			// Bob joins the group
 			JoinGroupTransactionData joinTransactionData = new JoinGroupTransactionData(
-				TestTransaction.generateBase(bob), 
-				groupId
+				TestTransaction.generateBase(bob),
+				groupId,
+				groupData.getJoinFee()
 			);
 
 
@@ -386,8 +387,9 @@ public class JoinFeeTests extends Common {
 			
 			// Bob joins the group
 			JoinGroupTransactionData joinTransactionData = new JoinGroupTransactionData(
-				TestTransaction.generateBase(bob), 
-				groupId
+				TestTransaction.generateBase(bob),
+				groupId,
+				groupData.getJoinFee()
 			);
 			
 			ValidationResult result = TransactionUtils.signAndImport(repository, joinTransactionData, bob);
@@ -460,8 +462,9 @@ public class JoinFeeTests extends Common {
 			
 			// Bob attempts to join the group
 			JoinGroupTransactionData joinTransactionData = new JoinGroupTransactionData(
-				TestTransaction.generateBase(bob), 
-				groupId
+				TestTransaction.generateBase(bob),
+				groupId,
+				groupData.getJoinFee()
 			);
 			
 			ValidationResult result = TransactionUtils.signAndImport(repository, joinTransactionData, bob);
@@ -526,8 +529,9 @@ public class JoinFeeTests extends Common {
 			
 			// Bob accepts the invite
 			JoinGroupTransactionData joinTransactionData = new JoinGroupTransactionData(
-				TestTransaction.generateBase(bob), 
-				groupId
+				TestTransaction.generateBase(bob),
+				groupId,
+				groupData.getJoinFee()
 			);
 			
 			result = TransactionUtils.signAndImport(repository, joinTransactionData, bob);
@@ -619,8 +623,9 @@ public class JoinFeeTests extends Common {
 			
 			// Bob accepts the invite
 			JoinGroupTransactionData joinTransactionData = new JoinGroupTransactionData(
-				TestTransaction.generateBase(bob), 
-				groupId
+				TestTransaction.generateBase(bob),
+				groupId,
+				groupData.getJoinFee()
 			);
 			
 			result = TransactionUtils.signAndImport(repository, joinTransactionData, bob);
@@ -908,8 +913,9 @@ public class JoinFeeTests extends Common {
 			
 			// Bob joins the group
 			JoinGroupTransactionData joinTransactionData = new JoinGroupTransactionData(
-				TestTransaction.generateBase(bob), 
-				groupId
+				TestTransaction.generateBase(bob),
+				groupId,
+				groupData.getJoinFee()
 			);
 			
 			ValidationResult result = TransactionUtils.signAndImport(repository, joinTransactionData, bob);
