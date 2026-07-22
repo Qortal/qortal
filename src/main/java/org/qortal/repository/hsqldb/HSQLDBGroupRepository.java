@@ -184,6 +184,7 @@ public class HSQLDBGroupRepository implements GroupRepository {
 						group.getApprovalThreshold(),
 						group.getMinimumBlockDelay(),
 						group.getMaximumBlockDelay(),
+						group.getJoinFee(),
 						group.getReference(),
 						group.getCreationGroupId(),
 						group.getReducedGroupName(),
