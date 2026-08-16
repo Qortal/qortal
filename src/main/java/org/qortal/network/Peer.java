@@ -37,7 +37,7 @@ import org.qortal.data.block.CommonBlockData;
 import org.qortal.data.network.PeerData;
 import org.qortal.network.helper.PeerDownloadSpeedTracker;
 import org.qortal.network.message.Message;
-import org.qortal.network.RNSCommon.PeerMetaType;
+import org.qortal.network.reticulum.RNSCommon.PeerMetaType;
 import org.qortal.network.helper.PeerCapabilities;
 //import org.qortal.network.helper.PeerCapabilities;
 //import org.qortal.network.helper.PeerDownloadSpeedTracker;

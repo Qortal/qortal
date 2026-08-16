@@ -1,9 +1,11 @@
-package org.qortal.network;
+package org.qortal.network.reticulum;
 
 //import lombok.Data;
 //import lombok.extern.slf4j.Slf4j;
 //import org.qortal.settings.Settings;
 
+import org.qortal.network.PeerAddress;
+import org.qortal.network.PeerAddressCtor;
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
 import java.net.InetSocketAddress;

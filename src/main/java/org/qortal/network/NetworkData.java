@@ -13,7 +13,8 @@ import org.qortal.controller.arbitrary.ArbitraryDataFileManager;
 import org.qortal.controller.arbitrary.ArbitraryMetadataManager;
 import org.qortal.crypto.Crypto;
 import org.qortal.data.network.PeerData;
-import org.qortal.network.RNSCommon.PeerMetaType;
+import org.qortal.network.reticulum.RNS;
+import org.qortal.network.reticulum.RNSCommon.PeerMetaType;
 import org.qortal.network.message.*;
 import org.qortal.network.task.*;
 import org.qortal.repository.DataException;
@@ -2620,7 +2621,7 @@ public class NetworkData {
         }
 
         // Reticulum DATA peers bypass PeerSendManager (no TCP socket); send directly via buffer.
-        for (org.qortal.network.ReticulumPeer rPeer : RNS.getInstance().getActiveDataPeers()) {
+        for (org.qortal.network.reticulum.ReticulumPeer rPeer : RNS.getInstance().getActiveDataPeers()) {
             if (this.isShuttingDown)
                 return;
             Message message = peerMessageBuilder.apply(rPeer);

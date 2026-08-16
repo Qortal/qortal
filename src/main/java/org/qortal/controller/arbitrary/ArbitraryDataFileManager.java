@@ -32,7 +32,7 @@ import org.qortal.data.arbitrary.ArbitraryRelayInfo;
 import org.qortal.data.network.PeerData;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.network.NetworkData;
-import org.qortal.network.RNS;
+import org.qortal.network.reticulum.RNS;
 import org.qortal.network.Peer;
 import org.qortal.network.PeerAddress;
 import org.qortal.network.PeerList;

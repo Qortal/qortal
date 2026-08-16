@@ -7,8 +7,8 @@ import org.qortal.data.block.BlockSummaryData;
 import org.qortal.data.network.PeerData;
 import org.qortal.network.Handshake;
 import org.qortal.network.Peer;
-import org.qortal.network.RNS;
-import org.qortal.network.ReticulumPeer;
+import org.qortal.network.reticulum.RNS;
+import org.qortal.network.reticulum.ReticulumPeer;
 import org.qortal.network.helper.PeerCapabilities;
 
 import io.reticulum.link.Link;

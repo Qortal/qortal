@@ -3,8 +3,8 @@ package org.qortal.data.network;
 import io.swagger.v3.oas.annotations.media.Schema;
 import org.qortal.network.PeerAddress;
 import org.qortal.network.PeerAddressFactory;
-import org.qortal.network.RNSCommon.PeerMetaType;
-import org.qortal.network.ReticulumPeerAddress;
+import org.qortal.network.reticulum.RNSCommon.PeerMetaType;
+import org.qortal.network.reticulum.ReticulumPeerAddress;
 
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;

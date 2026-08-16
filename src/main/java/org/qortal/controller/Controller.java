@@ -38,7 +38,7 @@ import org.qortal.gui.Gui;
 import org.qortal.gui.SysTray;
 import org.qortal.network.Network;
 import org.qortal.network.NetworkData;
-import org.qortal.network.RNS;
+import org.qortal.network.reticulum.RNS;
 import org.qortal.network.Peer;
 import org.qortal.network.PeerSendManagement;
 import org.qortal.network.PeerAddress;

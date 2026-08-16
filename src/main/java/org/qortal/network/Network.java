@@ -42,7 +42,9 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
-import org.qortal.network.RNSCommon.PeerMetaType;
+import org.qortal.network.reticulum.RNS;
+import org.qortal.network.reticulum.ReticulumPeer;
+import org.qortal.network.reticulum.RNSCommon.PeerMetaType;
 import static io.reticulum.link.LinkStatus.ACTIVE;
 import static java.util.Objects.nonNull;
 import static org.apache.commons.codec.binary.Hex.encodeHexString;

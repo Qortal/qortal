@@ -38,7 +38,7 @@ import org.qortal.data.network.PeerData;
 import org.qortal.network.helper.PeerCapabilities;
 import org.qortal.network.helper.PeerDownloadSpeedTracker;
 import org.qortal.network.message.ArbitraryDataFileMessage;
-import org.qortal.network.RNSCommon.PeerMetaType;
+import org.qortal.network.reticulum.RNSCommon.PeerMetaType;
 import org.qortal.network.message.ChallengeMessage;
 import org.qortal.network.message.GetArbitraryDataFileMessage;
 import org.qortal.network.message.Message;

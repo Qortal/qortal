@@ -4,7 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.qortal.data.network.PeerData;
 import org.qortal.network.IPPeerAddress;
 import org.qortal.network.PeerAddress;
-import org.qortal.network.ReticulumPeerAddress;
+import org.qortal.network.reticulum.ReticulumPeerAddress;
 
 import java.util.Arrays;
 import java.util.HashSet;
