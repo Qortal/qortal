@@ -875,6 +875,14 @@ public class HSQLDBATRepository implements ATRepository {
 		synchronized (this.repository.latestATStatesLock) {
 
 			int deletedCount = 0;
+			// Prune each height in one database operation instead of deleting individual AT states.
+			String deleteSql = "DELETE FROM ATStates "
+					+ "WHERE height = ? "
+					+ "AND NOT EXISTS ("
+					+ "SELECT TRUE FROM LatestATStates "
+					+ "WHERE LatestATStates.AT_address = ATStates.AT_address "
+					+ "AND LatestATStates.height = ATStates.height"
+					+ ")";
 
 			for (int height = minHeight; height <= maxHeight; height++) {
 
@@ -883,44 +891,11 @@ public class HSQLDBATRepository implements ATRepository {
 					return deletedCount;
 				}
 
-				// Get latest AT states for this height
-				List<String> atAddresses = new ArrayList<>();
-				String updateSql = "SELECT AT_address FROM LatestATStates WHERE height = ?";
-				try (ResultSet resultSet = this.repository.checkedExecute(updateSql, height)) {
-					if (resultSet != null) {
-						do {
-							String atAddress = resultSet.getString(1);
-							atAddresses.add(atAddress);
-
-						} while (resultSet.next());
-					}
+				try {
+					deletedCount += this.repository.executeCheckedUpdate(deleteSql, height);
 				} catch (SQLException e) {
-					throw new DataException("Unable to fetch latest AT states from repository", e);
-				}
-
-				List<ATStateData> atStates = this.getBlockATStatesAtHeight(height);
-				for (ATStateData atState : atStates) {
-					//LOGGER.info("Found atState {} at height {}", atState.getATAddress(), atState.getHeight());
-
-					// Give up if we're stopping
-					if (Controller.isStopping()) {
-						return deletedCount;
-					}
-
-					if (atAddresses.contains(atState.getATAddress())) {
-						// We don't want to delete this AT state because it is still active
-						LOGGER.trace("Skipping atState {} at height {}", atState.getATAddress(), atState.getHeight());
-						continue;
-					}
-
-					// Safe to delete everything else for this height
-					try {
-						this.repository.delete("ATStates", "AT_address = ? AND height = ?",
-								atState.getATAddress(), atState.getHeight());
-						deletedCount++;
-					} catch (SQLException e) {
-						throw new DataException("Unable to delete AT state data from repository", e);
-					}
+					repository.examineException(e);
+					throw new DataException("Unable to prune AT states from repository", e);
 				}
 			}
 			this.repository.saveChanges();
