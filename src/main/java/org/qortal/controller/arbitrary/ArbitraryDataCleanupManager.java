@@ -62,6 +62,8 @@ public class ArbitraryDataCleanupManager extends Thread {
 	 */
 	private static final int CHUNK_DELETION_BATCH_SIZE = 1000;
 
+	private static final long TRANSACTION_LIST_REFRESH_INTERVAL = 6 * 60 * 60 * 1000L; // 6 hours
+
 
 	/*
 	TODO:
@@ -89,14 +91,17 @@ public class ArbitraryDataCleanupManager extends Thread {
 		int offset = 0;
 
 		List<ArbitraryTransactionData> allArbitraryTransactionsInDescendingOrder;
+		long listFetchedAt;
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
 			allArbitraryTransactionsInDescendingOrder
 					= repository.getArbitraryRepository()
 					.getLatestArbitraryTransactions();
+			listFetchedAt = System.currentTimeMillis();
 		} catch( Exception e) {
 			LOGGER.error(e.getMessage(), e);
 			allArbitraryTransactionsInDescendingOrder = new ArrayList<>(0);
+			listFetchedAt = System.currentTimeMillis();
 		}
 
 		Set<ArbitraryTransactionDataHashWrapper> processedTransactions = new HashSet<>();
@@ -141,9 +146,12 @@ public class ArbitraryDataCleanupManager extends Thread {
 
 					if (transactions == null || transactions.isEmpty()) {
 						offset = 0;
-						allArbitraryTransactionsInDescendingOrder
-								= repository.getArbitraryRepository()
-								.getLatestArbitraryTransactions();
+						if (System.currentTimeMillis() - listFetchedAt >= TRANSACTION_LIST_REFRESH_INTERVAL) {
+							allArbitraryTransactionsInDescendingOrder
+									= repository.getArbitraryRepository()
+									.getLatestArbitraryTransactions();
+							listFetchedAt = System.currentTimeMillis();
+						}
 						transactions = allArbitraryTransactionsInDescendingOrder.stream().limit(limit).collect(Collectors.toList());
 						processedTransactions.clear();
 					}

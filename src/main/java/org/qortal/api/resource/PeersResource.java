@@ -28,6 +28,8 @@ import org.qortal.network.Peer;
 import org.qortal.network.PeerFactory;
 import org.qortal.network.PeerAddress;
 import org.qortal.network.PeerAddressFactory;
+import org.qortal.network.reticulum.RNS;
+import org.qortal.network.reticulum.ReticulumPeer;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
@@ -70,6 +72,40 @@ public class PeersResource {
 	)
 	public List<ConnectedPeer> getPeers() {
 		return Network.getInstance().getImmutableConnectedPeers().stream().map(ConnectedPeer::new).collect(Collectors.toList());
+	}
+
+	@GET
+	@Path("/reticulum")
+	@Produces(MediaType.APPLICATION_JSON)
+	@Operation(
+		summary = "Fetch list of connected Reticulum (mesh) peers",
+		description = "Returns all Reticulum peers (initiator and incoming, BASE/core and DATA/qdn aspects) "
+				+ "pulled directly from the mesh layer, enriched with Reticulum-specific link details "
+				+ "(link status, aspect, lastInbound, RTT, destination hash, reachability). "
+				+ "Unlike /peers this includes DATA-aspect and incoming peers. Empty if the mesh is not started.",
+		responses = {
+			@ApiResponse(
+				content = @Content(
+					mediaType = MediaType.APPLICATION_JSON,
+					array = @ArraySchema(
+						schema = @Schema(
+							implementation = ConnectedPeer.class
+						)
+					)
+				)
+			)
+		}
+	)
+	public List<ConnectedPeer> getReticulumPeers() {
+		RNS rns = RNS.getInstance();
+		if (!rns.isMeshStarted())
+			return new ArrayList<>();
+
+		List<ReticulumPeer> peers = new ArrayList<>();
+		peers.addAll(rns.getImmutableLinkedPeers());   // initiators (BASE + DATA)
+		peers.addAll(rns.getImmutableIncomingPeers());  // incoming
+
+		return peers.stream().map(ConnectedPeer::new).collect(Collectors.toList());
 	}
 
 	@GET

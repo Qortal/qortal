@@ -19,7 +19,7 @@ import org.qortal.network.message.MessageException;
 import org.qortal.network.message.MessageType;
 
 
-import org.qortal.network.ReticulumPeer;
+import org.qortal.network.reticulum.ReticulumPeer;
 import static org.apache.commons.codec.binary.Hex.encodeHexString;
 
 public class PeerSendManager {

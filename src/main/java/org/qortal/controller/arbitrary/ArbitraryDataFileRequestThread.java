@@ -72,7 +72,7 @@ public class ArbitraryDataFileRequestThread {
             PeerData peerData = peer.getPeerData();
             // Check if peer is already in the list (by PeerData)
             boolean alreadyAdded = availablePeers.stream()
-                    .anyMatch(pd -> pd.equals(peerData));
+                    .anyMatch(pd -> pd.isSameAddress(peerData));
             if (!alreadyAdded) {
                 availablePeers.add(peerData);
             }

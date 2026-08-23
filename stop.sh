@@ -66,13 +66,32 @@ fi
 if [ "$success" -eq 1 ]; then
   echo "Qortal node should be shutting down"
   if [ "${is_pid_valid}" -eq 0 ]; then
+    # Wait up to GRACE_SECONDS for a clean exit. If leaked non-daemon threads keep the
+    # JVM alive past that (as in the Reticulum test-14 watchdog/netty leaks), the process
+    # would otherwise linger forever holding ports 12391/12392/12394 — so the next start
+    # can't bind and only a reboot recovers. Force-kill after the grace period so ports
+    # are always released.
+    GRACE_SECONDS=120
+    waited=0
     echo -n "Monitoring for Qortal node to end"
     while s=`ps -p $pid -o stat=` && [[ "$s" && "$s" != 'Z' ]]; do
+      if [ "${waited}" -ge "${GRACE_SECONDS}" ]; then
+        echo
+        echo "${red}Qortal did not stop within ${GRACE_SECONDS}s - forcing shutdown (kill -9 ${pid})${normal}"
+        kill -9 "${pid}" 2>/dev/null
+        sleep 2
+        break
+      fi
       echo -n .
       sleep 1
+      waited=$((waited + 1))
     done
     echo
-    echo "${green}Qortal ended gracefully${normal}"
+    if ps -p $pid > /dev/null 2>&1; then
+      echo "${red}Warning: process ${pid} may still be running${normal}"
+    else
+      echo "${green}Qortal ended${normal}"
+    fi
     rm -f run.pid
   fi
 fi

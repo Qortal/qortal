@@ -30,6 +30,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -161,14 +162,14 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 
 	@Override
 	public List<ArbitraryTransactionData> getArbitraryTransactions(String name, Service service, String identifier, long since) throws DataException {
-		String sql = "SELECT type, reference, signature, creator, created_when, fee, " +
+		String sql = "SELECT type, reference, signature, creator, Transactions.created_when, fee, " +
 				"tx_group_id, block_height, approval_status, approval_height, " +
 				"version, nonce, service, size, is_data_raw, data, metadata_hash, " +
 				"name, identifier, update_method, secret, compression FROM ArbitraryTransactions " +
 				"JOIN Transactions USING (signature) " +
 				"WHERE lower(name) = ? AND service = ?" +
 				"AND (identifier = ? OR (identifier IS NULL AND ? IS NULL))" +
-				"AND created_when >= ? ORDER BY created_when ASC";
+				"AND Transactions.created_when >= ? ORDER BY Transactions.created_when ASC";
 		List<ArbitraryTransactionData> arbitraryTransactionData = new ArrayList<>();
 
 		try (ResultSet resultSet = this.repository.checkedExecute(sql, name.toLowerCase(), service.value, identifier, identifier, since)) {
@@ -235,17 +236,43 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 
 	@Override
 	public List<ArbitraryTransactionData> getLatestArbitraryTransactions(Integer limit) throws DataException {
-		String sql = "SELECT type, reference, signature, creator, created_when, fee, " +
+		// ponytail: when limited, pick the newest N signatures via an index-only scan on
+		// ArbitraryTransactions (no join, no sort pass — same plan as the "Lite" query), then
+		// constrain the join to just those N rows. Turns a 325k-row PK-probe join into N probes.
+		// No limit => we'd read every row anyway, so the join is unavoidable; keep it as-is.
+		Object[] bindParams = new Object[0];
+		String latestFilter = "name IS NOT NULL";
+		if (limit != null) {
+			List<byte[]> signatures = new ArrayList<>(limit);
+			String idSql = "SELECT signature FROM ArbitraryTransactions " +
+					"WHERE name IS NOT NULL ORDER BY created_when DESC LIMIT " + limit;
+			try (ResultSet idResultSet = this.repository.checkedExecute(idSql)) {
+				if (idResultSet == null)
+					return new ArrayList<>(0);
+				do {
+					signatures.add(idResultSet.getBytes(1));
+				} while (idResultSet.next());
+			} catch (SQLException e) {
+				throw new DataException("Unable to fetch latest arbitrary transaction signatures", e);
+			}
+
+			// Hydrate exactly those signatures. Order is re-applied by the ORDER BY below.
+			// Qualify the column: bare "signature" makes the planner full-scan ArbitraryTransactions;
+			// "ArbitraryTransactions.signature" lets it PK-seek both tables.
+			latestFilter = "ArbitraryTransactions.signature IN (" + String.join(", ", Collections.nCopies(signatures.size(), "?")) + ")";
+			bindParams = signatures.toArray();
+		}
+
+		String sql = "SELECT type, reference, signature, creator, Transactions.created_when, fee, " +
 				"tx_group_id, block_height, approval_status, approval_height, " +
 				"version, nonce, service, size, is_data_raw, data, metadata_hash, " +
 				"name, identifier, update_method, secret, compression FROM ArbitraryTransactions " +
 				"JOIN Transactions USING (signature) " +
-				"WHERE name IS NOT NULL " +
-				"ORDER BY created_when DESC" +
-				(limit != null ? " LIMIT " + limit : "");
+				"WHERE " + latestFilter + " " +
+				"ORDER BY ArbitraryTransactions.created_when DESC";
 		List<ArbitraryTransactionData> arbitraryTransactionData = new ArrayList<>();
 
-		try (ResultSet resultSet = this.repository.checkedExecute(sql)) {
+		try (ResultSet resultSet = this.repository.checkedExecute(sql, bindParams)) {
 			if (resultSet == null)
 				return new ArrayList<>(0);
 
@@ -307,7 +334,6 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 	public List<ArbitraryTransactionDataHashWrapper> getArbitraryTransactionSignaturesLite() throws DataException {
 		String sql = "SELECT signature, service, name, identifier, metadata_hash, created_when " +
 				"FROM ArbitraryTransactions " +
-				"JOIN Transactions USING (signature) " +
 				"WHERE name IS NOT NULL " +
 				"ORDER BY created_when DESC";
 
@@ -333,13 +359,13 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 
 	@Override
 	public List<ArbitraryTransactionData> getLatestArbitraryTransactionsByName( String name ) throws DataException {
-		String sql = "SELECT type, reference, signature, creator, created_when, fee, " +
+		String sql = "SELECT type, reference, signature, creator, Transactions.created_when, fee, " +
 				"tx_group_id, block_height, approval_status, approval_height, " +
 				"version, nonce, service, size, is_data_raw, data, metadata_hash, " +
 				"name, identifier, update_method, secret, compression FROM ArbitraryTransactions " +
 				"JOIN Transactions USING (signature) " +
 				"WHERE name = ? " +
-				"ORDER BY created_when DESC";
+				"ORDER BY ArbitraryTransactions.created_when DESC";
 		List<ArbitraryTransactionData> arbitraryTransactionData = new ArrayList<>();
 
 		try (ResultSet resultSet = this.repository.checkedExecute(sql, name)) {
@@ -408,7 +434,7 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 
 		StringBuilder sql = new StringBuilder(1024);
 
-		sql.append("SELECT type, reference, signature, creator, created_when, fee, " +
+		sql.append("SELECT type, reference, signature, creator, Transactions.created_when, fee, " +
 				"tx_group_id, block_height, approval_status, approval_height, " +
 				"version, nonce, service, size, is_data_raw, data, metadata_hash, " +
 				"name, identifier, update_method, secret, compression FROM ArbitraryTransactions " +
@@ -421,7 +447,7 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 			sql.append(method.value);
 		}
 
-		sql.append(" ORDER BY created_when");
+		sql.append(" ORDER BY ArbitraryTransactions.created_when");
 
 		if (firstNotLast) {
 			sql.append(" ASC");
@@ -489,7 +515,7 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 	public ArbitraryTransactionData getSingleTransactionBySignature(byte[] signature) throws DataException {
 		StringBuilder sql = new StringBuilder(1024);
 
-		sql.append("SELECT type, reference, signature, creator, created_when, fee, " +
+		sql.append("SELECT type, reference, signature, creator, tx.created_when, fee, " +
 				"tx_group_id, block_height, approval_status, approval_height, " +
 				"version, nonce, service, size, is_data_raw, data, metadata_hash, " +
 				"name, identifier, update_method, secret, compression FROM ArbitraryTransactions atx " +
@@ -558,7 +584,7 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 
 	public List<ArbitraryTransactionData> getArbitraryTransactions(boolean requireName, Integer limit, Integer offset, Boolean reverse) throws DataException {
 		StringBuilder sql = new StringBuilder(512);
-		sql.append("SELECT type, reference, signature, creator, created_when, fee, " +
+		sql.append("SELECT type, reference, signature, creator, Transactions.created_when, fee, " +
 			"tx_group_id, block_height, approval_status, approval_height, " +
 			"version, nonce, service, size, is_data_raw, data, metadata_hash, " +
 			"name, identifier, update_method, secret, compression FROM ArbitraryTransactions " +
@@ -568,7 +594,7 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 			sql.append(" WHERE name IS NOT NULL");
 		}
 
-		sql.append(" ORDER BY created_when");
+		sql.append(" ORDER BY ArbitraryTransactions.created_when");
 
 		if (reverse != null && reverse) {
 			sql.append(" DESC");

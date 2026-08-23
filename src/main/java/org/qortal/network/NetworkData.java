@@ -13,6 +13,8 @@ import org.qortal.controller.arbitrary.ArbitraryDataFileManager;
 import org.qortal.controller.arbitrary.ArbitraryMetadataManager;
 import org.qortal.crypto.Crypto;
 import org.qortal.data.network.PeerData;
+import org.qortal.network.reticulum.RNS;
+import org.qortal.network.reticulum.RNSCommon.PeerMetaType;
 import org.qortal.network.message.*;
 import org.qortal.network.task.*;
 import org.qortal.repository.DataException;
@@ -945,6 +947,20 @@ public class NetworkData {
                             setInterestOps(serverSelectionKey.channel(), SelectionKey.OP_ACCEPT);
                         }
                     } catch (CancelledKeyException e) {
+                    } catch (RuntimeException e) {
+                        // Defense-in-depth (mirrors Network.runIOLoop): a bug in per-peer
+                        // processing must never kill the shared NetworkData-IO thread and take
+                        // down all QDN networking. Log, drop just this peer, keep the loop alive.
+                        Peer peer = (Peer) key.attachment();
+                        LOGGER.warn("NetworkData-IO: unexpected error processing peer {}, disconnecting: {}",
+                                peer != null ? peer.getPeerConnectionId() : "?", e.getMessage(), e);
+                        if (peer != null) {
+                            try {
+                                peer.disconnect("NetworkData-IO error");
+                            } catch (Exception ignored) {
+                                // best-effort cleanup
+                            }
+                        }
                     }
                 }
             }
@@ -2395,20 +2411,25 @@ public class NetworkData {
     }
 
     public boolean mergePeers(String addedBy, long addedWhen, List<PeerAddress> peerAddresses) throws DataException {
+        // Filter out duplicates, without resolving via DNS. Hash the (small) incoming batch and make
+        // a single pass over the known peers — see the matching comment in Network.mergePeersUnlocked
+        // for why the old O(n x m) nested form under this monitor hurt.
+        Set<PeerAddress> candidates = new HashSet<>(peerAddresses);
+        if (candidates.isEmpty()) {
+            return false;
+        }
+
         List<PeerData> newPeers;
         synchronized (this.allKnownPeers) {
             for (PeerData knownPeerData : this.allKnownPeers) {
-                // Filter out duplicates, without resolving via DNS
-                Predicate<PeerAddress> isKnownAddress = peerAddress -> knownPeerData.getAddress().equals(peerAddress);
-                peerAddresses.removeIf(isKnownAddress);
-            }
-
-            if (peerAddresses.isEmpty()) {
-                return false;
+                if (candidates.remove(knownPeerData.getAddress()) && candidates.isEmpty()) {
+                    // Every address in this batch was already known
+                    return false;
+                }
             }
 
             // Add leftover peer addresses to known peers list
-            newPeers = peerAddresses.stream()
+            newPeers = candidates.stream()
                     .map(peerAddress -> new PeerData(peerAddress, addedWhen, addedBy))
                     .collect(Collectors.toList());
 
@@ -2472,8 +2493,12 @@ public class NetworkData {
         // Clean up peers with closed sockets (zombie connections)
         // These can block new connections due to duplicate detection during handshake
         // This catches peers in any handshake state (including COMPLETED) where the socket
-        // has been closed but the peer hasn't been removed from the connected list yet
+        // has been closed but the peer hasn't been removed from the connected list yet.
+        // Exclude ReticulumPeer: it is socket-less (getSocketChannel() is always null) so this
+        // filter would treat every mesh peer as a dead socket. DATA mesh peers are normally tracked
+        // by RNS rather than registered here, but keep the guard for parity with Network.prunePeers.
         List<Peer> deadPeers = this.getImmutableConnectedPeers().stream()
+                .filter(peer -> peer.getPeerData().getPeerMetaType() != PeerMetaType.RETICULUM)
                 .filter(peer -> peer.getSocketChannel() == null || !peer.getSocketChannel().isOpen())
                 .collect(Collectors.toList());
 
@@ -2487,8 +2512,10 @@ public class NetworkData {
         // This catches the case where onDisconnect() might have failed to remove a peer
         // from handshakedPeers even though the socket is closed
         // NOTE: We only check for closed/null sockets, NOT isStopping() - that flag is set
-        // during normal disconnect flow and would incorrectly remove all disconnecting peers
+        // during normal disconnect flow and would incorrectly remove all disconnecting peers.
+        // Same Reticulum exclusion as above.
         List<Peer> zombieHandshakedPeers = this.getImmutableHandshakedPeers().stream()
+                .filter(peer -> peer.getPeerData().getPeerMetaType() != PeerMetaType.RETICULUM)
                 .filter(peer -> peer.getSocketChannel() == null || !peer.getSocketChannel().isOpen())
                 .collect(Collectors.toList());
 
@@ -2594,7 +2621,7 @@ public class NetworkData {
         }
 
         // Reticulum DATA peers bypass PeerSendManager (no TCP socket); send directly via buffer.
-        for (org.qortal.network.ReticulumPeer rPeer : RNS.getInstance().getActiveDataPeers()) {
+        for (org.qortal.network.reticulum.ReticulumPeer rPeer : RNS.getInstance().getActiveDataPeers()) {
             if (this.isShuttingDown)
                 return;
             Message message = peerMessageBuilder.apply(rPeer);
@@ -2605,8 +2632,12 @@ public class NetworkData {
         }
     }
 
-    // Shutdown
-    public void shutdown() {
+    /**
+     * Stops accepting new inbound QDN connections, without any of the slow teardown work in
+     * {@link #shutdown()}. Idempotent, non-blocking, and safe to call ahead of shutdown() so the
+     * QDN listen socket closes even if Network's teardown stalls before we get here.
+     */
+    public void stopAcceptingConnections() {
         this.isShuttingDown = true;
 
         // Close listen socket to prevent more incoming connections
@@ -2617,6 +2648,11 @@ public class NetworkData {
                 // Not important
             }
         }
+    }
+
+    // Shutdown
+    public void shutdown() {
+        stopAcceptingConnections();
 
         // Shutdown chunk processor pool first (stop accepting new chunk processing tasks)
         LOGGER.info("Shutting down chunk processor pool...");

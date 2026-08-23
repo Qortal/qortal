@@ -38,7 +38,7 @@ import org.qortal.gui.Gui;
 import org.qortal.gui.SysTray;
 import org.qortal.network.Network;
 import org.qortal.network.NetworkData;
-import org.qortal.network.RNS;
+import org.qortal.network.reticulum.RNS;
 import org.qortal.network.Peer;
 import org.qortal.network.PeerSendManagement;
 import org.qortal.network.PeerAddress;
@@ -103,7 +103,14 @@ public class Controller extends Thread {
 	public static final long MISBEHAVIOUR_COOLOFF = 10 * 60 * 1000L; // ms
 	private static final int MAX_BLOCKCHAIN_TIP_AGE = 5; // blocks
 	private static final Object shutdownLock = new Object();
-	private static final String repositoryUrlTemplate = "jdbc:hsqldb:file:%s" + File.separator + "blockchain;create=true;hsqldb.full_log_replay=true";
+	private static String buildRepositoryUrl(String path) {
+		int cacheRows = Settings.getInstance().getHsqldbCacheRows();
+		int cacheSize = Settings.getInstance().getHsqldbCacheSize();
+		return "jdbc:hsqldb:file:" + path + File.separator
+				+ "blockchain;create=true;hsqldb.full_log_replay=true"
+				+ ";hsqldb.cache_rows=" + cacheRows
+				+ ";hsqldb.cache_size=" + cacheSize;
+	}
 	private static final long NTP_PRE_SYNC_CHECK_PERIOD = 5 * 1000L; // ms
 	private static final long NTP_POST_SYNC_CHECK_PERIOD = 5 * 60 * 1000L; // ms
 	private static final long DELETE_EXPIRED_INTERVAL = 5 * 60 * 1000L; // ms
@@ -326,7 +333,7 @@ public class Controller extends Thread {
 	// Getters / setters
 
 	public static String getRepositoryUrl() {
-		return String.format(repositoryUrlTemplate, Settings.getInstance().getRepositoryPath());
+		return buildRepositoryUrl(Settings.getInstance().getRepositoryPath());
 	}
 
 	public long getBuildTimestamp() {
@@ -437,8 +444,10 @@ public class Controller extends Thread {
 			NTP.start(Settings.getInstance().getNtpServers());
 
 		LOGGER.info("Starting repository");
+		LOGGER.debug("Repository URL: {}", getRepositoryUrl());
 		try {
 			HSQLDBRepositoryFactory repositoryFactory = new HSQLDBRepositoryFactory(getRepositoryUrl());
+
 			RepositoryManager.setRepositoryFactory(repositoryFactory);
 			RepositoryManager.setRequestedCheckpoint(Boolean.TRUE);
 
@@ -716,6 +725,15 @@ public class Controller extends Thread {
 		checkBlockMinter.schedule(new TimerTask() {
 			@Override
 			public void run() {
+				// Never resurrect the block minter during shutdown. shutdown() sets isStopping and
+				// then calls blockMinter.shutdown()+join(), which makes it not-alive — without this
+				// guard this watchdog "helpfully" restarts a fresh, non-daemon BlockMinter that then
+				// spins on an NPE (repository is tearing down → parentBlockData null) and keeps the
+				// JVM alive until stop.sh force-kills at 120s. It's a timing race with the 10-min
+				// period, so it only bites the occasional node/shutdown (test-23 wadin).
+				if (isStopping) {
+					return;
+				}
 				if (blockMinter.isAlive()) {
 					LOGGER.debug("Block minter is running? {}", blockMinter.isAlive());
 				} else if (!blockMinter.isAlive()) {
@@ -726,8 +744,17 @@ public class Controller extends Thread {
 						// Wait 10 seconds before restart
 						TimeUnit.SECONDS.sleep(10);
 
-						// Start new block minter thread
+						// Shutdown may have begun during the 10s wait — re-check before restarting.
+						if (isStopping) {
+							return;
+						}
+
+						// Start new block minter thread.
+						// A Thread can only be started once, so we must create a fresh
+						// BlockMinter instance here — calling start() on the old (terminated)
+						// one throws IllegalThreadStateException (seen in Qortal test-14).
 						LOGGER.info("Restarting block minter");
+						blockMinter = new BlockMinter();
 						blockMinter.start();
 					} catch (InterruptedException e) {
 						// Couldn't start new block minter thread
@@ -1281,6 +1308,37 @@ public class Controller extends Thread {
 			if (!isStopping) {
 				isStopping = true;
 
+				// Shutdown watchdog: if shutdown stalls (e.g. the wadin-specific Network.shutdown()
+				// hang seen in test-20..23), capture full thread dumps so the stuck thread can be
+				// identified. The periodic ThreadDumpScheduler is stopped during shutdown and can't
+				// record this. Daemon thread, so it never blocks JVM exit itself; it exits early
+				// once shutdownComplete is set at the end of a clean shutdown.
+				final java.util.concurrent.atomic.AtomicBoolean shutdownComplete = new java.util.concurrent.atomic.AtomicBoolean(false);
+				Thread shutdownWatchdog = new Thread(() -> {
+					final long start = System.currentTimeMillis();
+					// Dump before stop.sh's 120s force-kill; spaced to show progression.
+					for (long markMs : new long[] { 30_000L, 60_000L, 100_000L }) {
+						long waitMs = markMs - (System.currentTimeMillis() - start);
+						if (waitMs > 0) {
+							try {
+								Thread.sleep(waitMs);
+							} catch (InterruptedException e) {
+								Thread.currentThread().interrupt();
+								return;
+							}
+						}
+						if (shutdownComplete.get()) {
+							return;
+						}
+						LOGGER.warn("Shutdown still running after {}s", markMs / 1000);
+						// Captures a full thread dump IF the thread-dump feature is enabled
+						// (threadDumpInterval > 0); otherwise a no-op (see dumpNow).
+						ThreadDumpScheduler.getInstance().dumpNow("shutdown-hang");
+					}
+				}, "Shutdown-Watchdog");
+				shutdownWatchdog.setDaemon(true);
+				shutdownWatchdog.start();
+
 				LOGGER.info("Shutting down synchronizer");
 				Synchronizer.getInstance().shutdown();
 				try {
@@ -1347,6 +1405,12 @@ public class Controller extends Thread {
                 RNS.getInstance().shutdown();
 
 				LOGGER.info("Shutting down networking");
+				// Close BOTH listen sockets before either teardown starts. These calls are
+				// non-blocking; the shutdown() calls below are not. In test-17 Network.shutdown()
+				// stalled, so NetworkData.shutdown() was never reached and the QDN socket kept
+				// completing handshakes for the full 120s until stop.sh force-killed the node.
+				Network.getInstance().stopAcceptingConnections();
+				NetworkData.getInstance().stopAcceptingConnections();
 				Network.getInstance().shutdown();
 				NetworkData.getInstance().shutdown();
 				PeerSendManagement.getInstance().shutdown();
@@ -1398,6 +1462,10 @@ public class Controller extends Thread {
 
 				LOGGER.info("Shutting down NTP");
 				NTP.shutdownNow();
+
+				// Clean shutdown reached the end — stand the watchdog down so it doesn't dump.
+				shutdownComplete.set(true);
+				shutdownWatchdog.interrupt();
 
 				LOGGER.info("Shutdown complete!");
 			}

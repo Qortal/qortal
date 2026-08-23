@@ -3,7 +3,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>org.qortal</groupId>
 	<artifactId>qortal</artifactId>
-	<version>6.1.8</version> <!-- Version must be <X.Y.Z> -->
+	<version>6.1.9</version> <!-- Version must be <X.Y.Z> -->
 	<packaging>jar</packaging>
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -60,7 +60,8 @@
 		<protoc.skip>true</protoc.skip>
 		<protobuf.version>3.25.7</protobuf.version>
 		<replacer.version>1.5.3</replacer.version>
-		<reticulum.version>32c69bc</reticulum.version>
+		<!--<reticulum.version>19a8394</reticulum.version>-->
+		<reticulum.version>a3f4bf9d12</reticulum.version>
 		<jinjava.version>2.8.0</jinjava.version>
 		<simplemagic.version>1.17</simplemagic.version>
 		<!--<swagger-api.version>2.0.10</swagger-api.version>-->
@@ -945,11 +946,22 @@
       <version>${lombok.version}</version>
       <scope>provided</scope>
     </dependency>
+    <!--
+      bcpkix-jdk15on:1.70 was imported wholesale with the Reticulum phase-1 dependency set, but
+      bcpkix-jdk18on:${bouncycastle.version} already provides every org.bouncycastle.cert/operator
+      class we use (SslUtils). Worse, it dragged in bcprov-jdk15on:1.70, which is a MULTI-RELEASE
+      jar: shade merged its META-INF/versions/9/org/bouncycastle/** tree into the fat jar, where
+      nothing from the 1.78.1 artifacts overwrites it (bcprov-jdk15to18 is not multi-release).
+      Since the shaded jar is itself marked Multi-Release, on Java 9+ the classloader preferred
+      those 1.70 classes over the 1.78.1 ones at the root — 1567 classes silently downgraded.
+      That is how DevProxyService's PKCS12 KeyStore.load() blew up: 1.78.1's PBE$Util calls
+      DigestFactory.createSHA256PRF(), which does not exist in 1.70.
     <dependency>
       <groupId>org.bouncycastle</groupId>
       <artifactId>bcpkix-jdk15on</artifactId>
       <version>1.70</version>
     </dependency>
+    -->
     <dependency>
       <groupId>com.macasaet.fernet</groupId>
       <artifactId>fernet-java8</artifactId>

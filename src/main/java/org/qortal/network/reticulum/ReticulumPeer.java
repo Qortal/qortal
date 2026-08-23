@@ -1,4 +1,4 @@
-package org.qortal.network;
+package org.qortal.network.reticulum;
 
 //import org.slf4j.Logger;
 //import org.slf4j.LoggerFactory;
@@ -34,8 +34,8 @@ import static io.reticulum.identity.IdentityKnownDestination.recall;
 //import static io.reticulum.identity.IdentityKnownDestination.recallAppData;
 import io.reticulum.buffer.Buffer;
 import io.reticulum.buffer.BufferedRWPair;
-import org.qortal.network.RNSCommon.PeerAspect;
-import org.qortal.network.RNSCommon.PeerMetaType;
+import org.qortal.network.reticulum.RNSCommon.PeerAspect;
+import org.qortal.network.reticulum.RNSCommon.PeerMetaType;
 import static io.reticulum.utils.IdentityUtils.concatArrays;
 
 import lombok.Getter;
@@ -43,6 +43,10 @@ import org.qortal.controller.Controller;
 import org.qortal.data.block.BlockSummaryData;
 import org.qortal.data.block.CommonBlockData;
 import org.qortal.data.network.PeerData;
+import org.qortal.network.Handshake;
+import org.qortal.network.Network;
+import org.qortal.network.Peer;
+import org.qortal.network.PeerCtor;
 import org.qortal.network.helper.PeerCapabilities;
 import org.qortal.network.helper.PeerDownloadSpeedTracker;
 import org.qortal.network.message.Message;
@@ -52,7 +56,6 @@ import org.qortal.network.message.*;
 import org.qortal.network.message.MessageException;
 import org.qortal.network.task.MessageTask;
 import org.qortal.network.task.ReticulumMessageTask;
-import org.qortal.network.task.ReticulumPingTask;
 import org.qortal.settings.Settings;
 import org.qortal.utils.ExecuteProduceConsume.Task;
 import org.qortal.utils.NTP;
@@ -88,7 +91,16 @@ import java.lang.IllegalStateException;
 @Slf4j
 public class ReticulumPeer implements Peer {
 
-    static final String APP_NAME = Settings.getInstance().isTestNet() ? RNSCommon.TESTNET_APP_NAME: RNSCommon.MAINNET_APP_NAME;
+    /**
+     * Resolved on use, not in a static initialiser: reading Settings during class initialisation
+     * loads the settings file, which in turn initialises BlockChain and the crypto stack. That
+     * makes the class impossible to touch (even to mock) without booting most of the node, and
+     * turns any settings problem into a NoClassDefFoundError far from its cause. Settings is a
+     * cached singleton, so resolving per call costs nothing.
+     */
+    private static String appName() {
+        return Settings.getInstance().isTestNet() ? RNSCommon.TESTNET_APP_NAME : RNSCommon.MAINNET_APP_NAME;
+    }
     //static final String defaultConfigPath = new String(".reticulum");
     //static final String defaultConfigPath = RNSCommon.defaultRNSConfigPath;
 
@@ -109,6 +121,15 @@ public class ReticulumPeer implements Peer {
     Channel channel;
     // Guards createPeerBuffer() so only one thread calls getChannel() at a time.
     private final java.util.concurrent.atomic.AtomicBoolean creatingBuffer = new java.util.concurrent.atomic.AtomicBoolean(false);
+    // One-shot latches per link: every thread that tries to send to a dying peer discovers the
+    // death independently, so without these a single teardown is announced (and queued) once per
+    // concurrent sender — a live run showed 8 "buffer closed" warnings and 4 disconnects for one
+    // peer within the same second.
+    // Reset by initPeerLink(), so a peer whose link is re-initiated can be torn down again.
+    // Inbound peers never call initPeerLink() and are never re-linked (they are built fresh per
+    // Link, see removeIncomingPeer), so a one-shot latch is the whole story for them.
+    private final java.util.concurrent.atomic.AtomicBoolean removalSubmitted = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final java.util.concurrent.atomic.AtomicBoolean closedLinkHandled = new java.util.concurrent.atomic.AtomicBoolean(false);
     int receiveStreamId = 1001;
     int sendStreamId = 1001;
     ReticulumPeerAddress peerAddress;
@@ -160,6 +181,7 @@ public class ReticulumPeer implements Peer {
     private PeerData peerData;
     private PeerCapabilities peerCapabilities;
     private long linkEstablishedTime = -1L; // equivalent of (tcpip) Peer 'handshakeComplete'
+    private volatile boolean isStopping = false;
     // Versioning
     public static final Pattern VERSION_PATTERN = Pattern.compile(Controller.VERSION_PREFIX
             + "(\\d{1,3})\\.(\\d{1,5})\\.(\\d{1,5})");
@@ -247,7 +269,13 @@ public class ReticulumPeer implements Peer {
         this.replyQueues = new ConcurrentHashMap<>();
         this.pendingMessages = new LinkedBlockingQueue<>();
         this.peerAddress = new ReticulumPeerAddress(dhash);
-        this.peerData = new PeerData(peerAddress,NTP.getTime(),"ReticulumPeer");
+        //this.peerData = new PeerData(peerAddress,NTP.getTime(),"ReticulumPeer");
+        this.peerData = new PeerData(
+          peerAddress,
+          null, null, null,
+          System.currentTimeMillis(),
+          "ReticulumPeer"
+        );
         this.peerData.setPeerMetaType(this.peerMetaType);
 
         Long ntpTime = NTP.getTime();
@@ -277,12 +305,26 @@ public class ReticulumPeer implements Peer {
         this.isInitiator = false;
         //this.isVacant = false;
 
+        // This constructor is only used for INBOUND links, which are already established when the
+        // library hands them to us via baseClientConnected()/dataClientConnected(). Because the link
+        // is already ACTIVE, the linkEstablished() callback registered below will never fire for it,
+        // so linkEstablishedTime (which getConnectionEstablishedTime()/getConnectionAge() rely on)
+        // would stay -1 and the peer's reported age would be stuck at "connecting...". Record the
+        // establishment time here — accepting the inbound link is effectively its establishment.
+        this.linkEstablishedTime = System.currentTimeMillis();
+
         this.peerLink.setLinkEstablishedCallback(this::linkEstablished);
         this.peerLink.setLinkClosedCallback(this::linkClosed);
         this.peerLink.setPacketCallback(this::linkPacketReceived);
 
         this.peerAddress = new ReticulumPeerAddress(this.destinationHash);
-        this.peerData = new PeerData(this.peerAddress, NTP.getTime(),"ReticulumPeer");
+        //this.peerData = new PeerData(this.peerAddress, NTP.getTime(),"ReticulumPeer");
+        this.peerData = new PeerData(
+          this.peerAddress,
+          null, null, null,
+          System.currentTimeMillis(),
+          "ReticulumPeer"
+        );
         this.peerData.setPeerMetaType(this.peerMetaType);
 
         Long ntpTime = NTP.getTime();
@@ -309,7 +351,7 @@ public class ReticulumPeer implements Peer {
             this.serverIdentity,
             Direction.OUT,
             DestinationType.SINGLE,
-            APP_NAME,
+            appName(),
             peerAspect == RNSCommon.PeerAspect.DATA ? "qdn" : "core"
         );
         peerDestination.setProofStrategy(ProofStrategy.PROVE_ALL);
@@ -320,6 +362,9 @@ public class ReticulumPeer implements Peer {
         this.isInitiator = true;
 
         this.peerLink = new Link(peerDestination);
+        // Fresh link, fresh teardown state (see the two latches' declaration).
+        this.removalSubmitted.set(false);
+        this.closedLinkHandled.set(false);
 
         this.peerLink.setLinkEstablishedCallback(this::linkEstablished);
         this.peerLink.setLinkClosedCallback(this::linkClosed);
@@ -334,6 +379,42 @@ public class ReticulumPeer implements Peer {
         } else {
             return encodeHexString(this.getDestinationHash());
         }
+    }
+
+    /**
+     * How to name this peer in a log line.
+     * <p>
+     * Do <b>not</b> log {@code destinationHash} for an inbound peer: the {@link
+     * #ReticulumPeer(Link)} constructor sets it from {@code link.getDestination()}, which is
+     * <i>our</i> destination — identical for every inbound peer of that aspect, so it tells you
+     * nothing about who connected and makes concurrent failures indistinguishable. Prefer the
+     * remote node's destination hash, derived from its identity once it has identified; fall back
+     * to the link id, which is at least unique per connection.
+     */
+    String remoteLogId() {
+        if (Boolean.TRUE.equals(this.isInitiator)) {
+            return encodeHexString(this.destinationHash);
+        }
+        String identityKey = RNSPeerRegistry.incomingIdentityKey(this);
+        if (identityKey != null) {
+            return identityKey;
+        }
+        return nonNull(this.peerLink) ? "link:" + encodeHexString(this.peerLink.getLinkId()) : "unidentified";
+    }
+
+    /**
+     * Claim the right to run this peer's teardown, so only the first of N concurrent senders that
+     * hit the dead link does the work and writes the log line.
+     *
+     * @return true for the caller that claimed it; false for everyone after
+     */
+    boolean claimRemoval() {
+        return this.removalSubmitted.compareAndSet(false, true);
+    }
+
+    /** {@link #claimRemoval} for the closed-link disconnect path. */
+    boolean claimClosedLinkHandling() {
+        return this.closedLinkHandled.compareAndSet(false, true);
     }
 
     public int getRandomStreamId() {
@@ -474,13 +555,32 @@ public class ReticulumPeer implements Peer {
     }
 
     public void disconnect(String reason) {
-        log.info("@@@-> Disconnecting peer {} after {} - reason: {}", this.toString(), getConnectionAge(), reason);
+        log.info("Disconnecting peer {} after {} - reason: {}", this.toString(), getConnectionAge(), reason);
         var isShuttingDown = RNS.getInstance().isShuttingDown();
         log.debug("ReticulumPeer disconnect, RNS isShuttingDown: {}", isShuttingDown);
         if (!isShuttingDown) {
             makePeerUnavailable();
         }
         this.isPeerAvailable = false;
+        // Close the underlying Link so its watchdog thread can exit. Previously teardown()
+        // was left commented out to avoid the ABBA deadlock, which meant dead peers' Links
+        // stayed ACTIVE with a live watchdog forever (test-14: thousands leaked → heap OOM).
+        closePeerLinkNonBlocking();
+    }
+
+    /**
+     * Closes this peer's Link without the blocking, synchronized {@link Link#teardown()} (which
+     * sends a LINKCLOSE packet under the Link monitor and can deadlock with the Reticulum receive
+     * thread — the ABBA lock inversion removed elsewhere in this class). Setting the status is a
+     * plain volatile write with no lock: the Link's watchdog thread exits on its next wake, and
+     * Transport's jobs loop then drops the CLOSED link from activeLinks/pendingLinks so it becomes
+     * GC-eligible. This stops the watchdog-thread / Link-object accumulation seen in test-14.
+     */
+    public void closePeerLinkNonBlocking() {
+        var link = this.peerLink;
+        if (nonNull(link) && link.getStatus() != CLOSED) {
+            link.setStatus(CLOSED);
+        }
     }
 
     public void shutdown() {
@@ -490,6 +590,9 @@ public class ReticulumPeer implements Peer {
                 disconnect("shutting down");
             } else {
                 log.info("shutdown - status (non-ACTIVE): {}", peerLink.getStatus());
+                // Even non-ACTIVE (PENDING/HANDSHAKE/STALE) links have a live watchdog thread —
+                // close them too so every watchdog exits and the JVM can stop cleanly.
+                closePeerLinkNonBlocking();
             }
         }
         this.deleteMe = true;
@@ -534,6 +637,20 @@ public class ReticulumPeer implements Peer {
         return result;
     }
 
+    /**
+     * True if this peer's Reticulum Link is gone — {@code null} or {@code CLOSED}. Used by
+     * Network.prunePeers() to reconcile dead Reticulum peers out of the connected/handshaked
+     * lists: a peer added via {@link #makePeerAvailable()} but never tracked in RNS's
+     * linkedPeers/incomingPeers (e.g. a duplicate skipped by addLinkedPeer's dedup race) is never
+     * removed by RNS teardown, so it leaks there and bloats the scheduler's ping scan. A CLOSED
+     * link never recovers (reconnect creates a fresh Link), so removing such a peer cannot disrupt
+     * a live connection. Deliberately NOT true for PENDING/HANDSHAKE/STALE — those may still be
+     * establishing or recovering, and RNS owns their lifecycle.
+     */
+    public boolean isLinkClosed() {
+        return this.peerLink == null || this.peerLink.getStatus() == CLOSED;
+    }
+
     public void makePeerAvailable() {
         if (this.peerAspect != RNSCommon.PeerAspect.DATA) {
             // DATA peers are tracked by RNS's own linkedPeers/incomingPeers lists.
@@ -569,8 +686,13 @@ public class ReticulumPeer implements Peer {
         link.setLinkClosedCallback(this::linkClosed);
         // For incoming peers the constructor fires before the handshake, so getRemoteIdentity()
         // was null then. Resolve it now that the link is established.
-        if (!Boolean.TRUE.equals(isInitiator) && this.serverIdentity == null) {
-            this.serverIdentity = link.getRemoteIdentity();
+        if (!Boolean.TRUE.equals(isInitiator)) {
+            if (this.serverIdentity == null) {
+                this.serverIdentity = link.getRemoteIdentity();
+            }
+            // Identity is known now, so drop any older incoming links from the same remote+aspect
+            // immediately rather than waiting up to ~60s for the next prunePeers() dedup cycle.
+            RNS.getInstance().dedupIncomingPeerByIdentity(this);
         }
         log.info("peerLink {} established (link: {}) with peer: hash - {}, link destination hash: {}",
             encodeHexString(peerLink.getLinkId()), encodeHexString(link.getLinkId()), encodeHexString(destinationHash),
@@ -584,12 +706,37 @@ public class ReticulumPeer implements Peer {
         // CAS guard inside createPeerBuffer() prevents double-creation.
         createPeerBuffer();
         if (Boolean.TRUE.equals(isInitiator)) {
+            // Identify ourselves to the remote (server) side. link.identify() requires the link to be
+            // the initiator's and ACTIVE — both hold here. This lets the server resolve our identity
+            // via its remoteIdentified callback (see RNS.baseClientConnected/dataClientConnected);
+            // without it, inbound links on the remote carry no identity and its identity-based dedup
+            // (dedupIncomingPeerByIdentity / prunePeers) can never fire.
+            try {
+                Identity myIdentity = RNS.getInstance().getServerIdentity();
+                if (myIdentity != null) {
+                    link.identify(myIdentity);
+                } else {
+                    log.warn("linkEstablished - no local serverIdentity to identify() as for {}", encodeHexString(destinationHash));
+                }
+            } catch (Exception e) {
+                log.warn("linkEstablished - identify() failed for {}: {}", encodeHexString(destinationHash), e.getMessage());
+            }
             // Arm the ping timer: schedule first ping one interval from now.
             this.lastPingSent = ntpNow;
         }
     }
     
     public void linkClosed(Link link) {
+        // The library invokes this callback more than once for a single Link: Link.teardown() sets
+        // status=CLOSED and calls linkClosed() with no already-closed guard, and teardownPacket()
+        // calls it too. A live run showed two full disconnect sequences 1ms apart for one link id
+        // (same peer, connection ages 12175141/12175142) — each running shutdownChannel(), disconnect()
+        // and a duplicate triggerImmediateAnnounce() kick. Claim the handling once; the removal itself
+        // was already idempotent via markPeerForImmediateRemoval() → claimRemoval().
+        // Safe as a one-shot per peer instance: peerLink is assigned only in the constructors and is
+        // never reassigned, so a peer owns exactly one link for its lifetime. Shares the flag with
+        // sendMessage's CLOSED branch on purpose — same event, whichever path notices first wins.
+        if (!claimClosedLinkHandling()) return;
         if (isInitiator) {
             // Null the buffer immediately so createPeerBuffer() works correctly if this peer's
             // link is re-initiated before prunePeers() calls removeLinkedPeer() → shutdownChannel().
@@ -598,10 +745,11 @@ public class ReticulumPeer implements Peer {
             shutdownChannel();
             disconnect("link closed");
         }
-        // Kick the announce/path-recovery cycle immediately rather than waiting up to 30s
-        // for the next runBaseLoop iteration. Skip during shutdown (all links close then too).
+        // Kick the announce/path-recovery cycle immediately rather than waiting up to 30s for
+        // the next loop iteration — of THIS peer's aspect: kicking BASE when a DATA peer drops
+        // leaves DATA to wait out its full window. Skip during shutdown (all links close then too).
         if (!RNS.getInstance().isShuttingDown()) {
-            RNS.getInstance().triggerImmediateAnnounce();
+            RNS.getInstance().triggerImmediateAnnounce(getPeerAspect());
         }
         if (link.getTeardownReason() == TIMEOUT) {
             log.info("linkClosed callback: The link timed out");
@@ -686,10 +834,12 @@ public class ReticulumPeer implements Peer {
             // (seen as "N > 0" from Arrays.copyOfRange). Mark for removal so prunePeers()
             // removes this peer from getActiveImmutableLinkedPeers() — otherwise the
             // Synchronizer keeps trying to use the dead buffer and the chain falls behind.
-            log.warn("peerBufferReady: read error for {} ({}), marking for immediate removal", encodeHexString(destinationHash), e.getMessage());
             shutdownChannel();
             this.deleteMe = true; // safety net if pool is full/shutting down
-            RNS.getInstance().markPeerForImmediateRemoval(this);
+            if (RNS.getInstance().markPeerForImmediateRemoval(this)) {
+                log.warn("peerBufferReady: read error for {} ({}), marking for immediate removal",
+                        remoteLogId(), e.getMessage());
+            }
             return;
         }
         ByteBuffer bb = ByteBuffer.wrap(data);
@@ -781,7 +931,6 @@ public class ReticulumPeer implements Peer {
                         break;
                 }
             } catch (MessageException e) {
-                //log.error("{} from peer {}", e.getMessage(), this);
                 log.error("peerBufferReady - {} from peer {}", e, this);
                 // don't take any chances:
                 // can happen if link is closed by peer in which case we close this side of the link
@@ -831,9 +980,17 @@ public class ReticulumPeer implements Peer {
             var data = concatArrays("close::".getBytes(UTF_8), baseDestination.getHash());
             Packet closePacket = new Packet(link, data);
             var packetReceipt = closePacket.send();
-            packetReceipt.setDeliveryCallback(this::closePacketDelivered);
-            packetReceipt.setTimeout(1000L);
-            packetReceipt.setTimeoutCallback(this::packetTimedOut);
+            // send() returns null when no interface can process the packet — common during
+            // shutdown, when interfaces are already being torn down. Guard against it so the
+            // shutdown sequence isn't aborted by an NPE (which left non-daemon threads alive
+            // and prevented a clean stop in Qortal test-14).
+            if (nonNull(packetReceipt)) {
+                packetReceipt.setDeliveryCallback(this::closePacketDelivered);
+                packetReceipt.setTimeout(1000L);
+                packetReceipt.setTimeoutCallback(this::packetTimedOut);
+            } else {
+                log.debug("close packet could not be sent (no interface available) for {}", this);
+            }
         } else {
             log.debug("can't send to null link");
         }
@@ -1077,10 +1234,11 @@ public class ReticulumPeer implements Peer {
         //    // Send failure
         //    return false;
         } catch (IllegalStateException e) {
-            log.warn("sendMessage (queued): buffer closed for {} (link tearing down), marking for removal",
-                    encodeHexString(destinationHash));
             this.setDeleteMe(true);
-            RNS.getInstance().markPeerForImmediateRemoval(this);
+            if (RNS.getInstance().markPeerForImmediateRemoval(this)) {
+                log.warn("sendMessage (queued): buffer closed for {} (link tearing down), marking for removal",
+                        remoteLogId());
+            }
             return false;
         } catch (MessageException e) {
             log.error(e.getMessage(), e);
@@ -1169,10 +1327,10 @@ public class ReticulumPeer implements Peer {
             if (nonNull(this.peerLink)) {
                 if (this.peerLink.getStatus() != ACTIVE) {
                     log.debug("sendMessage - skipping: link not ready (status: {})", this.peerLink.getStatus());
-                    if (this.peerLink.getStatus() == CLOSED) {
-                        // prevent peer from being chosen for sending again.
+                    if (this.peerLink.getStatus() == CLOSED && claimClosedLinkHandling()) {
+                        // prevent peer from being chosen for sending again. Only the first sender
+                        // to notice does this — the rest just get false back.
                         disconnect("sendMessage - link closed");
-                        //makePeerUnavailable();
                     }
                     return false;
                 } else {
@@ -1195,10 +1353,14 @@ public class ReticulumPeer implements Peer {
             // Buffer is closed — the link is tearing down. Mark for removal so this peer
             // disappears from getActiveDataPeers() / getActiveImmutableLinkedPeers() on the
             // next loop iteration without waiting for prunePeers().
-            log.warn("sendMessage: buffer closed for {} (link tearing down), marking for removal",
-                    encodeHexString(destinationHash));
+            // deleteMe is idempotent and must be set by every caller: it is what takes this peer
+            // out of the active lists on the next loop pass. The teardown itself is claimed once,
+            // so N concurrent senders queue one task and write one warning, not N.
             this.setDeleteMe(true);
-            RNS.getInstance().markPeerForImmediateRemoval(this);
+            if (RNS.getInstance().markPeerForImmediateRemoval(this)) {
+                log.warn("sendMessage: buffer closed for {} (link tearing down), marking for removal",
+                        remoteLogId());
+            }
             return false;
         } catch (MessageException e) {
             log.error(e.getMessage(), e);
@@ -1233,37 +1395,14 @@ public class ReticulumPeer implements Peer {
     }
 
     public Task getPingTask(Long now) {
-        // Only initiator peers send application-level pings; non-initiators reply to them.
-        if (!Boolean.TRUE.equals(isInitiator)) {
-            return null;
-        }
-
-        // Pings not enabled yet?
-        if (now == null || this.lastPingSent == null) {
-            return null;
-        }
-
-        // ping only possible over ACTIVE Link
-        if (nonNull(this.peerLink)) {
-            if (this.peerLink.getStatus() != ACTIVE) {
-                return null;
-            }
-            //log.debug("Ping ReticulumPeer {}", peerLink.getDestination().getHexHash());
-        } else {
-            log.debug("Cannot ping ReticulumPeer - Link is {} (null)", peerLink);
-            return null;
-        }
-
-        // Time to send another ping?
-        if (now < this.lastPingSent + PING_INTERVAL) {
-            return null; // Not yet
-        }
-
-        // Not strictly true, but prevents this peer from being immediately chosen again
-        this.lastPingSent = now;
-
-        log.info("[{}] Scheduling ping to {}", getPeerConnectionId(), peerLink.getDestination().getHexHash());
-        return new ReticulumPingTask(this, now);
+        // App-level Reticulum pings are DISABLED (test-28). Liveness now comes from the Reticulum
+        // Link's native keepalive via the (library-fixed) lastInbound timestamp, evaluated by
+        // RNS.isUnreachable — a lightweight link-level mechanism. This replaces the old synchronous
+        // Channel PING/PONG (a blocking getResponse per initiator peer every 55s) which added
+        // Channel load, tied up Network-Worker threads, and could itself trigger the Channel
+        // 'retry count exceeded' teardowns we're trying to reduce. A wedged Channel still closes
+        // the Link, so isUnreachable's CLOSED check covers the Channel-death case.
+        return null;
     }
 
     //// low-level Link (packet) ping
@@ -1390,7 +1529,11 @@ public class ReticulumPeer implements Peer {
     }
 
     public String getPeersVersionString() {
-        return "6.1.0";
+        // Real version comes from the peer's announce appData (QAN1), set via setPeersVersionString()
+        // from RNS.getNewPeer()/onIncomingPeerIdentified(). Falls back to the historical floor until
+        // that peer's announce has been seen. Display-only; getPeersVersion() (the numeric min-
+        // version gate) is intentionally left at the floor.
+        return this.peersVersionString != null ? this.peersVersionString : "6.1.0";
     }
 
     public void setPeersVersion(String versionString, long version) {
@@ -1417,7 +1560,9 @@ public class ReticulumPeer implements Peer {
         return this.peersNodeId;
     }
 
-    public boolean isStopping() { return false; }
+    public boolean isStopping() {
+        return this.isStopping;
+    }
 
     public UUID getPeerConnectionId() {
         return this.peerConnectionId;

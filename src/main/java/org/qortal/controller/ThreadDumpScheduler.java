@@ -167,6 +167,103 @@ public class ThreadDumpScheduler {
         }
     }
 
+    /**
+     * Writes a one-off full thread dump immediately to the thread-dumps folder, with the given
+     * filename prefix. Best-effort: never throws, and does not depend on NTP (which may be
+     * unavailable during shutdown). Used by the Controller shutdown watchdog to capture a stalled
+     * shutdown — the periodic scheduler is stopped early in shutdown, so it can't record the hang.
+     * <p>
+     * No-op unless the thread-dump feature is enabled ({@code threadDumpInterval > 0}). When
+     * disabled, the {@code thread-dumps/} folder is not guaranteed to exist and the operator hasn't
+     * opted in, so we neither create the folder nor write a dump.
+     */
+    public void dumpNow(String prefix) {
+        if (Settings.getInstance().getThreadDumpInterval() <= 0) {
+            return;
+        }
+        try {
+            String installDir = System.getProperty("user.dir");
+            File dir = new File(installDir, THREAD_DUMP_FOLDER);
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+
+            SimpleDateFormat dateFormat = new SimpleDateFormat(TIMESTAMP_FORMAT);
+            String timestamp = dateFormat.format(new Date());
+            File file = new File(dir, prefix + "-" + timestamp + ".txt");
+
+            ThreadMXBean threadMXBean = ManagementFactory.getThreadMXBean();
+            ThreadInfo[] threadInfos = threadMXBean.dumpAllThreads(true, true);
+
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(file))) {
+                writer.write("Thread dump generated at: " + new Date());
+                writer.newLine();
+                writer.write("Reason: " + prefix);
+                writer.newLine();
+                writer.newLine();
+                for (ThreadInfo threadInfo : threadInfos) {
+                    // NOT threadInfo.toString(): that truncates the stack at 8 frames, which hides
+                    // the frame we actually need when diagnosing a shutdown hang (the deep
+                    // Network.shutdown()/repository call). Write the FULL stack + held locks.
+                    writer.write(formatThreadInfoFull(threadInfo));
+                    writer.newLine();
+                }
+            }
+
+            LOGGER.warn("Shutdown watchdog wrote thread dump: {}", file.getAbsolutePath());
+        } catch (Exception e) {
+            LOGGER.error("Failed to write on-demand thread dump: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Renders a ThreadInfo with its FULL stack trace and held locks, unlike {@link ThreadInfo#toString()}
+     * which caps the stack at 8 frames. Mirrors that format otherwise so existing dump tooling still parses.
+     */
+    private static String formatThreadInfoFull(ThreadInfo ti) {
+        StringBuilder sb = new StringBuilder();
+        sb.append('"').append(ti.getThreadName()).append('"');
+        if (ti.isDaemon()) {
+            sb.append(" daemon");
+        }
+        sb.append(" prio=").append(ti.getPriority());
+        sb.append(" Id=").append(ti.getThreadId());
+        sb.append(' ').append(ti.getThreadState());
+        if (ti.getLockName() != null) {
+            sb.append(" on ").append(ti.getLockName());
+        }
+        if (ti.getLockOwnerName() != null) {
+            sb.append(" owned by \"").append(ti.getLockOwnerName()).append("\" Id=").append(ti.getLockOwnerId());
+        }
+        if (ti.isSuspended()) {
+            sb.append(" (suspended)");
+        }
+        if (ti.isInNative()) {
+            sb.append(" (in native)");
+        }
+        sb.append('\n');
+
+        StackTraceElement[] stack = ti.getStackTrace();
+        java.lang.management.MonitorInfo[] monitors = ti.getLockedMonitors();
+        for (int i = 0; i < stack.length; i++) {
+            sb.append("\tat ").append(stack[i]).append('\n');
+            for (java.lang.management.MonitorInfo mi : monitors) {
+                if (mi.getLockedStackDepth() == i) {
+                    sb.append("\t-  locked ").append(mi).append('\n');
+                }
+            }
+        }
+
+        java.lang.management.LockInfo[] synchronizers = ti.getLockedSynchronizers();
+        if (synchronizers.length > 0) {
+            sb.append("\n\tNumber of locked synchronizers = ").append(synchronizers.length).append('\n');
+            for (java.lang.management.LockInfo li : synchronizers) {
+                sb.append("\t- ").append(li).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
     public void shutdown() {
 
         if( scheduler != null ) {

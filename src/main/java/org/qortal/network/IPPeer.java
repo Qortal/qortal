@@ -38,7 +38,7 @@ import org.qortal.data.network.PeerData;
 import org.qortal.network.helper.PeerCapabilities;
 import org.qortal.network.helper.PeerDownloadSpeedTracker;
 import org.qortal.network.message.ArbitraryDataFileMessage;
-import org.qortal.network.RNSCommon.PeerMetaType;
+import org.qortal.network.reticulum.RNSCommon.PeerMetaType;
 import org.qortal.network.message.ChallengeMessage;
 import org.qortal.network.message.GetArbitraryDataFileMessage;
 import org.qortal.network.message.Message;
@@ -251,7 +251,12 @@ public class IPPeer implements Peer {
      */
     @PeerCtor("socket")
     public IPPeer(SocketChannel socketChannel, int network) throws IOException {
-        this.isOutbound = false;
+        // Delegate to the shared constructor to initialize replyQueues/sendQueue/pendingMessages.
+        // This path previously set fields directly and relied on sharedSetup() to create those
+        // queues — but their inits are commented out there, so inbound (accepted) peers had a
+        // null replyQueues. readChannel() then NPE'd on the first received message and killed the
+        // non-daemon Network-IO thread (test-16 wadin: chain network dead ~11.5h, no sync).
+        this(network, false);
         this.socketChannel = socketChannel;
         int port = socketChannel.socket().getPort();
 

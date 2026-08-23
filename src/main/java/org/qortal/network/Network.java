@@ -41,9 +41,10 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
-import org.qortal.network.RNSCommon.PeerMetaType;
+import org.qortal.network.reticulum.RNS;
+import org.qortal.network.reticulum.ReticulumPeer;
+import org.qortal.network.reticulum.RNSCommon.PeerMetaType;
 import static io.reticulum.link.LinkStatus.ACTIVE;
 import static java.util.Objects.nonNull;
 import static org.apache.commons.codec.binary.Hex.encodeHexString;
@@ -82,6 +83,36 @@ public class Network {
      * Maximum time allowed for handshake to complete, in milliseconds.
      */
     private static final long HANDSHAKE_TIMEOUT = 60 * 1000L; // ms
+    /**
+     * Time budget for acquiring a repository connection to persist known peers during shutdown.
+     * Kept well inside stop.sh's 120s force-kill so a stalled pool cannot cost us a clean stop.
+     */
+    private static final long SHUTDOWN_REPOSITORY_TIMEOUT_MS = 10 * 1000L; // ms
+    /**
+     * Time budget for the UPnP port release during shutdown, which does blocking SSDP discovery.
+     */
+    private static final long SHUTDOWN_UPNP_TIMEOUT_MS = 5 * 1000L; // ms
+    /**
+     * Wall-clock budget for re-persisting known peers during shutdown. The save is one INSERT per
+     * peer and non-critical, so it is capped to keep total shutdown well under stop.sh's 120s
+     * force-kill on nodes with large peer tables (test-25 wadin hang).
+     */
+    private static final long SHUTDOWN_PEER_SAVE_BUDGET_MS = 10 * 1000L; // ms
+    /**
+     * Bounds on how long the scheduler loop sleeps when it finds no task due. See
+     * {@link #idleSleepMillis}.
+     */
+    private static final long MIN_IDLE_SLEEP = 25L; // ms
+    private static final long MAX_IDLE_SLEEP = 250L; // ms
+    /**
+     * How often the scheduler scans the peer lists for a due ping. The scan itself is the cost:
+     * it streams every handshaked and connected peer calling getPingTask(). Previously it ran on
+     * every loop iteration (up to ~40 Hz), so on a node whose peer lists have bloated with stale
+     * Reticulum entries it pinned Network-Scheduler near 100% of a core (test-20 wadin). Pings are
+     * due only every PING_INTERVAL (40s), so 250 ms (4 Hz) keeps them prompt while cutting the scan
+     * rate ~10x; 4 Hz still comfortably covers the max natural ping rate (~maxPeers/40s).
+     */
+    private static final long PING_CHECK_INTERVAL = 250L; // ms
 
     private static final byte[] MAINNET_MESSAGE_MAGIC = new byte[]{0x51, 0x4f, 0x52, 0x54}; // QORT
     // Magic for devnet. Only use for testing and development.
@@ -122,7 +153,20 @@ public class Network {
     private long nextDisconnectionCheck = 0L;
 
     private final List<PeerData> allKnownPeers = new ArrayList<>();
-    
+
+    /**
+     * Cache backing {@link #buildPeersMessage} — the advertised PEERS_V2 address list, rebuilt at
+     * most every {@link #PEERS_MESSAGE_CACHE_TTL}. Two variants: {@code local} includes local/LAN
+     * addresses (only sent to local peers), {@code remote} omits them. Rebuilding is the expensive
+     * part (known-peer snapshot + a blocking DNS lookup per peer); caching keeps it off the
+     * per-request path that was the hottest compiled code and the recurring SIGSEGV site on wadin.
+     */
+    private static final long PEERS_MESSAGE_CACHE_TTL = 60 * 1000L; // ms
+    private final Object peersMessageCacheLock = new Object();
+    private volatile List<PeerAddress> cachedPeerAddressesLocal = null;
+    private volatile List<PeerAddress> cachedPeerAddressesRemote = null;
+    private volatile long cachedPeerAddressesTimestamp = 0L;
+
     /**
      * Track whether the last peer selected was from the backoff list.
      * Used to determine retry interval when isolated.
@@ -254,6 +298,8 @@ public class Network {
     private final AtomicLong nextConnectTaskTimestamp = new AtomicLong(0L);
     /** Scheduler state: when to do next broadcast. */
     private final AtomicLong nextBroadcastTimestamp = new AtomicLong(0L);
+    /** Scheduler state: when to next scan peers for a due ping. */
+    private final AtomicLong nextPingCheckTimestamp = new AtomicLong(0L);
 
     private Selector channelSelector;
     private ServerSocketChannel serverChannel;
@@ -394,17 +440,32 @@ public class Network {
         this.schedulerThread.setDaemon(false);
         this.schedulerThread.start();
 
-        // Completed Setup for Network. Time to launch Reticulum mesh
-        LOGGER.info("Starting Reticulum");
-        RNS.getInstance().start();
-
-        // Completed Setup for Network, Time to launch NetworkData for non-priority tasks
+        // Start the second IP network (QDN) next. IP networking (chain + QDN) must NEVER depend
+        // on the Reticulum mesh, so bring QDN up before launching Reticulum. Previously QDN was
+        // started after RNS.getInstance().start(), so a slow/blocking mesh init stalled QDN
+        // startup — QDN peers stayed at 0 while the mesh failed to form (test-16 wadin).
         LOGGER.info("Starting second network (QDN) on port {}", Settings.getInstance().getQDNListenPort());
         try {
             NetworkData.getInstance().start();
         } catch (IOException | DataException e) {
             LOGGER.error("Unable to start second network for data (QDN)", e);
         }
+
+        // Launch the Reticulum mesh on its own daemon thread. Its init (new Reticulum(), interface
+        // connections, initial announces) must never block Network.start() from returning —
+        // otherwise a mesh that is slow or fails to form would stall the rest of
+        // Controller.startup() (synchronizer, block minter, ...). IP peers form independently of
+        // the mesh; consumers of RNS already guard on RNS.isMeshStarted().
+        LOGGER.info("Starting Reticulum (async)");
+        Thread rnsStartThread = new Thread(() -> {
+            try {
+                RNS.getInstance().start();
+            } catch (Exception e) {
+                LOGGER.error("Unable to start Reticulum mesh", e);
+            }
+        }, "RNS-Startup");
+        rnsStartThread.setDaemon(true);
+        rnsStartThread.start();
     }
 
     // Getters / setters
@@ -735,12 +796,18 @@ public class Network {
     // Peer lists
 
     public List<PeerData> getAllKnownPeers() {
+        // Snapshot the IP known-peer list under its lock, then append Reticulum peers OUTSIDE the
+        // lock. Previously the RNS call ran while holding the allKnownPeers monitor, and the whole
+        // thing was piped through .distinct() — but PeerData has no Object.equals override, so
+        // distinct() only de-duplicated by object identity (a no-op here) at O(n) cost. Dropping it
+        // and releasing the lock before the RNS call cuts contention on this hot path (see the
+        // test-19 buildPeersMessage crash analysis).
+        List<PeerData> peers;
         synchronized (this.allKnownPeers) {
-            //return new ArrayList<>(this.allKnownPeers);
-            return Stream.concat(this.allKnownPeers.stream(), RNS.getInstance().getAllKnownPeers().stream())
-                    .distinct()
-                    .collect(Collectors.toList());
+            peers = new ArrayList<>(this.allKnownPeers);
         }
+        peers.addAll(RNS.getInstance().getAllKnownPeers());
+        return peers;
     }
 
     public List<Peer> getImmutableConnectedPeers() {
@@ -769,8 +836,12 @@ public class Network {
         // ATOMIC: Synchronize to ensure add() and List.copyOf() are atomic
         // Without this, another thread could modify the list between add() and copyOf()
         synchronized (this.connectedPeers) {
-            this.connectedPeers.add(peer);
-            this.immutableConnectedPeers = List.copyOf(this.connectedPeers);
+            // Dedup by identity: makePeerAvailable() (Reticulum) can fire more than once for the
+            // same peer object, and add() does not dedup — without this the object piles up.
+            if (this.connectedPeers.stream().noneMatch(p -> p == peer)) {
+                this.connectedPeers.add(peer);
+                this.immutableConnectedPeers = List.copyOf(this.connectedPeers);
+            }
         }
     }
 
@@ -894,8 +965,11 @@ public class Network {
         // ATOMIC: Synchronize to ensure add() and List.copyOf() are atomic
         // Without this, another thread could modify the list between add() and copyOf()
         synchronized (this.handshakedPeers) {
-            this.handshakedPeers.add(peer);
-            this.immutableHandshakedPeers = List.copyOf(this.handshakedPeers);
+            // Dedup by identity (see addConnectedPeer).
+            if (this.handshakedPeers.stream().noneMatch(p -> p == peer)) {
+                this.handshakedPeers.add(peer);
+                this.immutableHandshakedPeers = List.copyOf(this.handshakedPeers);
+            }
         }
 
         // Also add to outbound handshaked peers cache
@@ -932,8 +1006,11 @@ public class Network {
         // ATOMIC: Synchronize to ensure add() and List.copyOf() are atomic
         // Without this, another thread could modify the list between add() and copyOf()
         synchronized (this.outboundHandshakedPeers) {
-            this.outboundHandshakedPeers.add(peer);
-            this.immutableOutboundHandshakedPeers = List.copyOf(this.outboundHandshakedPeers);
+            // Dedup by identity (see addConnectedPeer).
+            if (this.outboundHandshakedPeers.stream().noneMatch(p -> p == peer)) {
+                this.outboundHandshakedPeers.add(peer);
+                this.immutableOutboundHandshakedPeers = List.copyOf(this.outboundHandshakedPeers);
+            }
         }
     }
 
@@ -1099,6 +1176,21 @@ public class Network {
                         }
                     } catch (CancelledKeyException e) {
                         // key was cancelled between isValid() and isReadable/isWritable
+                    } catch (RuntimeException e) {
+                        // Defense-in-depth: a bug in per-peer processing (e.g. the null-replyQueues
+                        // NPE in readChannel that killed Network-IO on test-16 wadin) must never take
+                        // down the shared Network-IO thread and with it all chain networking. Log,
+                        // drop just this peer, and keep the loop alive.
+                        Peer peer = (Peer) key.attachment();
+                        LOGGER.warn("Network-IO: unexpected error processing peer {}, disconnecting: {}",
+                                peer != null ? peer.getPeerConnectionId() : "?", e.getMessage(), e);
+                        if (peer != null) {
+                            try {
+                                peer.disconnect("Network-IO error");
+                            } catch (Exception ignored) {
+                                // best-effort cleanup
+                            }
+                        }
                     }
                 }
             }
@@ -1172,7 +1264,7 @@ public class Network {
                         LOGGER.debug("Worker pool rejected scheduler task (pool full or shutting down)");
                     }
                 } else {
-                    Thread.sleep(10);
+                    Thread.sleep(idleSleepMillis(now));
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -1180,6 +1272,34 @@ public class Network {
             }
         }
         LOGGER.debug("Network scheduler loop exiting");
+    }
+
+    /**
+     * How long to sleep when no task was due, derived from the nearest deadline the scheduler
+     * actually knows about (next connect, next broadcast) and clamped to
+     * [{@value #MIN_IDLE_SLEEP}, {@value #MAX_IDLE_SLEEP}] ms.
+     * <p>
+     * This loop used to sleep a flat 10ms, i.e. ~100 wakeups/sec forever, each one re-streaming
+     * the handshaked and connected peer lists in {@link #maybeProducePeerPingTask}. Nothing here
+     * runs anywhere near that often — pings are every 40s, broadcasts every 30s, and the connect
+     * task reschedules at +1s — so almost every wakeup was wasted work. The cost is a fixed
+     * wakeup rate, so it lands as a fixed share of one core and hurts in inverse proportion to
+     * CPU speed: ~7% on a fast dev box, but 60%+ on the 2-4 core nodes some testers run.
+     * <p>
+     * The upper clamp matters as much as the lower one: peer ping deadlines are not tracked here,
+     * and peers can be added or timestamps moved by other threads while we sleep, so capping the
+     * sleep bounds how stale our view can get. At {@value #MAX_IDLE_SLEEP}ms that staleness is
+     * negligible against a 40s ping interval, while cutting idle wakeups by up to 25x.
+     */
+    private long idleSleepMillis(Long now) {
+        if (now == null)
+            return MIN_IDLE_SLEEP;
+
+        long nearestDeadline = Math.min(nextPingCheckTimestamp.get(),
+                Math.min(nextConnectTaskTimestamp.get(), nextBroadcastTimestamp.get()));
+        long untilDue = nearestDeadline - now;
+
+        return Math.max(MIN_IDLE_SLEEP, Math.min(MAX_IDLE_SLEEP, untilDue));
     }
 
     /** Produces one Ping, Connect, or Broadcast task if due; otherwise null. */
@@ -1197,6 +1317,14 @@ public class Network {
     }
 
     private ExecuteProduceConsume.Task maybeProducePeerPingTask(Long now) {
+        // Throttle the scan (not just the pings): it streams the whole handshaked + connected peer
+        // lists, which on a churned node bloat with stale Reticulum entries. Running it every loop
+        // iteration was the Network-Scheduler CPU sink on wadin (test-20).
+        if (now == null || now < nextPingCheckTimestamp.get()) {
+            return null;
+        }
+        nextPingCheckTimestamp.set(now + PING_CHECK_INTERVAL);
+
         ExecuteProduceConsume.Task task = getImmutableHandshakedPeers().stream()
                 .map(peer -> peer.getPingTask(now))
                 .filter(Objects::nonNull)
@@ -1232,7 +1360,13 @@ public class Network {
                         properlyConnectedFixedPeers++;
                 }
             }
+            // These "we already have enough peers" exits must advance nextConnectTaskTimestamp
+            // like the normal path below. Returning without it left the deadline permanently in
+            // the past on a well-connected fixed-network node, so the scheduler re-ran this whole
+            // scan — including the nested fixedNetwork.anyMatch over every handshaked peer — on
+            // every single loop iteration, and idleSleepMillis() could never sleep past its floor.
             if (properlyConnectedFixedPeers >= fixedNetwork.size() && getImmutableOutboundHandshakedPeers().size() >= minOutboundPeers) {
+                nextConnectTaskTimestamp.set(now + 1000L);
                 return null;
             }
 
@@ -1242,9 +1376,30 @@ public class Network {
                     .filter(peer -> peer.getHandshakeStatus() == Handshake.COMPLETED)
                     .collect(Collectors.toList());
             if (iOHP.size() >= minOutboundPeers) {
+                nextConnectTaskTimestamp.set(now + 1000L);
                 return null;
             }
         }
+        // Steady-state fast path: if we already have our target of outbound IP peers, skip the
+        // getConnectablePeer() scan entirely. That scan runs on THIS (scheduler) thread once per
+        // second and is O(allKnownPeers) — several removeIf passes, one with a per-element inner
+        // stream over connected peers, plus getAllKnownPeers()'s distinct() — so on a long-lived
+        // node with a large known-peer table it comes to dominate scheduler CPU (test-18:
+        // Network-Scheduler ramped to 80%+ on node5/wadin over 1-2h as the peer table grew).
+        // connectPeer() already enforces this exact ceiling, but only after the scan has been paid
+        // for on a worker thread and then discards the picked peer — so at target the scan is pure
+        // waste. Fixed-network peering is intentionally excluded: the block above may need to
+        // reconnect a wrongly-directed fixed peer even when the outbound count is already met.
+        if (!hasFixedNetwork) {
+            long outboundIPCount = getImmutableOutboundHandshakedPeers().stream()
+                    .filter(peer -> peer.getPeerMetaType() == PeerMetaType.IP)
+                    .count();
+            if (outboundIPCount >= minOutboundPeers) {
+                nextConnectTaskTimestamp.set(now + 1000L);
+                return null;
+            }
+        }
+
         boolean hasNoPeers = getImmutableHandshakedPeers().isEmpty();
         if (hasNoPeers && lastPeerWasFromBackoff) {
             nextConnectTaskTimestamp.set(now + ISOLATION_RETRY_INTERVAL);
@@ -1537,19 +1692,29 @@ public class Network {
             // This handles cases where we have an inbound connection on an ephemeral port
             // but allKnownPeers has the listen port (common with peer discovery/persistence)
             // EXCEPTION: For fixed peers, allow connection attempts if existing connection is wrong direction
+            //
+            // Precompute nodeId -> connected peer ONCE. Previously the removeIf below re-scanned
+            // the entire connected-peers list for every known peer, making this O(allKnownPeers x
+            // connectedPeers). On IP-starved nodes with a large known-peer table this scan runs on
+            // the Network-Scheduler thread every second (the fast-path guard only skips it once the
+            // outbound-IP target is met) and dominated scheduler CPU (test-31: caught mid-scan in
+            // ~26% of thread dumps). Building the map first makes it O(allKnownPeers + connectedPeers).
+            Map<String, Peer> connectedByNodeId = new HashMap<>();
+            for (Peer connectedPeer : this.getImmutableConnectedPeers()) {
+                String nodeId = connectedPeer.getPeersNodeId();
+                if (nodeId != null)
+                    connectedByNodeId.putIfAbsent(nodeId, connectedPeer);
+            }
+
             peers.removeIf(peerData -> {
                 String peerAddress = peerData.getAddress().toString();
                 CachedNodeIdInfo cachedInfo = addressToNodeIdCache.get(peerAddress);
-                
+
                 if (cachedInfo != null) {
                     // We know this peer's nodeId - check if already connected
                     String candidateNodeId = cachedInfo.nodeId;
-                    Peer existingPeer = this.getImmutableConnectedPeers().stream()
-                            .filter(peer -> peer.getPeersNodeId() != null 
-                                   && peer.getPeersNodeId().equals(candidateNodeId))
-                            .findFirst()
-                            .orElse(null);
-                    
+                    Peer existingPeer = connectedByNodeId.get(candidateNodeId);
+
                     if (existingPeer != null) {
                         // Already connected to this nodeId - but check if direction is correct
                         // For fixed peers, if direction is wrong, allow reconnection attempt
@@ -2462,50 +2627,75 @@ public class Network {
      * Returns PEERS message made from peers we've connected to recently, and this node's details
      */
     public Message buildPeersMessage(Peer peer) {
+        // Serve the address list from a periodically-rebuilt cache. Building it used to run on
+        // every GetPeers request (on Network-Worker threads): a full known-peer snapshot plus a
+        // blocking InetAddress.getByName() per peer to classify local addresses. Over wadin's very
+        // large table that made this the hottest compiled path and the recurring SIGSEGV site
+        // (test-17, test-19). The PeersV2Message constructor just serialises the (small, precomputed)
+        // list, so building it per call is cheap; only the address list is cached.
+        return new PeersV2Message(getCachedPeerAddresses(peer.isLocal()));
+    }
+
+    /**
+     * Returns the cached list of peer addresses to advertise, rebuilding it if older than
+     * {@link #PEERS_MESSAGE_CACHE_TTL}. {@code forLocalPeer} selects the variant that still
+     * includes local/LAN addresses; remote peers get the variant with those removed.
+     */
+    private List<PeerAddress> getCachedPeerAddresses(boolean forLocalPeer) {
+        if (this.cachedPeerAddressesRemote == null
+                || System.currentTimeMillis() - this.cachedPeerAddressesTimestamp > PEERS_MESSAGE_CACHE_TTL) {
+            synchronized (this.peersMessageCacheLock) {
+                // Re-check under the lock so only one thread rebuilds per interval.
+                if (this.cachedPeerAddressesRemote == null
+                        || System.currentTimeMillis() - this.cachedPeerAddressesTimestamp > PEERS_MESSAGE_CACHE_TTL) {
+                    rebuildPeerAddressCache();
+                }
+            }
+        }
+        return forLocalPeer ? this.cachedPeerAddressesLocal : this.cachedPeerAddressesRemote;
+    }
+
+    private void rebuildPeerAddressCache() {
         List<PeerData> knownPeers = this.getAllKnownPeers();
 
-        // Filter out peers that we've not connected to ever or within X milliseconds
-        final long connectionThreshold = NTP.getTime() - RECENT_CONNECTION_THRESHOLD;
-        Predicate<PeerData> notRecentlyConnected = peerData -> {
+        // Filter out peers we've not connected to ever, or not within RECENT_CONNECTION_THRESHOLD.
+        final Long ntpNow = NTP.getTime();
+        final long nowMillis = (ntpNow != null) ? ntpNow : System.currentTimeMillis();
+        final long connectionThreshold = nowMillis - RECENT_CONNECTION_THRESHOLD;
+        knownPeers.removeIf(peerData -> {
             final Long lastAttempted = peerData.getLastAttempted();
             final Long lastConnected = peerData.getLastConnected();
-
             if (lastAttempted == null || lastConnected == null) {
                 return true;
             }
-
             if (lastConnected < lastAttempted) {
                 return true;
             }
-
             if (lastConnected < connectionThreshold) {
                 return true;
             }
-
             return false;
-        };
-        knownPeers.removeIf(notRecentlyConnected);
+        });
 
-        List<PeerAddress> peerAddresses = new ArrayList<>();
-
+        List<PeerAddress> localList = new ArrayList<>();
+        List<PeerAddress> remoteList = new ArrayList<>();
         for (PeerData peerData : knownPeers) {
             try {
                 InetAddress address = InetAddress.getByName(peerData.getAddress().getHost());
-
-                // Don't send 'local' addresses if peer is not 'local'.
-                // e.g. don't send localhost:9084 to node4.qortal.org
-                if (!peer.isLocal() && Peer.isAddressLocal(address)) {
-                    continue;
+                // Local peers may receive every address; remote peers must not be told about
+                // 'local' addresses (e.g. don't send localhost:9084 to node4.qortal.org).
+                localList.add(peerData.getAddress());
+                if (!Peer.isAddressLocal(address)) {
+                    remoteList.add(peerData.getAddress());
                 }
-
-                peerAddresses.add(peerData.getAddress());
             } catch (UnknownHostException e) {
                 // Couldn't resolve hostname to IP address so discard
             }
         }
 
-        // New format PEERS_V2 message that supports hostnames, IPv6 and ports
-        return new PeersV2Message(peerAddresses);
+        this.cachedPeerAddressesLocal = List.copyOf(localList);
+        this.cachedPeerAddressesRemote = List.copyOf(remoteList);
+        this.cachedPeerAddressesTimestamp = System.currentTimeMillis();
     }
 
     /** Builds either (legacy) HeightV2Message or (newer) BlockSummariesV2Message, depending on peer version.
@@ -2780,6 +2970,29 @@ public class Network {
             // Continue with other pruning operations
         }
 
+        // Reconcile dead Reticulum peers out of the connected/handshaked lists. A Reticulum peer is
+        // added here by ReticulumPeer.makePeerAvailable() on link-up; RNS normally removes it (via
+        // makePeerUnavailable()) when it tears the link down. But a peer that never entered RNS's
+        // linkedPeers/incomingPeers — e.g. a duplicate skipped by addLinkedPeer's dedup race — is
+        // never torn down by RNS, so it leaks here forever. The scheduler's ping scan then iterates
+        // an ever-growing list, raising Network-Scheduler CPU without bound (the wadin "canary",
+        // test-20..22). Sweeping only peers whose Link is null/CLOSED is safe and self-healing: a
+        // CLOSED link never recovers (reconnect makes a fresh Link), so no live connection is cut,
+        // and it catches leaked peers regardless of how they got in. removeConnectedPeer() also
+        // removes from handshakedPeers/outbound.
+        try {
+            for (Peer peer : this.getImmutableConnectedPeers()) {
+                if (peer.getPeerMetaType() == PeerMetaType.RETICULUM
+                        && peer instanceof ReticulumPeer
+                        && ((ReticulumPeer) peer).isLinkClosed()) {
+                    this.removeConnectedPeer(peer);
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.error("Error reconciling dead Reticulum peers: {}", e.getMessage(), e);
+            // Continue with other pruning operations
+        }
+
         // Disconnect peers that have stuck writes (no progress for 60 seconds)
         final long WRITE_STUCK_TIMEOUT = 60_000L;
         List<Peer> stuckWritePeers = this.getImmutableConnectedPeers().stream()
@@ -2798,10 +3011,11 @@ public class Network {
         // Needs a mutable copy of the unmodifiableList
         List<Peer> handshakePeers = new ArrayList<>(this.getImmutableConnectedPeers());
 
-        // Disregard any ReticulumPeer (handled in RNS)
-        Predicate<Peer> isReticulumPeer = peer -> {
-            return this.getImmutableConnectedPeers().stream().anyMatch(p -> p.getPeerData().getPeerMetaType() == PeerMetaType.RETICULUM);
-        };
+        // Disregard any ReticulumPeer (handled in RNS). Note: this tests the peer passed to the
+        // predicate — the previous version ignored its parameter and did an anyMatch over the whole
+        // connected list, so it (a) removed EVERY peer whenever any reticulum peer was present and
+        // (b) was O(n^2) inside removeIf, a Network-Scheduler CPU sink.
+        Predicate<Peer> isReticulumPeer = peer -> peer.getPeerData().getPeerMetaType() == PeerMetaType.RETICULUM;
         handshakePeers.removeIf(isReticulumPeer);
 
         // Disregard peers that have completed handshake or only connected recently
@@ -2816,8 +3030,14 @@ public class Network {
         // Clean up peers with closed sockets (zombie connections)
         // These can block new connections due to duplicate detection during handshake
         // This catches peers in any handshake state (including COMPLETED) where the socket
-        // has been closed but the peer hasn't been removed from the connected list yet
+        // has been closed but the peer hasn't been removed from the connected list yet.
+        // IMPORTANT: exclude ReticulumPeer — it is socket-less (getSocketChannel() is always null,
+        // Peer.java default), so this filter matched every healthy mesh link and disconnected it as
+        // "socket closed" on each prune cycle (~every 90s). That was the dominant cause of the very
+        // short Reticulum link lifetimes (avg ~39s before this disconnect). Reticulum liveness is
+        // owned by RNS (isUnreachable / link watchdog), not by socket state.
         List<Peer> deadPeers = this.getImmutableConnectedPeers().stream()
+                .filter(peer -> peer.getPeerData().getPeerMetaType() != PeerMetaType.RETICULUM)
                 .filter(peer -> peer.getSocketChannel() == null || !peer.getSocketChannel().isOpen())
                 .collect(Collectors.toList());
 
@@ -2831,8 +3051,10 @@ public class Network {
         // This catches the case where onDisconnect() might have failed to remove a peer
         // from handshakedPeers even though the socket is closed
         // NOTE: We only check for closed/null sockets, NOT isStopping() - that flag is set
-        // during normal disconnect flow and would incorrectly remove all disconnecting peers
+        // during normal disconnect flow and would incorrectly remove all disconnecting peers.
+        // Same Reticulum exclusion as above (socket-less peers are not zombies).
         List<Peer> zombieHandshakedPeers = this.getImmutableHandshakedPeers().stream()
+                .filter(peer -> peer.getPeerData().getPeerMetaType() != PeerMetaType.RETICULUM)
                 .filter(peer -> peer.getSocketChannel() == null || !peer.getSocketChannel().isOpen())
                 .collect(Collectors.toList());
 
@@ -2950,20 +3172,35 @@ public class Network {
         if (fixedNetwork != null && !fixedNetwork.isEmpty()) {
             return false;
         }
+        // Filter out duplicates, without resolving via DNS.
+        //
+        // This used to be a nested loop — for every known peer, a removeIf pass over the whole
+        // incoming list — i.e. O(allKnownPeers x peerAddresses) while holding the allKnownPeers
+        // monitor, once per inbound PEERS_V2 message. On a well-connected mainnet node that came to
+        // dominate a Network-Worker thread and blocked Network-Scheduler in getConnectablePeer
+        // (test-35: caught mid-merge in 14 of darlood's 40 thread dumps, 11 of the last 12).
+        //
+        // Hash the (small) incoming batch instead and make a single pass over the known peers:
+        // O(peerAddresses) to build, then one cheap probe per known peer, with an early exit as soon
+        // as the batch is exhausted. Hashing the *known* side instead would also be linear, but it
+        // allocates a set the size of the whole peer table on every message. Building the set here
+        // also de-duplicates within the batch, which the old loop never did.
+        Set<PeerAddress> candidates = new HashSet<>(peerAddresses);
+        if (candidates.isEmpty()) {
+            return false;
+        }
+
         List<PeerData> newPeers;
         synchronized (this.allKnownPeers) {
             for (PeerData knownPeerData : this.allKnownPeers) {
-                // Filter out duplicates, without resolving via DNS
-                Predicate<PeerAddress> isKnownAddress = peerAddress -> knownPeerData.getAddress().equals(peerAddress);
-                peerAddresses.removeIf(isKnownAddress);
-            }
-
-            if (peerAddresses.isEmpty()) {
-                return false;
+                if (candidates.remove(knownPeerData.getAddress()) && candidates.isEmpty()) {
+                    // Every address in this batch was already known
+                    return false;
+                }
             }
 
             // Add leftover peer addresses to known peers list
-            newPeers = peerAddresses.stream()
+            newPeers = candidates.stream()
                     .map(peerAddress -> new PeerData(peerAddress, addedWhen, addedBy))
                     .collect(Collectors.toList());
 
@@ -3024,7 +3261,37 @@ public class Network {
 
     // Shutdown
 
-    public void shutdown() {
+    /**
+     * Polls {@link RepositoryManager#tryRepository()} until it yields a connection or the budget
+     * expires, returning null on timeout. Used in place of the blocking
+     * {@link RepositoryManager#getRepository()} on the shutdown path, which has no timeout and
+     * waits forever on an exhausted connection pool.
+     */
+    private static Repository tryRepositoryWithin(long timeoutMs) throws DataException {
+        final long deadline = System.currentTimeMillis() + timeoutMs;
+        while (true) {
+            Repository repository = RepositoryManager.tryRepository();
+            if (repository != null)
+                return repository;
+
+            if (System.currentTimeMillis() >= deadline)
+                return null;
+
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+    }
+
+    /**
+     * Stops accepting new inbound connections, without any of the slow teardown work in
+     * {@link #shutdown()}. Idempotent, non-blocking, and safe to call ahead of shutdown() so that
+     * this network stops taking on new peers even if some later teardown step stalls.
+     */
+    public void stopAcceptingConnections() {
         this.isShuttingDown = true;
 
         // Close listen socket to prevent more incoming connections
@@ -3035,6 +3302,10 @@ public class Network {
                 // Not important
             }
         }
+    }
+
+    public void shutdown() {
+        stopAcceptingConnections();
 
         // Stop I/O and scheduler threads
         if (this.ioThread != null && this.ioThread.isAlive()) {
@@ -3070,42 +3341,80 @@ public class Network {
             this.networkWorkerPool.shutdownNow();
         }
 
-        try( Repository repository = RepositoryManager.getRepository() ){
+        // Persist known peers on a bounded acquisition. RepositoryManager.getRepository() blocks
+        // forever if the HSQLDB pool is exhausted, and this whole method runs before
+        // NetworkData.shutdown() — so a stall here left the QDN listen socket accepting new peers
+        // until stop.sh's 120s force-kill (test-17). Losing the saved peer list only costs us a
+        // re-bootstrap on next start; never returning costs us a clean shutdown.
+        try( Repository repository = tryRepositoryWithin(SHUTDOWN_REPOSITORY_TIMEOUT_MS) ){
+            if (repository == null) {
+                LOGGER.warn("Could not acquire repository connection within {}ms - skipping known-peer save",
+                        SHUTDOWN_REPOSITORY_TIMEOUT_MS);
+            } else {
+                // reset all known peers in database
+                int deletedCount = repository.getNetworkRepository().deleteAllPeers();
 
-            // reset all known peers in database
-            int deletedCount = repository.getNetworkRepository().deleteAllPeers();
+                LOGGER.debug("Deleted {} known peers", deletedCount);
 
-            LOGGER.debug("Deleted {} known peers", deletedCount);
-
-            List<PeerData> knownPeersToProcess;
-            synchronized (this.allKnownPeers) {
-                knownPeersToProcess = new ArrayList<>(this.allKnownPeers);
-            }
-
-            int addedPeerCount = 0;
-
-            // save all known peers for next start up
-            for (PeerData knownPeerToProcess : knownPeersToProcess) {
-                if (knownPeerToProcess.getPeerMetaType() == PeerMetaType.RETICULUM) {
-                    // don't save any ReticulumPeer
-                    continue;
+                List<PeerData> knownPeersToProcess;
+                synchronized (this.allKnownPeers) {
+                    knownPeersToProcess = new ArrayList<>(this.allKnownPeers);
                 }
-                repository.getNetworkRepository().save(knownPeerToProcess);
-                addedPeerCount++;
+
+                int addedPeerCount = 0;
+
+                // Save known peers for next start up, but TIME-BOXED. This re-inserts every known
+                // peer one row at a time (HSQLDBNetworkRepository.save → a per-row INSERT with AVL
+                // index maintenance + disk I/O). On a long-lived public node with a large peer
+                // table this loop alone ran past stop.sh's 120s force-kill — the wadin shutdown
+                // hang confirmed by the test-25 full-stack dumps (thread RUNNABLE in
+                // Network.shutdown:save → HSQLDB StatementInsert). Persisting peers is non-critical
+                // (the node re-bootstraps and re-learns), so cap the effort and move on.
+                final long peerSaveDeadline = System.currentTimeMillis() + SHUTDOWN_PEER_SAVE_BUDGET_MS;
+                for (PeerData knownPeerToProcess : knownPeersToProcess) {
+                    if (System.currentTimeMillis() > peerSaveDeadline) {
+                        LOGGER.warn("Known-peer save budget ({}ms) reached after {} of {} peers - stopping early",
+                                SHUTDOWN_PEER_SAVE_BUDGET_MS, addedPeerCount, knownPeersToProcess.size());
+                        break;
+                    }
+                    if (knownPeerToProcess.getPeerMetaType() == PeerMetaType.RETICULUM) {
+                        // don't save any ReticulumPeer
+                        continue;
+                    }
+                    repository.getNetworkRepository().save(knownPeerToProcess);
+                    addedPeerCount++;
+                }
+
+                repository.saveChanges();
+
+                LOGGER.debug("Added {} known peers", addedPeerCount);
             }
-
-            repository.saveChanges();
-
-            LOGGER.debug("Added {} known peers", addedPeerCount);
         } catch (DataException e) {
             LOGGER.error(e.getMessage(), e);
         }
 
-        // Release uPnP if it was enabled
-        try {
-            UPnP.closePortTCP(Settings.getInstance().getListenPort());
-        } catch (Exception e) {
-            // do nothing
+        // Release uPnP if it was enabled. Guarded by isUPnPEnabled() to match start() — without it
+        // a node with UPnP turned off still paid for gateway discovery here. Run on a throwaway
+        // daemon thread with a timeout: the library call does blocking SSDP discovery and offers no
+        // timeout of its own, so on an unresponsive gateway it can stall shutdown indefinitely.
+        if (Settings.getInstance().isUPnPEnabled()) {
+            Thread upnpCloser = new Thread(() -> {
+                try {
+                    UPnP.closePortTCP(Settings.getInstance().getListenPort());
+                } catch (Exception e) {
+                    // do nothing
+                }
+            }, "UPnP-Close");
+            upnpCloser.setDaemon(true);
+            upnpCloser.start();
+            try {
+                upnpCloser.join(SHUTDOWN_UPNP_TIMEOUT_MS);
+                if (upnpCloser.isAlive())
+                    LOGGER.warn("UPnP port release did not complete within {}ms - continuing shutdown",
+                            SHUTDOWN_UPNP_TIMEOUT_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
         // Close all peer connections
         for (Peer peer : this.getImmutableConnectedPeers()) {

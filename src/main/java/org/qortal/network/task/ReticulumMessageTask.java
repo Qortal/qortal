@@ -1,7 +1,7 @@
 package org.qortal.network.task;
 
 import org.qortal.network.Network;
-import org.qortal.network.ReticulumPeer;
+import org.qortal.network.reticulum.ReticulumPeer;
 import org.qortal.network.message.Message;
 import org.qortal.utils.ExecuteProduceConsume.Task;
 

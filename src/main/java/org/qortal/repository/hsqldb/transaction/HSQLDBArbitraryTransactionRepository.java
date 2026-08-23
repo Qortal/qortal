@@ -70,7 +70,8 @@ public class HSQLDBArbitraryTransactionRepository extends HSQLDBTransactionRepos
 				.bind("is_data_raw", arbitraryTransactionData.getDataType() == DataType.RAW_DATA).bind("data", arbitraryTransactionData.getData())
 				.bind("metadata_hash", arbitraryTransactionData.getMetadataHash()).bind("name", arbitraryTransactionData.getName())
 				.bind("identifier", arbitraryTransactionData.getIdentifier()).bind("update_method", method)
-				.bind("secret", arbitraryTransactionData.getSecret()).bind("compression", compression);
+				.bind("secret", arbitraryTransactionData.getSecret()).bind("compression", compression)
+				.bind("created_when", arbitraryTransactionData.getTimestamp());
 
 		try {
 			saveHelper.execute(this.repository);

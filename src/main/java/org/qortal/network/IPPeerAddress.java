@@ -7,6 +7,7 @@ import org.qortal.settings.Settings;
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
 import java.net.*;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -156,14 +157,41 @@ public class IPPeerAddress implements PeerAddress {
 
 	// Utilities
 
-	/** Returns true if other IPPeerAddress has same port and same case-insensitive host part, without DNS lookups */
-	public boolean equals(IPPeerAddress other) {
+	/**
+	 * Returns true if other is an IPPeerAddress with same port and same case-insensitive host part,
+	 * without DNS lookups.
+	 * <p>
+	 * This MUST override {@link Object#equals(Object)} rather than being an {@code equals(IPPeerAddress)}
+	 * overload. Every caller in the codebase holds these through the {@link PeerAddress} interface
+	 * (e.g. {@code PeerData.getAddress()}), so an overload is never selected — the compiler binds to
+	 * {@code Object.equals} and silently compares by reference. That is how peer de-duplication in
+	 * Network.mergePeersUnlocked stopped matching anything, letting allKnownPeers grow without bound.
+	 */
+	@Override
+	public boolean equals(Object other) {
+		if (this == other)
+			return true;
+
+		if (!(other instanceof IPPeerAddress))
+			return false;
+
+		IPPeerAddress otherAddress = (IPPeerAddress) other;
+
 		// Ports must match
-		if (this.port != other.port)
+		if (this.port != otherAddress.port)
 			return false;
 
 		// Compare host parts but without DNS lookups
-		return this.host.equalsIgnoreCase(other.host);
+		if (this.host == null || otherAddress.host == null)
+			return this.host == otherAddress.host;
+
+		return this.host.equalsIgnoreCase(otherAddress.host);
+	}
+
+	/** Must agree with {@link #equals(Object)}: case-insensitive over host, so lower-case before hashing. */
+	@Override
+	public int hashCode() {
+		return 31 * (this.host == null ? 0 : this.host.toLowerCase(Locale.ROOT).hashCode()) + this.port;
 	}
 
 }

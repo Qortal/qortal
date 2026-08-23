@@ -18,6 +18,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import org.apache.commons.io.FileUtils;
@@ -31,7 +32,7 @@ import org.qortal.data.arbitrary.ArbitraryRelayInfo;
 import org.qortal.data.network.PeerData;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.network.NetworkData;
-import org.qortal.network.RNS;
+import org.qortal.network.reticulum.RNS;
 import org.qortal.network.Peer;
 import org.qortal.network.PeerAddress;
 import org.qortal.network.PeerList;
@@ -145,11 +146,40 @@ public class ArbitraryDataFileManager extends Thread {
     // Relay cache configuration
     private static final String RELAY_CACHE_DIR_NAME = "relay-cache";
     private static final long RELAY_CACHE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000L; // 24 hours
-    // Initially set to 1GB, adjust based on estimated cache size
-    private int RELAY_CACHE_CLEANUP_TRIGGER = 2000; // Trigger cleanup at ~1GB (assuming 500KB avg per file)
+    /** Lower bound for the file-count cleanup trigger, i.e. ~1GB at 500KB average per file. */
+    private static final int RELAY_CACHE_CLEANUP_TRIGGER_MIN = 2000;
+    /**
+     * Hard upper bound for the file-count cleanup trigger, regardless of how much storage headroom
+     * {@link #cleanupRelayCache} calculates. Every cleanup pass walks the whole cache, and every
+     * cache miss used to stat the cache directory, so an unbounded trigger turns both into O(N)
+     * work. On filesystems without indexed directory lookup (exFAT, NTFS-3G) that is enough to
+     * saturate a core on its own.
+     */
+    private static final int RELAY_CACHE_CLEANUP_TRIGGER_MAX = 5000;
+    /**
+     * Delete down to this fraction of the trigger, so that saving the next chunk doesn't
+     * immediately trip the trigger again.
+     */
+    private static final double RELAY_CACHE_CLEANUP_TARGET_RATIO = 0.9;
+    /**
+     * Minimum wall-clock gap between two cleanup passes. The age protection below can leave the
+     * cache above its target with nothing eligible for deletion; without this guard every
+     * subsequent save would launch another full walk.
+     */
+    private static final long RELAY_CACHE_MIN_CLEANUP_INTERVAL_MS = 60 * 1000L;
     private static final long RELAY_CACHE_MIN_FILE_AGE_MS = 5 * 60 * 1000L; // 5 minutes minimum age before deletion
+    /** Number of leading base58 characters of the hash used as a subdirectory name. */
+    private static final int RELAY_CACHE_SHARD_LENGTH = 2;
     private Path relayCacheDir;
-    private final AtomicInteger relayCacheFileCount = new AtomicInteger(0);
+    private volatile int relayCacheCleanupTrigger = RELAY_CACHE_CLEANUP_TRIGGER_MIN;
+    private final AtomicLong lastRelayCacheCleanup = new AtomicLong(0L);
+    /**
+     * Hashes currently held in the relay cache. Authoritative for "is this chunk cached?", so a
+     * cache miss costs a set lookup instead of a filesystem stat. Also serves as the file count.
+     */
+    private final Set<String> relayCacheIndex = ConcurrentHashMap.newKeySet();
+    /** Shard subdirectories known to exist, so we only mkdir once per shard. */
+    private final Set<String> relayCacheShards = ConcurrentHashMap.newKeySet();
 
     /**
      * Creates a composite key for tracking relay requests by hash and source peer
@@ -185,44 +215,105 @@ public class ArbitraryDataFileManager extends Thread {
         try {
             this.relayCacheDir = Paths.get(Settings.getInstance().getDataPath() + File.separator + RELAY_CACHE_DIR_NAME);
             Files.createDirectories(relayCacheDir);
-            
-            // Count existing files on startup
-            File[] existingFiles = relayCacheDir.toFile().listFiles();
-            if (existingFiles != null) {
-                int fileCount = 0;
-                for (File file : existingFiles) {
-                    if (file.isFile() && file.getName().endsWith(".tmp")) {
-                        fileCount++;
-                    }
-                }
-                this.relayCacheFileCount.set(fileCount);
-                LOGGER.debug("Initialized relay cache directory: {} ({} existing files)", relayCacheDir, fileCount);
-            } else {
-                LOGGER.debug("Initialized relay cache directory: {}", relayCacheDir);
-            }
-            cleanupRelayCache();  // Run cleanup in case disk conditions changed while node was offline
+
+            // Indexes existing files, and drops any left over from the pre-sharding flat layout.
+            // Also runs in case disk conditions changed while the node was offline.
+            cleanupRelayCache(true);
+            LOGGER.debug("Initialized relay cache directory: {} ({} existing files)",
+                    relayCacheDir, relayCacheIndex.size());
         } catch (IOException e) {
             LOGGER.error("Failed to initialize relay cache directory: {}", e.getMessage());
             relayCacheDir = null;
         }
     }
-    
+
     /**
-     * Gets the path for a relay-cached chunk file
+     * Walks the relay cache, rebuilding {@link #relayCacheIndex} and {@link #relayCacheShards} from
+     * what is actually on disk, and deleting any file left over from the pre-sharding flat layout.
+     * <p>
+     * File attributes come from the walker, which already has them, so this costs one stat per file
+     * rather than the two that a listFiles()/readAttributes() pair would.
+     *
+     * @param collector optional sink for the surviving files; pass null if only the index is wanted
+     * @param prune     drop index entries the walk didn't find. Only safe when no concurrent save
+     *                  can be in flight, since a save indexes its hash after writing the file, and
+     *                  a walk that passed the shard first would otherwise undo it. When false,
+     *                  stale entries self-heal via the NoSuchFileException path in
+     *                  {@link #loadFromRelayCache}.
+     * @return the number of legacy flat-layout files deleted
+     */
+    private int scanRelayCache(List<FileInfo> collector, boolean prune) throws IOException {
+        Set<String> foundHashes = new HashSet<>();
+        Set<String> foundShards = new HashSet<>();
+        AtomicInteger legacyCount = new AtomicInteger(0);
+
+        Files.walkFileTree(relayCacheDir, new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                String fileName = file.getFileName().toString();
+                if (!attrs.isRegularFile() || !fileName.endsWith(".tmp")) {
+                    return FileVisitResult.CONTINUE;
+                }
+
+                // Files directly under the cache root are from the old flat layout
+                if (relayCacheDir.equals(file.getParent())) {
+                    try {
+                        Files.delete(file);
+                        legacyCount.incrementAndGet();
+                    } catch (IOException e) {
+                        LOGGER.debug("Failed to delete legacy relay cache file {}: {}", file, e.getMessage());
+                    }
+                    return FileVisitResult.CONTINUE;
+                }
+
+                foundHashes.add(fileName.substring(0, fileName.length() - ".tmp".length()));
+                foundShards.add(file.getParent().getFileName().toString());
+                if (collector != null) {
+                    collector.add(new FileInfo(file.toFile(), attrs.creationTime().toMillis(), attrs.size()));
+                }
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFileFailed(Path file, IOException exc) {
+                LOGGER.debug("Failed to access relay cache file {}: {}", file, exc.getMessage());
+                return FileVisitResult.CONTINUE;
+            }
+        });
+
+        if (prune) {
+            relayCacheIndex.retainAll(foundHashes);
+        }
+        relayCacheIndex.addAll(foundHashes);
+        relayCacheShards.addAll(foundShards);
+
+        int legacy = legacyCount.get();
+        if (legacy > 0) {
+            LOGGER.info("Removed {} relay cache file(s) left over from the previous flat layout", legacy);
+        }
+        return legacy;
+    }
+
+    /**
+     * Gets the path for a relay-cached chunk file.
+     * <p>
+     * Files are sharded into subdirectories named after the leading characters of the hash, so that
+     * no single directory ends up holding tens of thousands of entries.
+     *
      * @param hash58 The hash of the chunk
      * @return Path to the cached file
      */
     private Path getRelayCachePath(String hash58) {
-        if (relayCacheDir == null) {
+        if (relayCacheDir == null || hash58 == null || hash58.length() <= RELAY_CACHE_SHARD_LENGTH) {
             return null;
         }
         try {
-            return relayCacheDir.resolve(hash58 + ".tmp");
+            return relayCacheDir.resolve(hash58.substring(0, RELAY_CACHE_SHARD_LENGTH)).resolve(hash58 + ".tmp");
         } catch (InvalidPathException e) {
             return null;
         }
     }
-    
+
     /**
      * Saves chunk data to relay cache using streaming write to avoid holding byte[] reference
      * Triggers cleanup if file count exceeds threshold. Overwriting an existing file does not increment the count.
@@ -240,31 +331,48 @@ public class ArbitraryDataFileManager extends Thread {
             return;
         }
 
-        boolean isNewFile = false;
+        // The in-memory index tells us whether this is a new file, so no stat is needed here
+        boolean isNewFile = !relayCacheIndex.contains(hash58);
         try {
-            isNewFile = !Files.exists(cachePath);
-            if (isNewFile) {
-                int currentCount = relayCacheFileCount.incrementAndGet();
-                if (currentCount > RELAY_CACHE_CLEANUP_TRIGGER) {
-                    LOGGER.trace("Relay cache has {} files (threshold: {}), triggering cleanup",
-                            currentCount, RELAY_CACHE_CLEANUP_TRIGGER);
-                    cleanupRelayCache();
-                }
+            // Create the shard directory on first use only
+            if (relayCacheShards.add(hash58.substring(0, RELAY_CACHE_SHARD_LENGTH))) {
+                Files.createDirectories(cachePath.getParent());
             }
 
-            // Use streaming write to avoid holding byte[] reference in memory during I/O
-            try (java.io.OutputStream out = Files.newOutputStream(cachePath,
-                    java.nio.file.StandardOpenOption.CREATE,
-                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
-                    java.nio.file.StandardOpenOption.WRITE)) {
-                out.write(data);
-                out.flush();
+            try {
+                writeRelayCacheFile(cachePath, data);
+            } catch (NoSuchFileException e) {
+                // Shard directory went away underneath us (e.g. erased concurrently) - recreate and retry
+                Files.createDirectories(cachePath.getParent());
+                writeRelayCacheFile(cachePath, data);
+            }
+
+            // Only index the file once it is actually on disk, and only then consider cleanup, so
+            // that the index rebuild inside cleanup doesn't discard an entry we're mid-way through
+            relayCacheIndex.add(hash58);
+
+            if (isNewFile) {
+                int currentCount = relayCacheIndex.size();
+                if (currentCount > relayCacheCleanupTrigger) {
+                    LOGGER.trace("Relay cache has {} files (threshold: {}), triggering cleanup",
+                            currentCount, relayCacheCleanupTrigger);
+                    cleanupRelayCache(false);
+                }
             }
         } catch (IOException e) {
             LOGGER.warn("Failed to save to relay cache for hash {}: {}", hash58, e.getMessage());
-            if (isNewFile) {
-                relayCacheFileCount.decrementAndGet(); // Rollback counter on failure
-            }
+            relayCacheIndex.remove(hash58);
+        }
+    }
+
+    /** Streaming write, to avoid holding a second copy of the chunk in memory during I/O. */
+    private static void writeRelayCacheFile(Path cachePath, byte[] data) throws IOException {
+        try (java.io.OutputStream out = Files.newOutputStream(cachePath,
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                java.nio.file.StandardOpenOption.WRITE)) {
+            out.write(data);
+            out.flush();
         }
     }
     
@@ -277,59 +385,67 @@ public class ArbitraryDataFileManager extends Thread {
         if (relayCacheDir == null) {
             return null;
         }
-        
+
+        // Misses are by far the common case when serving file-list requests, so answer them from
+        // the in-memory index. Touching the filesystem here costs a directory lookup per requested
+        // hash, which is ruinous on filesystems without indexed directories.
+        if (!relayCacheIndex.contains(hash58)) {
+            return null;
+        }
+
+        Path cachePath = getRelayCachePath(hash58);
+        if (cachePath == null) {
+            return null;
+        }
+
         try {
-            Path cachePath = getRelayCachePath(hash58);
-            try {
-                if (Files.exists(cachePath)) {
-                    return Files.readAllBytes(cachePath);
-                }
-            } catch (SecurityException e) { // unable to read directory or file
-                return null;
-            }
-        } catch (IOException e) {
+            return Files.readAllBytes(cachePath);
+        } catch (NoSuchFileException e) {
+            // Index is stale - the file was removed behind our back
+            relayCacheIndex.remove(hash58);
+        } catch (IOException | SecurityException e) {
             LOGGER.warn("Failed to load from relay cache for hash {}: {}", hash58, e.getMessage());
         }
         return null;
     }
     
     /**
-     * Cleans up the relay cache according to age and space constraints.
+     * Cleans up the relay cache according to count, age and space constraints.
      * Dynamically adjusts based on Qortal's storage usage to avoid interfering with cleanup thresholds.
+     *
+     * @param force run even if the previous pass was less than
+     *              {@link #RELAY_CACHE_MIN_CLEANUP_INTERVAL_MS} ago
      */
-    private void cleanupRelayCache() {
+    private void cleanupRelayCache(boolean force) {
         if (relayCacheDir == null || !Files.exists(relayCacheDir)) {
             return;
         }
-        
+
+        // Rate-limit: a pass walks the entire cache, and the age protection below means a pass can
+        // legitimately delete nothing, so an unguarded trigger would rescan on every saved chunk
+        long now = System.currentTimeMillis();
+        long previous = lastRelayCacheCleanup.get();
+        if (!force && now - previous < RELAY_CACHE_MIN_CLEANUP_INTERVAL_MS) {
+            return;
+        }
+        if (!lastRelayCacheCleanup.compareAndSet(previous, now)) {
+            return; // Another thread is already cleaning up
+        }
+
         try {
-            File[] files = relayCacheDir.toFile().listFiles();
-            if (files == null || files.length == 0) {
-                return;
-            }
-            
-            // Calculate total size of relay cache
-            long totalSize = 0;
+            // One walk rebuilds the index and collects sizes/timestamps
             List<FileInfo> fileInfos = new ArrayList<>();
-            
-            for (File file : files) {
-                if (file.isFile() && file.getName().endsWith(".tmp")) {
-                    long size = file.length();
-                    totalSize += size;
-                    
-                    try {
-                        BasicFileAttributes attrs = Files.readAttributes(file.toPath(), BasicFileAttributes.class);
-                        fileInfos.add(new FileInfo(file, attrs.creationTime().toMillis(), size));
-                    } catch (IOException e) {
-                        LOGGER.debug("Failed to read attributes for {}: {}", file.getName(), e.getMessage());
-                    }
-                }
-            }
-            
+            scanRelayCache(fileInfos, false);
+
             if (fileInfos.isEmpty()) {
                 return;
             }
-            
+
+            long totalSize = 0;
+            for (FileInfo fileInfo : fileInfos) {
+                totalSize += fileInfo.size;
+            }
+
             // Sort by creation time (oldest first)
             fileInfos.sort(Comparator.comparingLong(fi -> fi.creationTime));
             
@@ -353,9 +469,17 @@ public class ArbitraryDataFileManager extends Thread {
                     long calculatedSize = (long)(qortalHeadroom * 0.10);
                     maxAllowedSize = Math.max(500L * 1024 * 1024, // Min 500MB
                                               calculatedSize);    // 10% of free Qortal QDN Space
-                    RELAY_CACHE_CLEANUP_TRIGGER = (int)(maxAllowedSize / (512L * 1024)); // 500KB avg per file
-                    LOGGER.debug("Relay cache limit: {} MB (based on {}% of {} MB headroom)", 
-                            maxAllowedSize / (1024 * 1024), 
+                    // CHUNK_SIZE is the *maximum* chunk size, so real files average well under it and
+                    // the derived count is reached long before the size limit is. Clamp it, and note
+                    // that the delete loop below enforces the count as a genuine limit, not just a
+                    // trigger - otherwise a cache under its size limit but over its count trigger
+                    // would rescan on every single saved chunk and never delete anything.
+                    long derivedTrigger = maxAllowedSize / ArbitraryDataFile.CHUNK_SIZE;
+                    relayCacheCleanupTrigger = (int) Math.max(RELAY_CACHE_CLEANUP_TRIGGER_MIN,
+                            Math.min(RELAY_CACHE_CLEANUP_TRIGGER_MAX, derivedTrigger));
+                    LOGGER.debug("Relay cache limit: {} MB / {} files (based on {}% of {} MB headroom)",
+                            maxAllowedSize / (1024 * 1024),
+                            relayCacheCleanupTrigger,
                             (int)(0.10 * 100),
                             qortalHeadroom / (1024 * 1024));
                 }
@@ -367,46 +491,41 @@ public class ArbitraryDataFileManager extends Thread {
             
             int deletedCount = 0;
             long deletedSize = 0;
-            long now = System.currentTimeMillis();
             int skippedYoungFiles = 0;
-            
-            // Delete oldest files until we're under the limit
+            int remainingCount = fileInfos.size();
+
+            // Delete oldest first until we are under BOTH the size limit and the file-count limit.
+            // Enforcing the count is what makes the trigger self-clearing.
+            int targetCount = (int)(relayCacheCleanupTrigger * RELAY_CACHE_CLEANUP_TARGET_RATIO);
+
             // PROTECTION: Don't delete files younger than minimum age (prevents deletion of in-transit files)
             for (FileInfo fileInfo : fileInfos) {
-                if (totalSize <= maxAllowedSize) {
+                if (totalSize <= maxAllowedSize && remainingCount <= targetCount) {
                     break;
                 }
-                
+
                 // Check file age - skip files that are too young
                 long fileAge = now - fileInfo.creationTime;
                 if (fileAge < RELAY_CACHE_MIN_FILE_AGE_MS) {
                     skippedYoungFiles++;
-                    LOGGER.trace("Skipping file {} - too young ({} seconds old, min {} seconds)", 
+                    LOGGER.trace("Skipping file {} - too young ({} seconds old, min {} seconds)",
                             fileInfo.file.getName(), fileAge / 1000, RELAY_CACHE_MIN_FILE_AGE_MS / 1000);
                     continue;
                 }
-                
+
                 if (fileInfo.file.delete()) {
                     totalSize -= fileInfo.size;
                     deletedSize += fileInfo.size;
                     deletedCount++;
-                    LOGGER.trace("Deleted relay cache file: {} (age: {} seconds)", 
+                    remainingCount--;
+                    relayCacheIndex.remove(relayCacheHashOf(fileInfo.file));
+                    LOGGER.trace("Deleted relay cache file: {} (age: {} seconds)",
                             fileInfo.file.getName(), fileAge / 1000);
                 }
             }
-            
-            // Update file count after cleanup
-            File[] remainingFiles = relayCacheDir.toFile().listFiles();
-            int actualCount = 0;
-            if (remainingFiles != null) {
-                for (File f : remainingFiles) {
-                    if (f.isFile() && f.getName().endsWith(".tmp")) {
-                        actualCount++;
-                    }
-                }
-            }
-            relayCacheFileCount.set(actualCount);
-            
+
+            int actualCount = relayCacheIndex.size();
+
             if (deletedCount > 0) {
                 String youngFilesMsg = skippedYoungFiles > 0 ? String.format(" (skipped %d young files)", skippedYoungFiles) : "";
                 LOGGER.trace("Relay cache cleanup: deleted {} files ({} MB), remaining: {} files ({} MB), limit: {} MB{}",
@@ -423,6 +542,12 @@ public class ArbitraryDataFileManager extends Thread {
         }
     }
     
+    /** Recovers the base58 hash a relay cache file is named after. */
+    private static String relayCacheHashOf(File file) {
+        String fileName = file.getName();
+        return fileName.endsWith(".tmp") ? fileName.substring(0, fileName.length() - ".tmp".length()) : fileName;
+    }
+
     /**
      * Helper class to hold file information for cleanup
      */
@@ -487,7 +612,7 @@ public class ArbitraryDataFileManager extends Thread {
         
         try {
             // Get the count before cleaning
-            int deletedCount = relayCacheFileCount.get();
+            int deletedCount = relayCacheIndex.size();
             final AtomicInteger failedCount = new AtomicInteger(0);
             
             // Recursive delete using Files.walkFileTree for better error handling
@@ -530,9 +655,15 @@ public class ArbitraryDataFileManager extends Thread {
                 }
             });
             
-            // Update file count
+            // Rebuild the index from whatever survived, and forget the shard directories we deleted
             int failed = failedCount.get();
-            relayCacheFileCount.set(failed);
+            relayCacheShards.clear();
+            try {
+                scanRelayCache(null, true);
+            } catch (IOException e) {
+                LOGGER.debug("Failed to re-index relay cache after erase: {}", e.getMessage());
+                relayCacheIndex.clear();
+            }
 
             if (failed > 0) {
                 LOGGER.warn("Erased relay cache: deleted {} files, {} failed", deletedCount - failed, failed);
@@ -645,7 +776,7 @@ public class ArbitraryDataFileManager extends Thread {
         
         // Clean up relay cache every 24 hours
         cleaner.scheduleAtFixedRate(() -> {
-            cleanupRelayCache();
+            cleanupRelayCache(true);
         }, RELAY_CACHE_CLEANUP_INTERVAL_MS, RELAY_CACHE_CLEANUP_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
         // Clean up metadata-hash cache: remove entries older than 1 hour (runs every 15 minutes)
@@ -1789,7 +1920,7 @@ public class ArbitraryDataFileManager extends Thread {
                             if (forwards != null) {
                                 // Remove by matching PeerData and message ID
                                 PeerData peerData = peer.getPeerData();
-                                forwards.removeIf(f -> f.requestingPeerData.equals(peerData) && f.messageId == originalMessage.getId());
+                                forwards.removeIf(f -> f.requestingPeerData.isSameAddress(peerData) && f.messageId == originalMessage.getId());
                             }
                         }
                     }

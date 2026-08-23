@@ -1,4 +1,4 @@
-package org.qortal.network;
+package org.qortal.network.reticulum;
 
 public class RNSCommon {
 

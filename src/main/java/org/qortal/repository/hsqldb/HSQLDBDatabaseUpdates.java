@@ -1069,6 +1069,17 @@ public class HSQLDBDatabaseUpdates {
 
 					break;
 
+				case 52:
+
+					LOGGER.info("Denormalizing created_when into ArbitraryTransactions - please wait...");
+					stmt.execute("ALTER TABLE ArbitraryTransactions ADD created_when EpochMillis");
+					stmt.execute("UPDATE ArbitraryTransactions SET created_when = "
+							+ "(SELECT created_when FROM Transactions WHERE signature = ArbitraryTransactions.signature)");
+					stmt.execute("ALTER TABLE ArbitraryTransactions ALTER COLUMN created_when SET NOT NULL");
+					stmt.execute("CREATE INDEX ArbitraryNameCreatedIndex ON ArbitraryTransactions (name, created_when DESC)");
+
+					break;
+
 				default:
 					// nothing to do
 					return false;

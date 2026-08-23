@@ -39,7 +39,7 @@ fi
 # These memory arguments should work on machines with as little as 6GB of RAM.
 # If you want to run on a machine with less than 6GB of RAM, it is suggested to increase the '50' below to '75'
 # The Qortal Core will utilize only as much RAM as it needs, but up-to the amount set in percentage below.
-JVM_MEMORY_ARGS="-XX:MaxRAMPercentage=50 -XX:+UseG1GC -Xss1024k"
+#JVM_MEMORY_ARGS="-XX:MaxRAMPercentage=50 -XX:+UseG1GC -Xss1024k"
 
 # Although java.net.preferIPv4Stack is supposed to be false
 # by default in Java 11, on some platforms (e.g. FreeBSD 12),

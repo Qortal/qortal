@@ -11,6 +11,8 @@ import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.Security;
 import org.qortal.controller.arbitrary.ArbitraryDataFileManager;
+import org.qortal.controller.arbitrary.ArbitraryDataStorageManager;
+import org.qortal.data.system.StorageInfo;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.*;
@@ -49,6 +51,33 @@ public class DataResource {
 		
 		ArbitraryDataFileManager manager = ArbitraryDataFileManager.getInstance();
 		return manager.getRelayCacheSize();
+	}
+
+	@GET
+	@Path("/storage/info")
+	@Produces(MediaType.APPLICATION_JSON)
+	@Operation(
+		summary = "Get QDN storage usage and capacity",
+		description = "Returns total directory size used and total storage capacity in bytes. Capacity is null if not yet calculated.",
+		responses = {
+			@ApiResponse(
+				description = "Storage info",
+				content = @Content(
+					mediaType = MediaType.APPLICATION_JSON,
+					schema = @Schema(
+						type = "object"
+					)
+				)
+			)
+		}
+	)
+	@SecurityRequirement(name = "apiKey")
+	@ApiErrors({ApiError.UNAUTHORIZED})
+	public StorageInfo getStorageInfo(@HeaderParam(Security.API_KEY_HEADER) String apiKey) {
+		Security.checkApiCallAllowed(request);
+
+		ArbitraryDataStorageManager manager = ArbitraryDataStorageManager.getInstance();
+		return new StorageInfo(manager.getTotalDirectorySize(), manager.getStorageCapacity());
 	}
 
 	@POST

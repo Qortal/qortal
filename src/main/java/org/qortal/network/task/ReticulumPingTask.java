@@ -2,7 +2,7 @@ package org.qortal.network.task;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.qortal.network.ReticulumPeer;
+import org.qortal.network.reticulum.ReticulumPeer;
 import org.qortal.network.message.Message;
 import org.qortal.network.message.MessageType;
 import org.qortal.network.message.PingMessage;
