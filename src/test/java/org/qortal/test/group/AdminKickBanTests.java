@@ -334,11 +334,197 @@ public class AdminKickBanTests extends Common {
 			assertEquals(ValidationResult.INVALID_GROUP_OWNER, banResult);
 
 			// Chloe should still be a member
-			assertTrue(isMember(repository, chloe.getAddress(), groupId));
-		}
-	}
+assertTrue(isMember(repository, chloe.getAddress(), groupId));
+}
+}
 
-	// Helper methods
+// ========================================================================
+// Unban tests - mirror the ban/kick tests above
+// ========================================================================
+
+/**
+* Test 7.1: Pre-trigger, non-owner admin unban is rejected with INVALID_GROUP_OWNER.
+* Before adminCanKickBan height, only the group owner can unban members.
+*/
+@Test
+public void testPreTriggerNonOwnerAdminUnbanRejected() throws DataException {
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		// We need to test at a height BEFORE adminCanKickBan
+		int currentHeight = repository.getBlockRepository().getBlockchainHeight();
+		assertTrue("Test chain should start before adminCanKickBan height",
+			currentHeight < ADMIN_CAN_KICK_BAN_HEIGHT);
+
+		// Create accounts
+		PrivateKeyAccount alice = Common.getTestAccount(repository, ALICE);
+		PrivateKeyAccount bob = Common.getTestAccount(repository, BOB);
+		PrivateKeyAccount chloe = Common.getTestAccount(repository, CHLOE);
+
+		// Alice creates an open group (she becomes owner)
+		int groupId = createGroup(repository, alice, "test-pre-trigger-unban", true);
+
+		// Bob joins the group
+		joinGroup(repository, bob, groupId);
+
+		// Alice promotes Bob to admin
+		addAdmin(repository, alice, groupId, bob.getAddress());
+		assertTrue(isAdmin(repository, bob.getAddress(), groupId));
+
+		// Chloe joins the group
+		joinGroup(repository, chloe, groupId);
+		assertTrue(isMember(repository, chloe.getAddress(), groupId));
+
+		// Alice (owner) bans Chloe
+		ValidationResult banResult = groupBan(repository, alice, groupId, chloe.getAddress(), "test ban", 0);
+		assertEquals(ValidationResult.OK, banResult);
+		assertTrue(isBanned(repository, chloe.getAddress(), groupId));
+
+		// Bob (non-owner admin) tries to unban Chloe - should fail before trigger
+		ValidationResult unbanResult = cancelGroupBan(repository, bob, groupId, chloe.getAddress());
+		assertEquals(ValidationResult.INVALID_GROUP_OWNER, unbanResult);
+
+		// Chloe should still be banned
+		assertTrue(isBanned(repository, chloe.getAddress(), groupId));
+	}
+}
+
+/**
+* Test 7.2: Non-owner admin can unban regular members after adminCanKickBan trigger.
+* After adminCanKickBan height, a non-owner admin should be able to unban regular members.
+*/
+@Test
+public void testNonOwnerAdminCanUnbanMemberAfterTrigger() throws DataException {
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		// Mint blocks to reach adminCanKickBan height
+		Block block = BlockUtils.mintBlocks(repository, ADMIN_CAN_KICK_BAN_HEIGHT);
+		assertEquals(ADMIN_CAN_KICK_BAN_HEIGHT + 1, block.getBlockData().getHeight().intValue());
+
+		// Create accounts
+		PrivateKeyAccount alice = Common.getTestAccount(repository, ALICE);
+		PrivateKeyAccount bob = Common.getTestAccount(repository, BOB);
+		PrivateKeyAccount chloe = Common.getTestAccount(repository, CHLOE);
+
+		// Alice creates an open group (she becomes owner)
+		int groupId = createGroup(repository, alice, "test-group-unban", true);
+
+		// Bob joins the group
+		joinGroup(repository, bob, groupId);
+
+		// Alice promotes Bob to admin
+		addAdmin(repository, alice, groupId, bob.getAddress());
+		assertTrue(isAdmin(repository, bob.getAddress(), groupId));
+
+		// Chloe joins the group
+		joinGroup(repository, chloe, groupId);
+		assertTrue(isMember(repository, chloe.getAddress(), groupId));
+
+		// Alice (owner) bans Chloe
+		ValidationResult banResult = groupBan(repository, alice, groupId, chloe.getAddress(), "test ban", 0);
+		assertEquals(ValidationResult.OK, banResult);
+		assertTrue(isBanned(repository, chloe.getAddress(), groupId));
+
+		// Bob (non-owner admin) unbans Chloe (regular member)
+		// This should succeed after the trigger
+		ValidationResult unbanResult = cancelGroupBan(repository, bob, groupId, chloe.getAddress());
+		assertEquals(ValidationResult.OK, unbanResult);
+
+		// Confirm Chloe is no longer banned
+		assertFalse(isBanned(repository, chloe.getAddress(), groupId));
+	}
+}
+
+/**
+* Test 7.3: Non-owner admin can unban someone the owner banned (after trigger).
+* After adminCanKickBan height, admins can unban anyone except the owner.
+* Note: Admin-to-admin protection is enforced at BAN time, not UNBAN time.
+* When an admin is banned, they lose admin status. The ban decision can be reversed
+* by any admin after the trigger.
+*/
+@Test
+public void testNonOwnerAdminCanUnbanBannedMemberAfterTrigger() throws DataException {
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		// Mint blocks to reach adminCanKickBan height
+		Block block = BlockUtils.mintBlocks(repository, ADMIN_CAN_KICK_BAN_HEIGHT);
+		assertEquals(ADMIN_CAN_KICK_BAN_HEIGHT + 1, block.getBlockData().getHeight().intValue());
+
+		// Create accounts
+		PrivateKeyAccount alice = Common.getTestAccount(repository, ALICE);
+		PrivateKeyAccount bob = Common.getTestAccount(repository, BOB);
+		PrivateKeyAccount chloe = Common.getTestAccount(repository, CHLOE);
+
+		// Alice creates an open group (she becomes owner)
+		int groupId = createGroup(repository, alice, "test-unban-banned-member", true);
+
+		// Bob joins the group
+		joinGroup(repository, bob, groupId);
+
+		// Alice promotes Bob to admin
+		addAdmin(repository, alice, groupId, bob.getAddress());
+		assertTrue(isAdmin(repository, bob.getAddress(), groupId));
+
+		// Chloe joins the group
+		joinGroup(repository, chloe, groupId);
+		assertTrue(isMember(repository, chloe.getAddress(), groupId));
+
+		// Alice (owner) bans Chloe (regular member)
+		ValidationResult banResult = groupBan(repository, alice, groupId, chloe.getAddress(), "owner ban", 0);
+		assertEquals(ValidationResult.OK, banResult);
+		assertTrue(isBanned(repository, chloe.getAddress(), groupId));
+
+		// Bob (non-owner admin) unbans Chloe
+		// This should succeed because: (1) after the trigger, any admin can unban, and (2) Chloe was a regular member
+		ValidationResult unbanResult = cancelGroupBan(repository, bob, groupId, chloe.getAddress());
+		assertEquals(ValidationResult.OK, unbanResult);
+
+		// Chloe should no longer be banned
+		assertFalse(isBanned(repository, chloe.getAddress(), groupId));
+	}
+}
+
+/**
+* Test 7.4: Owner can unban anyone.
+* The group owner has full control over unban operations.
+* Note: Owner can't be banned (protected in GroupBanTransaction), so we can't test
+* unban of owner. Instead, we test that owner CAN unban someone another admin banned.
+*/
+@Test
+public void testOwnerCanUnbanAnyone() throws DataException {
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		// Mint blocks to reach adminCanKickBan height
+		Block block = BlockUtils.mintBlocks(repository, ADMIN_CAN_KICK_BAN_HEIGHT);
+		assertEquals(ADMIN_CAN_KICK_BAN_HEIGHT + 1, block.getBlockData().getHeight().intValue());
+
+		// Create accounts
+		PrivateKeyAccount alice = Common.getTestAccount(repository, ALICE);
+		PrivateKeyAccount bob = Common.getTestAccount(repository, BOB);
+		PrivateKeyAccount chloe = Common.getTestAccount(repository, CHLOE);
+
+		// Alice creates an open group (she becomes owner)
+		int groupId = createGroup(repository, alice, "test-owner-unban", true);
+
+		// Bob joins the group
+		joinGroup(repository, bob, groupId);
+
+		// Alice promotes Bob to admin
+		addAdmin(repository, alice, groupId, bob.getAddress());
+
+		// Chloe joins the group
+		joinGroup(repository, chloe, groupId);
+
+		// Bob (non-owner admin) bans Chloe
+		ValidationResult banResult = groupBan(repository, bob, groupId, chloe.getAddress(), "admin ban", 0);
+		assertEquals(ValidationResult.OK, banResult);
+		assertTrue(isBanned(repository, chloe.getAddress(), groupId));
+
+		// Alice (owner) unbans Chloe - should succeed
+		ValidationResult unbanResult = cancelGroupBan(repository, alice, groupId, chloe.getAddress());
+		assertEquals(ValidationResult.OK, unbanResult);
+
+		// Chloe should no longer be banned
+		assertFalse(isBanned(repository, chloe.getAddress(), groupId));
+	}
+}
+
+// Helper methods
 
 	private int createGroup(Repository repository, PrivateKeyAccount owner, String groupName, boolean isOpen) throws DataException {
 		return GroupUtils.createGroup(repository, owner, groupName, isOpen);
@@ -372,6 +558,20 @@ public class AdminKickBanTests extends Common {
 			BlockUtils.mintBlock(repository);
 		}
 		return result;
+	}
+
+	private ValidationResult cancelGroupBan(Repository repository, PrivateKeyAccount admin, int groupId, String memberAddress) throws DataException {
+		CancelGroupBanTransactionData transactionData = new CancelGroupBanTransactionData(
+			TestTransaction.generateBase(admin), groupId, memberAddress);
+		ValidationResult result = TransactionUtils.signAndImport(repository, transactionData, admin);
+		if (result == ValidationResult.OK) {
+			BlockUtils.mintBlock(repository);
+		}
+		return result;
+	}
+
+	private boolean isBanned(Repository repository, String address, int groupId) throws DataException {
+		return repository.getGroupRepository().banExists(groupId, address, System.currentTimeMillis());
 	}
 
 	private TransactionData createGroupInviteForApproval(Repository repository, PrivateKeyAccount admin, int groupId, String invitee, int timeToLive) throws DataException {
