@@ -856,13 +856,29 @@ public class HSQLDBRepository implements Repository {
 	 * @throws SQLException
 	 */
 	private void bindStatementParams(PreparedStatement preparedStatement, Object... objects) throws SQLException {
-		for (int i = 0; i < objects.length; ++i)
+		for (int i = 0; i < objects.length; ++i) {
 			// Special treatment for BigDecimals so that they retain their "scale",
 			// which would otherwise be assumed as 0.
-			if (objects[i] instanceof BigDecimal)
+			if (objects[i] instanceof BigDecimal) {
 				preparedStatement.setBigDecimal(i + 1, (BigDecimal) objects[i]);
-			else
+			} else if (objects[i] instanceof byte[]) {
+				preparedStatement.setBytes(i + 1, (byte[]) objects[i]);
+			} else if (objects[i] instanceof java.nio.ByteBuffer) {
+				java.nio.ByteBuffer buffer = ((java.nio.ByteBuffer) objects[i]).slice();
+				byte[] bytes = new byte[buffer.remaining()];
+				buffer.get(bytes);
+				preparedStatement.setBytes(i + 1, bytes);
+			} else if (objects[i] instanceof Byte[]) {
+				Byte[] boxed = (Byte[]) objects[i];
+				byte[] bytes = new byte[boxed.length];
+				for (int j = 0; j < boxed.length; j++) {
+					bytes[j] = boxed[j];
+				}
+				preparedStatement.setBytes(i + 1, bytes);
+			} else {
 				preparedStatement.setObject(i + 1, objects[i]);
+			}
+		}
 	}
 
 	/**

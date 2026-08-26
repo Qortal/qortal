@@ -1,6 +1,6 @@
 package org.qortal.crosschain;
 
-import cash.z.wallet.sdk.rpc.CompactFormats.CompactBlock;
+import pirate.wallet.sdk.rpc.CompactFormats.CompactBlock;
 import com.google.common.hash.HashCode;
 import com.google.common.primitives.Bytes;
 import org.apache.logging.log4j.LogManager;

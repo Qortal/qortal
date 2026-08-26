@@ -440,6 +440,74 @@
 			</plugin>
 		</plugins>
 	</build>
+	<!--
+		Regenerate the checked-in Pirate Chain protobuf and gRPC Java sources with:
+		mvn -Pproto-codegen -Dprotoc.skip=false -DskipJUnitTests=true process-sources
+
+		The standard build intentionally skips protobuf generation and compiles the
+		checked-in sources. This profile generates from proto.pirate and copies only
+		the Pirate package into src/main/java after generation succeeds.
+	-->
+	<profiles>
+		<profile>
+			<id>proto-codegen</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.xolstice.maven.plugins</groupId>
+						<artifactId>protobuf-maven-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>generate-pirate-protos</id>
+								<phase>generate-sources</phase>
+								<configuration>
+									<protoSourceRoot>${project.basedir}/src/main/resources/proto.pirate</protoSourceRoot>
+									<clearOutputDirectory>false</clearOutputDirectory>
+								</configuration>
+								<goals>
+									<goal>compile</goal>
+									<goal>compile-custom</goal>
+								</goals>
+							</execution>
+						</executions>
+					</plugin>
+					<plugin>
+						<artifactId>maven-resources-plugin</artifactId>
+						<version>${maven-resources-plugin.version}</version>
+						<executions>
+							<execution>
+								<id>copy-generated-pirate-grpc-into-src</id>
+								<phase>process-sources</phase>
+								<goals>
+									<goal>copy-resources</goal>
+								</goals>
+								<configuration>
+									<overwrite>true</overwrite>
+									<outputDirectory>${project.basedir}/src/main/java</outputDirectory>
+									<resources>
+										<resource>
+											<directory>${project.build.directory}/generated-sources/protobuf/java</directory>
+											<includes>
+												<include>pirate/wallet/sdk/rpc/**/*.java</include>
+											</includes>
+											<filtering>false</filtering>
+										</resource>
+										<resource>
+											<directory>${project.build.directory}/generated-sources/protobuf/grpc-java</directory>
+											<includes>
+												<include>pirate/wallet/sdk/rpc/**/*.java</include>
+											</includes>
+											<filtering>false</filtering>
+										</resource>
+									</resources>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 	<repositories>
 		<repository>
 			<id>project.local</id>

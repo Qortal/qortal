@@ -280,6 +280,34 @@ public class Settings {
 	/** Wallets path - used for storing encrypted wallet caches for coins that require them */
 	private String walletsPath = "wallets";
 
+	/**
+	 * Exact QDN transaction containing the Pirate Chain LiteWallet JNI bundle.
+	 * A transaction signature is deliberately used here, rather than a mutable
+	 * name/identifier resource, so a node always loads the reviewed binary that
+	 * its operator selected.
+	 */
+	private String pirateChainWalletQdnSignature = PirateChainWalletController.DEFAULT_QDN_WALLET_SIGNATURE;
+
+	/**
+	 * Enables the Pirate Unified Wallet JNI storage model for the selected QDN
+	 * bundle. The default bundle is the reviewed Unified Wallet publication;
+	 * operators selecting a legacy bundle must explicitly disable this setting.
+	 */
+	private boolean pirateChainWalletUnified = true;
+
+	/**
+	 * Enables redacted diagnostics from the selected Pirate Unified Wallet JNI
+	 * bundle. Disabled by default because it is intended for isolated testing.
+	 */
+	private boolean pirateChainWalletDebugLogging = false;
+
+	/**
+	 * Optional birthday for a brand-new Pirate Unified Wallet. When omitted, a
+	 * fresh wallet begins at the current lightwallet height. Set this only when
+	 * recovering an address that could already have historical funds.
+	 */
+	private Integer arrrNewWalletBirthday = null;
+
 	private int arrrDefaultBirthday = 2000000;
 
 	// Repository related
@@ -1201,6 +1229,22 @@ public class Settings {
 
 	public String getWalletsPath() {
 		return this.walletsPath;
+	}
+
+	public String getPirateChainWalletQdnSignature() {
+		return this.pirateChainWalletQdnSignature;
+	}
+
+	public boolean isPirateChainWalletUnified() {
+		return this.pirateChainWalletUnified;
+	}
+
+	public boolean isPirateChainWalletDebugLogging() {
+		return this.pirateChainWalletDebugLogging;
+	}
+
+	public Integer getArrrNewWalletBirthday() {
+		return this.arrrNewWalletBirthday;
 	}
 
 	public int getArrrDefaultBirthday() {

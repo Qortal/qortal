@@ -33,3 +33,7 @@
 apikey.txt
 /.env
 /.m2-local
+qdn-unified-wallet*
+/LiteWalletJNI-*-publish/
+/LiteWalletJNI-*-release/
+/pirate-unified-wallet-qortal-jni-artifacts-*.zip

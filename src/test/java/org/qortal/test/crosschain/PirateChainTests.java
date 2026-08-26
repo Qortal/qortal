@@ -1,6 +1,6 @@
 package org.qortal.test.crosschain;
 
-import cash.z.wallet.sdk.rpc.CompactFormats.CompactBlock;
+import pirate.wallet.sdk.rpc.CompactFormats.CompactBlock;
 import com.google.common.hash.HashCode;
 import com.google.common.primitives.Bytes;
 import org.junit.Ignore;
@@ -53,8 +53,8 @@ public class PirateChainTests extends BitcoinyTests {
 	}
 
 	public void makeGetMedianBlockTimeAssertions(long firstPeriod, long secondPeriod) {
-			assertTrue("1st call should take less than 5 seconds", firstPeriod < 5000L);
-			assertTrue("2nd call should take less than 5 seconds", secondPeriod < 5000L);
+		assertTrue("1st call should take less than 5 seconds", firstPeriod < 5000L);
+		assertTrue("2nd call should take less than 5 seconds", secondPeriod < 5000L);
 	}
 
 	@Test
@@ -66,10 +66,11 @@ public class PirateChainTests extends BitcoinyTests {
 		List<CompactBlock> compactBlocks = ((PirateChain) bitcoiny).getCompactBlocks(startHeight, count);
 		long after = System.currentTimeMillis();
 
-		System.out.println(String.format("Retrieval took: %d ms", after-before));
+		System.out.println(String.format("Retrieval took: %d ms", after - before));
 
 		for (CompactBlock block : compactBlocks) {
-			System.out.println(String.format("Block height: %d, transaction count: %d", block.getHeight(), block.getVtxCount()));
+			System.out
+					.println(String.format("Block height: %d, transaction count: %d", block.getHeight(), block.getVtxCount()));
 		}
 
 		assertEquals(count, compactBlocks.size());
@@ -79,7 +80,8 @@ public class PirateChainTests extends BitcoinyTests {
 	public void testGetRawTransaction() throws ForeignBlockchainException {
 		String txHashLE = "fea4b0c1abcf8f0f3ddc2fa2f9438501ee102aad62a9ff18a5ce7d08774755c0";
 		byte[] txBytes = HashCode.fromString(txHashLE).asBytes();
-		// Pirate protocol expects txids in big-endian form, but block explorers use txids in little-endian form
+		// Pirate protocol expects txids in big-endian form, but block explorers use
+		// txids in little-endian form
 		Bytes.reverse(txBytes);
 		String txHashBE = HashCode.fromBytes(txBytes).toString();
 
@@ -97,7 +99,8 @@ public class PirateChainTests extends BitcoinyTests {
 		byte[] hashOfSecretA = Crypto.hash160(secretA);
 		int lockTime = 1653233550;
 
-		byte[] redeemScriptBytes = PirateChainHTLC.buildScript(tradeForeignPublicKey, lockTime, creatorTradeForeignPublicKey, hashOfSecretA);
+		byte[] redeemScriptBytes = PirateChainHTLC.buildScript(tradeForeignPublicKey, lockTime,
+				creatorTradeForeignPublicKey, hashOfSecretA);
 		String p2shAddress = PirateChain.getInstance().deriveP2shAddress(redeemScriptBytes);
 		assertTrue(p2shAddress.startsWith("t3"));
 	}
@@ -112,7 +115,8 @@ public class PirateChainTests extends BitcoinyTests {
 		byte[] hashOfSecretA = Crypto.hash160(secretA);
 		int lockTime = 1653233550;
 
-		byte[] redeemScriptBytes = PirateChainHTLC.buildScript(tradeForeignPublicKey, lockTime, creatorTradeForeignPublicKey, hashOfSecretA);
+		byte[] redeemScriptBytes = PirateChainHTLC.buildScript(tradeForeignPublicKey, lockTime,
+				creatorTradeForeignPublicKey, hashOfSecretA);
 		String p2shAddress = PirateChain.getInstance().deriveP2shAddressBPrefix(redeemScriptBytes);
 		assertTrue(p2shAddress.startsWith("b"));
 	}
@@ -122,7 +126,8 @@ public class PirateChainTests extends BitcoinyTests {
 		String p2shAddress = "ba6Q5HWrWtmfU2WZqQbrFdRYsafA45cUAt";
 		long p2shFee = 10000;
 		final long minimumAmount = 10000 + p2shFee;
-		BitcoinyHTLC.Status htlcStatus = PirateChainHTLC.determineHtlcStatus(bitcoiny.getBlockchainProvider(), p2shAddress, minimumAmount);
+		BitcoinyHTLC.Status htlcStatus = PirateChainHTLC.determineHtlcStatus(bitcoiny.getBlockchainProvider(), p2shAddress,
+				minimumAmount);
 		assertEquals(FUNDED, htlcStatus);
 	}
 
@@ -131,7 +136,8 @@ public class PirateChainTests extends BitcoinyTests {
 		String p2shAddress = "bYZrzSSgGp8aEGvihukoMGU8sXYrx19Wka";
 		long p2shFee = 10000;
 		final long minimumAmount = 10000 + p2shFee;
-		BitcoinyHTLC.Status htlcStatus = PirateChainHTLC.determineHtlcStatus(bitcoiny.getBlockchainProvider(), p2shAddress, minimumAmount);
+		BitcoinyHTLC.Status htlcStatus = PirateChainHTLC.determineHtlcStatus(bitcoiny.getBlockchainProvider(), p2shAddress,
+				minimumAmount);
 		assertEquals(REDEEMED, htlcStatus);
 	}
 
@@ -140,7 +146,8 @@ public class PirateChainTests extends BitcoinyTests {
 		String p2shAddress = "bE49izfVxz8odhu8c2BcUaVFUnt7NLFRgv";
 		long p2shFee = 10000;
 		final long minimumAmount = 10000 + p2shFee;
-		BitcoinyHTLC.Status htlcStatus = PirateChainHTLC.determineHtlcStatus(bitcoiny.getBlockchainProvider(), p2shAddress, minimumAmount);
+		BitcoinyHTLC.Status htlcStatus = PirateChainHTLC.determineHtlcStatus(bitcoiny.getBlockchainProvider(), p2shAddress,
+				minimumAmount);
 		assertEquals(REFUNDED, htlcStatus);
 	}
 
@@ -149,8 +156,10 @@ public class PirateChainTests extends BitcoinyTests {
 		String p2shAddress = "ba6Q5HWrWtmfU2WZqQbrFdRYsafA45cUAt";
 		String txid = PirateChainHTLC.getFundingTxid(bitcoiny.getBlockchainProvider(), p2shAddress);
 
-		// Reverse the byte order of the txid used by block explorers, to get to big-endian form
-		byte[] expectedTxidLE = HashCode.fromString("fea4b0c1abcf8f0f3ddc2fa2f9438501ee102aad62a9ff18a5ce7d08774755c0").asBytes();
+		// Reverse the byte order of the txid used by block explorers, to get to
+		// big-endian form
+		byte[] expectedTxidLE = HashCode.fromString("fea4b0c1abcf8f0f3ddc2fa2f9438501ee102aad62a9ff18a5ce7d08774755c0")
+				.asBytes();
 		Bytes.reverse(expectedTxidLE);
 		String expectedTxidBE = HashCode.fromBytes(expectedTxidLE).toString();
 
@@ -164,8 +173,10 @@ public class PirateChainTests extends BitcoinyTests {
 		final long minimumAmount = 10000 + p2shFee;
 		String txid = PirateChainHTLC.getUnspentFundingTxid(bitcoiny.getBlockchainProvider(), p2shAddress, minimumAmount);
 
-		// Reverse the byte order of the txid used by block explorers, to get to big-endian form
-		byte[] expectedTxidLE = HashCode.fromString("fea4b0c1abcf8f0f3ddc2fa2f9438501ee102aad62a9ff18a5ce7d08774755c0").asBytes();
+		// Reverse the byte order of the txid used by block explorers, to get to
+		// big-endian form
+		byte[] expectedTxidLE = HashCode.fromString("fea4b0c1abcf8f0f3ddc2fa2f9438501ee102aad62a9ff18a5ce7d08774755c0")
+				.asBytes();
 		Bytes.reverse(expectedTxidLE);
 		String expectedTxidBE = HashCode.fromBytes(expectedTxidLE).toString();
 
@@ -174,11 +185,13 @@ public class PirateChainTests extends BitcoinyTests {
 
 	@Test
 	public void testGetTxidForSpentAddress() throws ForeignBlockchainException {
-		String p2shAddress = "bE49izfVxz8odhu8c2BcUaVFUnt7NLFRgv"; //"t3KtVxeEb8srJofo6atMEpMpEP6TjEi8VqA";
+		String p2shAddress = "bE49izfVxz8odhu8c2BcUaVFUnt7NLFRgv"; // "t3KtVxeEb8srJofo6atMEpMpEP6TjEi8VqA";
 		String txid = PirateChainHTLC.getFundingTxid(bitcoiny.getBlockchainProvider(), p2shAddress);
 
-		// Reverse the byte order of the txid used by block explorers, to get to big-endian form
-		byte[] expectedTxidLE = HashCode.fromString("fb386fc8eea0fbf3ea37047726b92c39441652b32d8d62a274331687f7a1eca8").asBytes();
+		// Reverse the byte order of the txid used by block explorers, to get to
+		// big-endian form
+		byte[] expectedTxidLE = HashCode.fromString("fb386fc8eea0fbf3ea37047726b92c39441652b32d8d62a274331687f7a1eca8")
+				.asBytes();
 		Bytes.reverse(expectedTxidLE);
 		String expectedTxidBE = HashCode.fromBytes(expectedTxidLE).toString();
 
@@ -187,7 +200,7 @@ public class PirateChainTests extends BitcoinyTests {
 
 	@Test
 	public void testGetTransactionsForAddress() throws ForeignBlockchainException {
-		String p2shAddress = "bE49izfVxz8odhu8c2BcUaVFUnt7NLFRgv"; //"t3KtVxeEb8srJofo6atMEpMpEP6TjEi8VqA";
+		String p2shAddress = "bE49izfVxz8odhu8c2BcUaVFUnt7NLFRgv"; // "t3KtVxeEb8srJofo6atMEpMpEP6TjEi8VqA";
 		List<BitcoinyTransaction> transactions = bitcoiny.getBlockchainProvider()
 				.getAddressBitcoinyTransactions(p2shAddress, false);
 
@@ -201,7 +214,9 @@ public class PirateChainTests extends BitcoinyTests {
 		assertEquals(0, bitcoinyTransaction.inputs.size());
 		assertEquals(2, bitcoinyTransaction.outputs.size());
 		assertEquals("a9140e8a360d8a54e3d684b7b43c293c6b26ca594abf87", bitcoinyTransaction.outputs.get(0).scriptPubKey);
-		assertEquals("6a4c6b630400738762b17521029ddc2860644ef2a3b6c7310432e2f4231f21171e26f04150363340cd17565ac8ac6782012088a914ab08c6bf2771e0b287303cc14cc02a6bd41a1fad8821029ddc2860644ef2a3b6c7310432e2f4231f21171e26f04150363340cd17565ac8ac68", bitcoinyTransaction.outputs.get(1).scriptPubKey);
+		assertEquals(
+				"6a4c6b630400738762b17521029ddc2860644ef2a3b6c7310432e2f4231f21171e26f04150363340cd17565ac8ac6782012088a914ab08c6bf2771e0b287303cc14cc02a6bd41a1fad8821029ddc2860644ef2a3b6c7310432e2f4231f21171e26f04150363340cd17565ac8ac68",
+				bitcoinyTransaction.outputs.get(1).scriptPubKey);
 		assertEquals(0, bitcoinyTransaction.locktime);
 	}
 
@@ -211,8 +226,11 @@ public class PirateChainTests extends BitcoinyTests {
 		BitcoinyTransaction bitcoinyTransaction = PirateChain.deserializeRawTransaction(transactionDataHex);
 		assertEquals(1, bitcoinyTransaction.inputs.size());
 		assertEquals(0, bitcoinyTransaction.outputs.size());
-		assertEquals("47304402203929739d51dbc4b4d3435cf8b4930101601f670b3e8bcb23fde122b870385fba0220195aed5ed09b7dd342906c67c8da2896d00049bc75127c96724d03b7981fdbd80120baa6e68ffb2ddf19df6fce1b37d7e38b98f3706d5709e46d4f45f71c2e4bb7c301004c6b630436798662b17521037f7e5ab23099885d373da9b9af701cffe06e62225f96f74be3ad6b5aeaad5b82ac6782012088a91429096c1c7a55cc968a98032fbff1cf5f3e98b1c68821037f7e5ab23099885d373da9b9af701cffe06e62225f96f74be3ad6b5aeaad5b82ac68", bitcoinyTransaction.inputs.get(0).scriptSig);
-		assertEquals("efb7c5be4e870464795737109ed02b6c9b5e60e8676f68245c390b4cab09917e", bitcoinyTransaction.inputs.get(0).outputTxHash);
+		assertEquals(
+				"47304402203929739d51dbc4b4d3435cf8b4930101601f670b3e8bcb23fde122b870385fba0220195aed5ed09b7dd342906c67c8da2896d00049bc75127c96724d03b7981fdbd80120baa6e68ffb2ddf19df6fce1b37d7e38b98f3706d5709e46d4f45f71c2e4bb7c301004c6b630436798662b17521037f7e5ab23099885d373da9b9af701cffe06e62225f96f74be3ad6b5aeaad5b82ac6782012088a91429096c1c7a55cc968a98032fbff1cf5f3e98b1c68821037f7e5ab23099885d373da9b9af701cffe06e62225f96f74be3ad6b5aeaad5b82ac68",
+				bitcoinyTransaction.inputs.get(0).scriptSig);
+		assertEquals("efb7c5be4e870464795737109ed02b6c9b5e60e8676f68245c390b4cab09917e",
+				bitcoinyTransaction.inputs.get(0).outputTxHash);
 		assertEquals(0, bitcoinyTransaction.inputs.get(0).outputVout);
 		assertEquals(-1, bitcoinyTransaction.inputs.get(0).sequence);
 		assertEquals(0, bitcoinyTransaction.locktime);
@@ -224,8 +242,11 @@ public class PirateChainTests extends BitcoinyTests {
 		BitcoinyTransaction bitcoinyTransaction = PirateChain.deserializeRawTransaction(transactionDataHex);
 		assertEquals(1, bitcoinyTransaction.inputs.size());
 		assertEquals(0, bitcoinyTransaction.outputs.size());
-		assertEquals("483045022100eb217ddf7c671f4d9d74f02b5d5a4340ec69e7e433d6fb839dc1aa0bf8a5059b02206b45f78df09a75ad151bb4bc91e5d555098ceace53cda938bb52ff0ad34dd4a40101514c6b630400738762b17521029ddc2860644ef2a3b6c7310432e2f4231f21171e26f04150363340cd17565ac8ac6782012088a914ab08c6bf2771e0b287303cc14cc02a6bd41a1fad8821029ddc2860644ef2a3b6c7310432e2f4231f21171e26f04150363340cd17565ac8ac68", bitcoinyTransaction.inputs.get(0).scriptSig);
-		assertEquals("a8eca1f787163374a2628d2db3521644392cb926770437eaf3fba0eec86f38fb", bitcoinyTransaction.inputs.get(0).outputTxHash);
+		assertEquals(
+				"483045022100eb217ddf7c671f4d9d74f02b5d5a4340ec69e7e433d6fb839dc1aa0bf8a5059b02206b45f78df09a75ad151bb4bc91e5d555098ceace53cda938bb52ff0ad34dd4a40101514c6b630400738762b17521029ddc2860644ef2a3b6c7310432e2f4231f21171e26f04150363340cd17565ac8ac6782012088a914ab08c6bf2771e0b287303cc14cc02a6bd41a1fad8821029ddc2860644ef2a3b6c7310432e2f4231f21171e26f04150363340cd17565ac8ac68",
+				bitcoinyTransaction.inputs.get(0).scriptSig);
+		assertEquals("a8eca1f787163374a2628d2db3521644392cb926770437eaf3fba0eec86f38fb",
+				bitcoinyTransaction.inputs.get(0).outputTxHash);
 		assertEquals(0, bitcoinyTransaction.inputs.get(0).outputVout);
 		assertEquals(-2, bitcoinyTransaction.inputs.get(0).sequence);
 		assertEquals(1653043968, bitcoinyTransaction.locktime);
@@ -233,33 +254,41 @@ public class PirateChainTests extends BitcoinyTests {
 
 	@Test
 	@Ignore(value = "Doesn't work, to be fixed later")
-	public void testFindHtlcSecret() {}
+	public void testFindHtlcSecret() {
+	}
 
 	@Test
 	@Ignore(value = "Needs adapting for Pirate Chain")
-	public void testBuildSpend() {}
+	public void testBuildSpend() {
+	}
 
 	@Test
 	@Ignore(value = "Needs adapting for Pirate Chain")
-	public void testGetWalletBalance() {}
+	public void testGetWalletBalance() {
+	}
 
 	@Test
 	@Ignore(value = "Needs adapting for Pirate Chain")
-	public void testGetUnusedReceiveAddress() {}
+	public void testGetUnusedReceiveAddress() {
+	}
 
 	@Test
 	@Ignore(value = "Needs adapting for Pirate Chain")
-	public void testGetWalletAddresses() throws ForeignBlockchainException {}
+	public void testGetWalletAddresses() throws ForeignBlockchainException {
+	}
 
 	@Test
 	@Ignore(value = "Needs adapting for Pirate Chain")
-	public void testWalletAddressInfos() throws ForeignBlockchainException {}
+	public void testWalletAddressInfos() throws ForeignBlockchainException {
+	}
 
 	@Test
 	@Ignore(value = "Needs adapting for Pirate Chain")
-	public void testWalletSpendingCandidateAddresses() throws ForeignBlockchainException {}
+	public void testWalletSpendingCandidateAddresses() throws ForeignBlockchainException {
+	}
 
 	@Test
 	@Ignore(value = "Needs adapting for Pirate Chain")
-	public void testRepair() throws ForeignBlockchainException {}
+	public void testRepair() throws ForeignBlockchainException {
+	}
 }

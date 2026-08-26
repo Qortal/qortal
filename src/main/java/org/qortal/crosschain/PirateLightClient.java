@@ -1,14 +1,13 @@
 package org.qortal.crosschain;
 
-import cash.z.wallet.sdk.rpc.CompactFormats.CompactBlock;
-import cash.z.wallet.sdk.rpc.CompactTxStreamerGrpc;
-import cash.z.wallet.sdk.rpc.Service;
-import cash.z.wallet.sdk.rpc.Service.*;
+import pirate.wallet.sdk.rpc.CompactFormats.CompactBlock;
+import pirate.wallet.sdk.rpc.CompactTxStreamerGrpc;
+import pirate.wallet.sdk.rpc.Service;
+import pirate.wallet.sdk.rpc.Service.*;
 import com.google.common.hash.HashCode;
 import com.google.protobuf.ByteString;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.StatusRuntimeException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.json.simple.JSONArray;
@@ -21,9 +20,14 @@ import org.qortal.transform.TransformationException;
 
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/** Pirate Chain network support for querying Bitcoiny-related info like block headers, transaction outputs, etc. */
+/**
+ * Pirate Chain network support for querying Bitcoiny-related info like block
+ * headers, transaction outputs, etc.
+ */
 public class PirateLightClient extends BitcoinyBlockchainProvider {
 
 	private static final Logger LOGGER = LogManager.getLogger(PirateLightClient.class);
@@ -33,8 +37,11 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	private static final long MAX_AVG_RESPONSE_TIME = 500L; // ms
 	private static final int MAX_INBOUND_MESSAGE_BYTES = 16 * 1024 * 1024;
 	private static final int MAX_INBOUND_METADATA_BYTES = 8 * 1024;
+	private static final ChainSpec DEFAULT_CHAIN_SPEC = ChainSpec.newBuilder().build();
+	private static final int MAX_SERVER_HEIGHT_BEHIND = 100_000; // avoid connecting to servers that lag far behind the
+																																// best known height
 
-	public static class Server implements ChainableServer{
+	public static class Server implements ChainableServer {
 		String hostname;
 
 		ConnectionType connectionType;
@@ -107,9 +114,12 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 			return String.format("%s:%s:%d", this.connectionType.name(), this.hostname, this.port);
 		}
 	}
+
 	private Set<ChainableServer> servers = new HashSet<>();
 	private List<ChainableServer> remainingServers = new ArrayList<>();
 	private Set<ChainableServer> uselessServers = Collections.synchronizedSet(new HashSet<>());
+	private final Map<ChainableServer, Integer> serverHeights = new ConcurrentHashMap<>();
+	private final Map<ChainableServer, Long> behindBirthdayServers = new ConcurrentHashMap<>();
 
 	private final String netId;
 	private final String expectedGenesisHash;
@@ -120,22 +130,26 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	private ChainableServer currentServer;
 	private ManagedChannel channel;
 	private int nextId = 1;
+	private final AtomicInteger highestObservedBlockHeight = new AtomicInteger(0);
 
 	private static final int TX_CACHE_SIZE = 1000;
 	@SuppressWarnings("serial")
-	private final Map<String, BitcoinyTransaction> transactionCache = Collections.synchronizedMap(new LinkedHashMap<>(TX_CACHE_SIZE + 1, 0.75F, true) {
-		// This method is called just after a new entry has been added
-		@Override
-		public boolean removeEldestEntry(Map.Entry<String, BitcoinyTransaction> eldest) {
-			return size() > TX_CACHE_SIZE;
-		}
-	});
+	private final Map<String, BitcoinyTransaction> transactionCache = Collections
+			.synchronizedMap(new LinkedHashMap<>(TX_CACHE_SIZE + 1, 0.75F, true) {
+				// This method is called just after a new entry has been added
+				@Override
+				public boolean removeEldestEntry(Map.Entry<String, BitcoinyTransaction> eldest) {
+					return size() > TX_CACHE_SIZE;
+				}
+			});
 
 	private ChainableServerConnectionRecorder recorder = new ChainableServerConnectionRecorder(100);
+	private static final long BEHIND_BIRTHDAY_RETRY_MS = 10 * 60 * 1000L;
 
 	// Constructors
 
-	public PirateLightClient(String netId, String genesisHash, Collection<Server> initialServerList, Map<Server.ConnectionType, Integer> defaultPorts) {
+	public PirateLightClient(String netId, String genesisHash, Collection<Server> initialServerList,
+			Map<Server.ConnectionType, Integer> defaultPorts) {
 		this.netId = netId;
 		this.expectedGenesisHash = genesisHash;
 		this.servers.addAll(initialServerList);
@@ -157,21 +171,23 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	/**
 	 * Returns current blockchain height.
 	 * <p>
+	 * 
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	@Override
 	public int getCurrentHeight() throws ForeignBlockchainException {
-		BlockID latestBlock = this.getCompactTxStreamerStub().getLatestBlock(null);
+		BlockID latestBlock = this.getCompactTxStreamerStub().getLatestBlock(DEFAULT_CHAIN_SPEC);
 
 		if (!(latestBlock instanceof BlockID))
 			throw new ForeignBlockchainException.NetworkException("Unexpected output from Pirate Chain getLatestBlock gRPC");
 
-		return (int)latestBlock.getHeight();
+		return (int) latestBlock.getHeight();
 	}
 
 	/**
 	 * Returns list of compact blocks, starting from <tt>startHeight</tt> inclusive.
 	 * <p>
+	 * 
 	 * @throws ForeignBlockchainException if error occurs
 	 * @return
 	 */
@@ -191,8 +207,10 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	}
 
 	/**
-	 * Returns list of raw block headers, starting from <tt>startHeight</tt> inclusive.
+	 * Returns list of raw block headers, starting from <tt>startHeight</tt>
+	 * inclusive.
 	 * <p>
+	 * 
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	@Override
@@ -219,8 +237,10 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	}
 
 	/**
-	 * Returns list of raw block timestamps, starting from <tt>startHeight</tt> inclusive.
+	 * Returns list of raw block timestamps, starting from <tt>startHeight</tt>
+	 * inclusive.
 	 * <p>
+	 * 
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	@Override
@@ -249,6 +269,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	/**
 	 * Returns confirmed balance, based on passed payment script.
 	 * <p>
+	 * 
 	 * @return confirmed balance, or zero if script unknown
 	 * @throws ForeignBlockchainException if there was an error
 	 */
@@ -260,6 +281,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	/**
 	 * Returns confirmed balance, based on passed base58 encoded address.
 	 * <p>
+	 * 
 	 * @return confirmed balance, or zero if address unknown
 	 * @throws ForeignBlockchainException if there was an error
 	 */
@@ -269,7 +291,8 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 		Balance balance = this.getCompactTxStreamerStub().getTaddressBalance(addressList);
 
 		if (!(balance instanceof Balance))
-			throw new ForeignBlockchainException.NetworkException("Unexpected output from Pirate Chain getConfirmedAddressBalance gRPC");
+			throw new ForeignBlockchainException.NetworkException(
+					"Unexpected output from Pirate Chain getConfirmedAddressBalance gRPC");
 
 		return balance.getValueZat();
 	}
@@ -277,26 +300,31 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	/**
 	 * Returns list of unspent outputs pertaining to passed address.
 	 * <p>
+	 * 
 	 * @return list of unspent outputs, or empty list if address unknown
 	 * @throws ForeignBlockchainException if there was an error.
 	 */
 	@Override
-	public List<UnspentOutput> getUnspentOutputs(String address, boolean includeUnconfirmed) throws ForeignBlockchainException {
+	public List<UnspentOutput> getUnspentOutputs(String address, boolean includeUnconfirmed)
+			throws ForeignBlockchainException {
 		GetAddressUtxosArg getAddressUtxosArg = GetAddressUtxosArg.newBuilder().addAddresses(address).build();
 		GetAddressUtxosReplyList replyList = this.getCompactTxStreamerStub().getAddressUtxos(getAddressUtxosArg);
 
 		if (!(replyList instanceof GetAddressUtxosReplyList))
-			throw new ForeignBlockchainException.NetworkException("Unexpected output from Pirate Chain getUnspentOutputs gRPC");
+			throw new ForeignBlockchainException.NetworkException(
+					"Unexpected output from Pirate Chain getUnspentOutputs gRPC");
 
 		List<GetAddressUtxosReply> unspentList = replyList.getAddressUtxosList();
 		if (unspentList == null)
-			throw new ForeignBlockchainException.NetworkException("Unexpected output from Pirate Chain getUnspentOutputs gRPC");
+			throw new ForeignBlockchainException.NetworkException(
+					"Unexpected output from Pirate Chain getUnspentOutputs gRPC");
 
 		List<UnspentOutput> unspentOutputs = new ArrayList<>();
 		for (GetAddressUtxosReply unspent : unspentList) {
 
-			int height = (int)unspent.getHeight();
-			// We only want unspent outputs from confirmed transactions (and definitely not mempool duplicates with height 0)
+			int height = (int) unspent.getHeight();
+			// We only want unspent outputs from confirmed transactions (and definitely not
+			// mempool duplicates with height 0)
 			if (!includeUnconfirmed && height <= 0)
 				continue;
 
@@ -315,11 +343,13 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	/**
 	 * Returns list of unspent outputs pertaining to passed payment script.
 	 * <p>
+	 * 
 	 * @return list of unspent outputs, or empty list if script unknown
 	 * @throws ForeignBlockchainException if there was an error.
 	 */
 	@Override
-	public List<UnspentOutput> getUnspentOutputs(byte[] script, boolean includeUnconfirmed) throws ForeignBlockchainException {
+	public List<UnspentOutput> getUnspentOutputs(byte[] script, boolean includeUnconfirmed)
+			throws ForeignBlockchainException {
 		String address = this.blockchain.deriveP2shAddress(script);
 		return this.getUnspentOutputs(address, includeUnconfirmed);
 	}
@@ -330,7 +360,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	 * NOTE: Do not mutate returned byte[]!
 	 *
 	 * @throws ForeignBlockchainException.NotFoundException if transaction not found
-	 * @throws ForeignBlockchainException if error occurs
+	 * @throws ForeignBlockchainException                   if error occurs
 	 */
 	@Override
 	public byte[] getRawTransaction(String txHash) throws ForeignBlockchainException {
@@ -343,7 +373,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	 * NOTE: Do not mutate returned byte[]!
 	 *
 	 * @throws ForeignBlockchainException.NotFoundException if transaction not found
-	 * @throws ForeignBlockchainException if error occurs
+	 * @throws ForeignBlockchainException                   if error occurs
 	 */
 	@Override
 	public byte[] getRawTransaction(byte[] txHash) throws ForeignBlockchainException {
@@ -360,8 +390,9 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	/**
 	 * Returns transaction info for passed transaction hash.
 	 * <p>
+	 * 
 	 * @throws ForeignBlockchainException.NotFoundException if transaction not found
-	 * @throws ForeignBlockchainException if error occurs
+	 * @throws ForeignBlockchainException                   if error occurs
 	 */
 	@Override
 	public BitcoinyTransaction getTransaction(String txHash) throws ForeignBlockchainException {
@@ -385,16 +416,19 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 		try {
 			transactionJson = (JSONObject) parser.parse(transactionDataString);
 		} catch (ParseException e) {
-			throw new ForeignBlockchainException.NetworkException("Expected JSON string from Pirate Chain getTransaction gRPC");
+			throw new ForeignBlockchainException.NetworkException(
+					"Expected JSON string from Pirate Chain getTransaction gRPC");
 		}
 
 		Object inputsObj = transactionJson.get("vin");
 		if (!(inputsObj instanceof JSONArray))
-			throw new ForeignBlockchainException.NetworkException("Expected JSONArray for 'vin' from Pirate Chain getTransaction gRPC");
+			throw new ForeignBlockchainException.NetworkException(
+					"Expected JSONArray for 'vin' from Pirate Chain getTransaction gRPC");
 
 		Object outputsObj = transactionJson.get("vout");
 		if (!(outputsObj instanceof JSONArray))
-			throw new ForeignBlockchainException.NetworkException("Expected JSONArray for 'vout' from Pirate Chain getTransaction gRPC");
+			throw new ForeignBlockchainException.NetworkException(
+					"Expected JSONArray for 'vout' from Pirate Chain getTransaction gRPC");
 
 		try {
 			int size = ((Long) transactionJson.get("size")).intValue();
@@ -445,9 +479,12 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 				}
 
 				// For the purposes of Qortal we require all outputs to contain addresses
-				// Some servers omit this info, causing problems down the line with balance calculations
-				// Update: it turns out that they were just using a different key - "address" instead of "addresses"
-				// The code below can remain in place, just in case a peer returns a missing address in the future
+				// Some servers omit this info, causing problems down the line with balance
+				// calculations
+				// Update: it turns out that they were just using a different key - "address"
+				// instead of "addresses"
+				// The code below can remain in place, just in case a peer returns a missing
+				// address in the future
 				if (addresses == null || addresses.isEmpty()) {
 					final String message = String.format("No output addresses returned for transaction %s", txHash);
 					if (this.currentServer != null) {
@@ -471,27 +508,32 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 			// Unexpected / invalid response from ElectrumX server
 		}
 
-		throw new ForeignBlockchainException.NetworkException("Unexpected JSON format from Pirate Chain getTransaction gRPC");
+		throw new ForeignBlockchainException.NetworkException(
+				"Unexpected JSON format from Pirate Chain getTransaction gRPC");
 	}
 
 	/**
 	 * Returns list of transactions, relating to passed payment script.
 	 * <p>
+	 * 
 	 * @return list of related transactions, or empty list if script unknown
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	@Override
-	public List<TransactionHash> getAddressTransactions(byte[] script, boolean includeUnconfirmed) throws ForeignBlockchainException {
-		// FUTURE: implement this if needed. Probably not very useful for private blockchains.
+	public List<TransactionHash> getAddressTransactions(byte[] script, boolean includeUnconfirmed)
+			throws ForeignBlockchainException {
+		// FUTURE: implement this if needed. Probably not very useful for private
+		// blockchains.
 		throw new ForeignBlockchainException("getAddressTransactions not yet implemented for Pirate Chain");
 	}
 
 	@Override
-	public List<BitcoinyTransaction> getAddressBitcoinyTransactions(String address, boolean includeUnconfirmed) throws ForeignBlockchainException {
+	public List<BitcoinyTransaction> getAddressBitcoinyTransactions(String address, boolean includeUnconfirmed)
+			throws ForeignBlockchainException {
 		try {
 			// Firstly we need to get the latest block
 			int defaultBirthday = Settings.getInstance().getArrrDefaultBirthday();
-			BlockID endBlock = this.getCompactTxStreamerStub().getLatestBlock(null);
+			BlockID endBlock = this.getCompactTxStreamerStub().getLatestBlock(DEFAULT_CHAIN_SPEC);
 			BlockID startBlock = BlockID.newBuilder().setHeight(defaultBirthday).build();
 			BlockRange blockRange = BlockRange.newBuilder().setStart(startBlock).setEnd(endBlock).build();
 
@@ -499,7 +541,8 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 					.setAddress(address)
 					.setRange(blockRange)
 					.build();
-			Iterator<Service.RawTransaction> transactionIterator = this.getCompactTxStreamerStub().getTaddressTxids(blockFilter);
+			Iterator<Service.RawTransaction> transactionIterator = this.getCompactTxStreamerStub()
+					.getTaddressTxids(blockFilter);
 
 			// Map from Iterator to List
 			List<RawTransaction> rawTransactions = new ArrayList<>();
@@ -522,15 +565,16 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 			}
 
 			return transactions;
-		}
-		catch (RuntimeException | TransformationException e) {
-			throw new ForeignBlockchainException(String.format("Unable to get transactions for address %s: %s", address, e.getMessage()));
+		} catch (RuntimeException | TransformationException e) {
+			throw new ForeignBlockchainException(
+					String.format("Unable to get transactions for address %s: %s", address, e.getMessage()));
 		}
 	}
 
 	/**
 	 * Broadcasts raw transaction to network.
 	 * <p>
+	 * 
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	@Override
@@ -540,10 +584,12 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 		SendResponse sendResponse = this.getCompactTxStreamerStub().sendTransaction(rawTransaction);
 
 		if (!(sendResponse instanceof SendResponse))
-			throw new ForeignBlockchainException.NetworkException("Unexpected output from Pirate Chain broadcastTransaction gRPC");
+			throw new ForeignBlockchainException.NetworkException(
+					"Unexpected output from Pirate Chain broadcastTransaction gRPC");
 
 		if (sendResponse.getErrorCode() != 0)
-			throw new ForeignBlockchainException.NetworkException(String.format("Unexpected error code from Pirate Chain broadcastTransaction gRPC: %d", sendResponse.getErrorCode()));
+			throw new ForeignBlockchainException.NetworkException(String.format(
+					"Unexpected error code from Pirate Chain broadcastTransaction gRPC: %d", sendResponse.getErrorCode()));
 	}
 
 	@Override
@@ -557,7 +603,28 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	}
 
 	@Override
-	public ChainableServer getCurrentServer() { return this.currentServer; }
+	public ChainableServer getCurrentServer() {
+		return this.currentServer;
+	}
+
+	public String getServerStatusSummary() {
+		ChainableServer server = this.currentServer;
+		Integer serverHeight = server != null ? this.serverHeights.get(server) : null;
+		int highestKnownHeight = this.highestObservedBlockHeight.get();
+		int totalServers = this.servers.size();
+		int remainingCount = this.remainingServers.size();
+		int uselessCount = this.uselessServers.size();
+		int behindBirthdayCount = this.behindBirthdayServers.size();
+		return String.format(
+				"current=%s height=%s highestKnown=%d total=%d remaining=%d useless=%d behindBirthday=%d",
+				server,
+				serverHeight,
+				highestKnownHeight,
+				totalServers,
+				remainingCount,
+				uselessCount,
+				behindBirthdayCount);
+	}
 
 	@Override
 	public boolean addServer(ChainableServer server) {
@@ -568,17 +635,21 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	public boolean removeServer(ChainableServer server) {
 		boolean removedServer = this.servers.remove(server);
 		boolean removedRemaining = this.remainingServers.remove(server);
+		this.serverHeights.remove(server);
+		this.behindBirthdayServers.remove(server);
+		this.uselessServers.remove(server);
 
 		return removedServer || removedRemaining;
 	}
 
 	@Override
-	public Optional<ChainableServerConnection> setCurrentServer(ChainableServer server, String requestedBy) throws ForeignBlockchainException {
+	public Optional<ChainableServerConnection> setCurrentServer(ChainableServer server, String requestedBy)
+			throws ForeignBlockchainException {
 
-		closeServer( requestedBy, "Connecting to different server by request." );
+		closeServer(requestedBy, "Connecting to different server by request.");
 		Optional<ChainableServerConnection> connection = makeConnection(server, requestedBy);
 
-		if( !connection.isPresent() || !connection.get().isSuccess() ) {
+		if (!connection.isPresent() || !connection.get().isSuccess()) {
 			haveConnection();
 		}
 
@@ -590,6 +661,14 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 		return this.recorder.getConnections();
 	}
 
+	public int getConnectedServerCount() {
+		return this.currentServer != null && this.channel != null && !this.channel.isShutdown() ? 1 : 0;
+	}
+
+	public int getKnownServerCount() {
+		return this.servers.size();
+	}
+
 	@Override
 	public ChainableServer getServer(String hostName, ChainableServer.ConnectionType type, int port) {
 		return new PirateLightClient.Server(hostName, type, port);
@@ -597,24 +676,27 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 
 	// Class-private utility methods
 
-
 	/**
 	 * Performs RPC call, with automatic reconnection to different server if needed.
 	 * <p>
+	 * 
 	 * @return "result" object from within JSON output
-	 * @throws ForeignBlockchainException if server returns error or something goes wrong
+	 * @throws ForeignBlockchainException if server returns error or something goes
+	 *                                    wrong
 	 */
-	private CompactTxStreamerGrpc.CompactTxStreamerBlockingStub getCompactTxStreamerStub() throws ForeignBlockchainException {
+	private CompactTxStreamerGrpc.CompactTxStreamerBlockingStub getCompactTxStreamerStub()
+			throws ForeignBlockchainException {
 		synchronized (this.serverLock) {
 			if (this.remainingServers.isEmpty())
-				this.remainingServers.addAll(this.servers);
+				this.refillRemainingServers();
 
 			while (haveConnection()) {
 				// If we have more servers and the last one replied slowly, try another
 				if (!this.remainingServers.isEmpty()) {
 					long averageResponseTime = this.currentServer.averageResponseTime();
 					if (averageResponseTime > MAX_AVG_RESPONSE_TIME) {
-						String message = String.format("Slow average response time %dms from %s - trying another server...", averageResponseTime, this.currentServer.getHostName());
+						String message = String.format("Slow average response time %dms from %s - trying another server...",
+								averageResponseTime, this.currentServer.getHostName());
 						LOGGER.info(message);
 						this.closeServer(this.getClass().getSimpleName(), message);
 						continue;
@@ -623,13 +705,14 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 
 				return CompactTxStreamerGrpc.newBlockingStub(this.channel);
 
-//				// Didn't work, try another server...
-//				this.closeServer();
+				// // Didn't work, try another server...
+				// this.closeServer();
 			}
 
 			// Failed to perform RPC - maybe lack of servers?
 			LOGGER.info("Error: No connected Pirate Light servers when trying to make RPC call");
-			throw new ForeignBlockchainException.NetworkException("No connected Pirate Light servers when trying to make RPC call");
+			throw new ForeignBlockchainException.NetworkException(
+					"No connected Pirate Light servers when trying to make RPC call");
 		}
 	}
 
@@ -638,77 +721,167 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 		if (this.currentServer != null && this.channel != null && !this.channel.isShutdown())
 			return true;
 
+		if (this.remainingServers.isEmpty()) {
+			this.refillRemainingServers();
+		}
 		while (!this.remainingServers.isEmpty()) {
-			ChainableServer server = this.remainingServers.remove(RANDOM.nextInt(this.remainingServers.size()));
+			ChainableServer server = this.selectNextServer();
+			if (server == null) {
+				break;
+			}
 
-			Optional<ChainableServerConnection> chainableServerConnection = makeConnection(server, this.getClass().getSimpleName());
-			if( chainableServerConnection.isPresent() && chainableServerConnection.get().isSuccess() ) return true;
+			Optional<ChainableServerConnection> chainableServerConnection = makeConnection(server,
+					this.getClass().getSimpleName());
+			if (chainableServerConnection.isPresent() && chainableServerConnection.get().isSuccess())
+				return true;
 		}
 
 		return false;
 	}
 
+	private void refillRemainingServers() {
+		long now = System.currentTimeMillis();
+		this.remainingServers.clear();
+		for (ChainableServer server : this.servers) {
+			Long behindAt = this.behindBirthdayServers.get(server);
+			if (behindAt != null && now - behindAt < BEHIND_BIRTHDAY_RETRY_MS) {
+				continue;
+			}
+			this.remainingServers.add(server);
+		}
+		if (this.remainingServers.isEmpty() && !this.servers.isEmpty()) {
+			LOGGER.info("All Pirate lightwallet servers recently flagged behind birthday; retrying full list");
+			this.remainingServers.addAll(this.servers);
+		}
+	}
+
+	private ChainableServer selectNextServer() {
+		if (this.remainingServers.isEmpty()) {
+			return null;
+		}
+		int configuredBirthday = Settings.getInstance().getArrrDefaultBirthday();
+		ChainableServer bestServer = null;
+		int bestHeight = -1;
+		for (ChainableServer server : this.remainingServers) {
+			Integer height = this.serverHeights.get(server);
+			if (height == null) {
+				continue;
+			}
+			if (configuredBirthday > 0 && height < configuredBirthday) {
+				continue;
+			}
+			if (height > bestHeight) {
+				bestHeight = height;
+				bestServer = server;
+			}
+		}
+		if (bestServer != null) {
+			this.remainingServers.remove(bestServer);
+			LOGGER.info("Selected Pirate lightwallet server {} (known height {})", bestServer, bestHeight);
+			return bestServer;
+		}
+		ChainableServer fallback = this.remainingServers.remove(RANDOM.nextInt(this.remainingServers.size()));
+		Integer fallbackHeight = this.serverHeights.get(fallback);
+		LOGGER.info("Selected Pirate lightwallet server {} (known height {})", fallback, fallbackHeight);
+		return fallback;
+	}
+
 	private Optional<ChainableServerConnection> makeConnection(ChainableServer server, String requestedBy) {
 		LOGGER.info(() -> String.format("Connecting to %s", server));
 
-		ManagedChannel tempChannel = null;
 		try {
 			ManagedChannelBuilder<?> channelBuilder = ManagedChannelBuilder.forAddress(server.getHostName(), server.getPort());
 			channelBuilder.maxInboundMessageSize(MAX_INBOUND_MESSAGE_BYTES);
 			channelBuilder.maxInboundMetadataSize(MAX_INBOUND_METADATA_BYTES);
-			if (server.getConnectionType() == ChainableServer.ConnectionType.SSL) {
+			if (server.getConnectionType() == ChainableServer.ConnectionType.SSL)
 				channelBuilder.useTransportSecurity();
-			} else {
+			else
 				channelBuilder.usePlaintext();
-			}
-			tempChannel = channelBuilder.build();
 
-			CompactTxStreamerGrpc.CompactTxStreamerBlockingStub stub = CompactTxStreamerGrpc.newBlockingStub(tempChannel);
+			this.channel = channelBuilder.build();
+			CompactTxStreamerGrpc.CompactTxStreamerBlockingStub stub = CompactTxStreamerGrpc.newBlockingStub(this.channel);
 			LightdInfo lightdInfo = stub.withDeadlineAfter(10, TimeUnit.SECONDS).getLightdInfo(Empty.newBuilder().build());
 
-			if (lightdInfo == null || lightdInfo.getBlockHeight() <= 0) {
-				// Close channel before returning on validation failure
-				shutdownChannel(tempChannel);
-				return Optional.of( this.recorder.recordConnection(server, requestedBy,true, false, "lightd info issues") );
+			if (lightdInfo == null || lightdInfo.getBlockHeight() <= 0)
+				return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false, "lightd info issues"));
+
+			int serverHeight = (int) lightdInfo.getBlockHeight();
+			this.serverHeights.put(server, serverHeight);
+			int configuredBirthday = Settings.getInstance().getArrrDefaultBirthday();
+			LOGGER.info("Pirate lightwallet server {} reported height {} (configured birthday {})",
+					server, serverHeight, configuredBirthday);
+			if (configuredBirthday > 0 && serverHeight < configuredBirthday) {
+				String message = String.format("%s height %d is below configured birthday %d, skipping",
+						server, serverHeight, configuredBirthday);
+				LOGGER.info(message);
+				this.behindBirthdayServers.put(server, System.currentTimeMillis());
+				this.shutdownChannel();
+				return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false, message));
+			}
+			this.behindBirthdayServers.remove(server);
+			int highestKnownHeight = this.highestObservedBlockHeight.get();
+			if (highestKnownHeight > 0 && highestKnownHeight - serverHeight > MAX_SERVER_HEIGHT_BEHIND) {
+				String message = String.format("%s height %d is %d blocks behind best known %d, skipping",
+						server, serverHeight, highestKnownHeight - serverHeight, highestKnownHeight);
+				LOGGER.info(message);
+
+				this.uselessServers.add(server);
+				this.shutdownChannel();
+				return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false, message));
 			}
 
 			// TODO: find a way to verify that the server is using the expected chain
 
-//				if (featuresJson == null || Double.valueOf((String) featuresJson.get("protocol_min")) < MIN_PROTOCOL_VERSION)
-//					continue;
+			// if (featuresJson == null || Double.valueOf((String)
+			// featuresJson.get("protocol_min")) < MIN_PROTOCOL_VERSION)
+			// continue;
 
-//				if (this.expectedGenesisHash != null && !((String) featuresJson.get("genesis_hash")).equals(this.expectedGenesisHash))
-//					continue;
+			// if (this.expectedGenesisHash != null && !((String)
+			// featuresJson.get("genesis_hash")).equals(this.expectedGenesisHash))
+			// continue;
 
-			// Connection successful - assign to instance variable
-			synchronized (this.serverLock) {
-				this.channel = tempChannel;
-				this.currentServer = server;
+			if (highestKnownHeight == 0 || serverHeight <= highestKnownHeight + MAX_SERVER_HEIGHT_BEHIND) {
+				this.highestObservedBlockHeight.accumulateAndGet(serverHeight, Math::max);
+			} else {
+				LOGGER.info("Ignoring implausible server height {} (highestKnown={})", serverHeight, highestKnownHeight);
 			}
 
 			LOGGER.info(() -> String.format("Connected to %s", server));
-			return Optional.of( this.recorder.recordConnection(server, requestedBy,true, true, EMPTY) );
+			this.currentServer = server;
+			return Optional.of(this.recorder.recordConnection(server, requestedBy, true, true, EMPTY));
 		} catch (Exception e) {
-			// Close channel if connection failed
-			if (tempChannel != null) {
-				shutdownChannel(tempChannel);
-			}
 			// Didn't work, try another server...
-			String notes = CrossChainUtils.getNotes(e);
-			if (e instanceof StatusRuntimeException) {
-				StatusRuntimeException statusException = (StatusRuntimeException) e;
-				Throwable cause = statusException.getCause();
-				String causeText = cause == null ? "none" : cause.getClass().getSimpleName() + ": " + cause.getMessage();
-				LOGGER.warn("Pirate gRPC failure details for {} -> code: {}, description: {}, cause: {}",
-						server,
-						statusException.getStatus().getCode(),
-						statusException.getStatus().getDescription(),
-						causeText);
-			}
-			LOGGER.warn("Unable to connect to Pirate Light server {}: {}", server, notes);
-			return Optional.of( this.recorder.recordConnection( server, requestedBy, true, false, notes));
+			return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false, CrossChainUtils.getNotes(e)));
 		}
 	}
+
+	private void shutdownChannel() {
+		if (this.channel == null)
+			return;
+
+		try {
+			if (!this.channel.isShutdown()) {
+				this.channel.shutdown();
+				if (!this.channel.awaitTermination(5, TimeUnit.SECONDS)) {
+					LOGGER.warn("Timed out gracefully shutting down connection: {}.", this.channel);
+				}
+			}
+
+			if (!this.channel.isTerminated()) {
+				this.channel.shutdownNow();
+				if (!this.channel.awaitTermination(5, TimeUnit.SECONDS)) {
+					LOGGER.warn("Timed out forcefully shutting down connection: {}.", this.channel);
+				}
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			LOGGER.warn("Interrupted while shutting down connection", e);
+		} finally {
+			this.channel = null;
+			this.currentServer = null;
+		}
+	}
+
 	/**
 	 * Closes connection to <tt>server</tt> if it is currently connected server.
 	 *
@@ -754,52 +927,13 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 			this.currentServer = null;
 		}
 
-		return Optional.of( connection );
+		return Optional.of(connection);
 	}
 
 	/** Closes connection to currently connected server (if any). */
 	private Optional<ChainableServerConnection> closeServer(String requestedBy, String notes) {
 		synchronized (this.serverLock) {
 			return this.closeServer(this.currentServer, notes, requestedBy);
-		}
-	}
-
-	/**
-	 * Shuts down a gRPC channel properly, ensuring all resources are released.
-	 * This prevents resource leaks when channels are created but connection fails.
-	 */
-	private void shutdownChannel(ManagedChannel channel) {
-		if (channel == null) {
-			return;
-		}
-
-		if (!channel.isShutdown()) {
-			try {
-				channel.shutdown();
-				if (!channel.awaitTermination(5, TimeUnit.SECONDS)) {
-					LOGGER.debug("Channel did not terminate gracefully, forcing shutdown");
-				}
-			} catch (InterruptedException e) {
-				LOGGER.debug("Interrupted while waiting for channel termination");
-				Thread.currentThread().interrupt();
-			} catch (Exception e) {
-				LOGGER.debug("Exception during graceful channel shutdown: {}", e.getMessage());
-			}
-		}
-
-		// Forceful shutdown if still not terminated
-		if (!channel.isTerminated()) {
-			try {
-				channel.shutdownNow();
-				if (!channel.awaitTermination(5, TimeUnit.SECONDS)) {
-					LOGGER.debug("Channel did not terminate forcefully");
-				}
-			} catch (InterruptedException e) {
-				LOGGER.debug("Interrupted while waiting for forceful channel termination");
-				Thread.currentThread().interrupt();
-			} catch (Exception e) {
-				LOGGER.debug("Exception during forceful channel shutdown: {}", e.getMessage());
-			}
 		}
 	}
 

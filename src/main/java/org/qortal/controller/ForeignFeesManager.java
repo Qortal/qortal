@@ -750,7 +750,14 @@ public class ForeignFeesManager implements Listener {
             List<TradeBotData> tradeOffersWaiting
                     = allTradeBotData.stream()
                     .filter(d -> d.getStateValue() == TradeStates.State.BOB_WAITING_FOR_MESSAGE.value)
-                    .filter(d -> SupportedBlockchain.getAcctByName( d.getAcctName() ).getBlockchain().equals( bitcoiny ))
+                    .filter(d -> {
+                        ACCT acct = SupportedBlockchain.getAcctByName(d.getAcctName());
+                        if (acct == null) {
+                            LOGGER.warn("Skipping unsupported tradebot acctName: {} (AT: {})", d.getAcctName(), d.getAtAddress());
+                            return false;
+                        }
+                        return acct.getBlockchain().equals(bitcoiny);
+                    })
                     .collect(Collectors.toList());
 
             LOGGER.debug("trade offers waiting: count = " + tradeOffersWaiting.size());
