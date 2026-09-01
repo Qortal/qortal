@@ -33,16 +33,18 @@ successful test of this bundle as a test of the current Pirate client.
 ## Current Unified Wallet candidate
 
 The current integration target is the Qortal JNI artifact in Pirate Unified
-Wallet release `v1.1.7`. The release currently gives the file a `v1.1.6`
-suffix, so pin the content hash as well as the release URL:
+Wallet release `v1.1.9`. Pin the content hash as well as the release URL:
 
 ```text
-release:  v1.1.7
-artifact: pirate-unified-wallet-qortal-jni-artifacts-v1.1.6.zip
-sha256:   27773b37510ac5f6e9a594e1ae8a98e8b3b0dc9069506776314ba6719341f299
+release:  v1.1.9
+artifact: pirate-unified-wallet-qortal-jni-artifacts-v1.1.9.zip
+sha256:   059781c5a2cdeb8c5d60f1130c4bf3a217822d39438e560bc11633993df0e1e9
 ```
 
-### Confirmed Linux x86_64 test publication
+The v1.1.9 release is confirmed on QDN. Its immutable transaction matches the
+intended name and identifier below.
+
+### Historical v1.1.7 Linux x86_64 test publication
 
 The first host-specific test publication is confirmed and indexed on QDN:
 
@@ -60,15 +62,15 @@ exact signature as the latest resource transaction for `testARRR` and the
 identifier above. Use it only for Linux x86_64 Unified Wallet smoke tests; a
 different staged publication is required for every other host platform.
 
-### Confirmed production Unified Wallet publication
+### Confirmed v1.1.9 production Unified Wallet publication
 
 The reviewed cross-platform release is confirmed and is the Core default:
 
 ```text
 name:       PirateChainWallet
-identifier: LiteWalletJNI-2026-08-unified-v1
-signature:  5mjggoNvtQ9KCA5Ytbdc1BhQiUyjovSR62JgthQGWUgBzN8awE4KNS7LxjnHECqASSEZFfTXiTNv4WNa6nbWBEX8
-block:      2693472
+identifier: LiteWalletJNI-2026-08-unified-v1.1.9
+signature:  5drafi8G5WTjGVGh8B66runy51DDxupEEFaT67rAXgosDf6u22NWGntHZZ3jxv7Sq7AXtker7dxeXUkgxQ5yPcG1
+block:      2707698
 fee:        0.01000000 QORT
 bundle:     Cross-platform (all five supported native libraries)
 ```
@@ -82,10 +84,10 @@ Download, verify, and extract it into a new local staging directory:
 
 ```bash
 curl -fL \
-  https://github.com/PirateNetwork/Pirate-Unified-Light-Wallet/releases/download/v1.1.7/pirate-unified-wallet-qortal-jni-artifacts-v1.1.6.zip \
-  -o pirate-unified-wallet-qortal-jni-artifacts-v1.1.6.zip
-echo '27773b37510ac5f6e9a594e1ae8a98e8b3b0dc9069506776314ba6719341f299  pirate-unified-wallet-qortal-jni-artifacts-v1.1.6.zip' | sha256sum --check
-unzip pirate-unified-wallet-qortal-jni-artifacts-v1.1.6.zip -d LiteWalletJNI-2026-08-unified
+  https://github.com/PirateNetwork/Pirate-Unified-Light-Wallet/releases/download/v1.1.9/pirate-unified-wallet-qortal-jni-artifacts-v1.1.9.zip \
+  -o pirate-unified-wallet-qortal-jni-artifacts-v1.1.9.zip
+echo '059781c5a2cdeb8c5d60f1130c4bf3a217822d39438e560bc11633993df0e1e9  pirate-unified-wallet-qortal-jni-artifacts-v1.1.9.zip' | sha256sum --check
+unzip pirate-unified-wallet-qortal-jni-artifacts-v1.1.9.zip -d LiteWalletJNI-2026-08-unified-v1.1.9
 ```
 
 The extracted archive contains the five desktop native libraries, the upstream
@@ -99,8 +101,8 @@ publication reproducibly with:
 
 ```bash
 tools/stage-pirate-unified-qdn-bundle.sh \
-  pirate-unified-wallet-qortal-jni-artifacts-v1.1.6.zip \
-  LiteWalletJNI-2026-08-unified-publish \
+  pirate-unified-wallet-qortal-jni-artifacts-v1.1.9.zip \
+  LiteWalletJNI-2026-08-unified-v1.1.9-publish \
   linux-x86_64
 ```
 
@@ -110,7 +112,7 @@ directory, and writes a manifest into the candidate publication.
 ## Test mode: publish a host-specific candidate
 
 Publish the staged directory to QDN as `ARBITRARY_DATA`, using a test name and a
-distinct identifier, for example `LiteWalletJNI-2026-08-unified`. It must retain
+distinct identifier, for example `LiteWalletJNI-2026-08-unified-v1.1.9-test`. It must retain
 the exact native filename for the test host:
 
 - Linux x86_64: `librust-linux-x86_64.so`
@@ -147,16 +149,16 @@ name (the API key is prompted for if it is not exported):
 ```bash
 tools/publish-pirate-unified-qdn.sh validate \
   test \
-  "$PWD/LiteWalletJNI-2026-08-unified-publish"
+  "$PWD/LiteWalletJNI-2026-08-unified-v1.1.9-publish"
 
 export QORTAL_API_URL='http://127.0.0.1:12391'
 export QORTAL_API_KEY='<local-node-api-key>'
 export QDN_FEE='1000000' # 0.01 QORT, in atomic units
 
 tools/publish-pirate-unified-qdn.sh prepare \
-  "$PWD/LiteWalletJNI-2026-08-unified-publish" \
+  "$PWD/LiteWalletJNI-2026-08-unified-v1.1.9-publish" \
   '<registered-test-name>' \
-  'LiteWalletJNI-2026-08-unified'
+  'LiteWalletJNI-2026-08-unified-v1.1.9-test'
 ```
 
 This creates `qdn-unified-wallet-to-sign.base58`; it has an explicit fee but
@@ -190,9 +192,9 @@ typing `PUBLISH` immediately before the broadcast:
 
 ```bash
 tools/publish-pirate-unified-qdn.sh publish \
-  "$PWD/LiteWalletJNI-2026-08-unified-publish" \
+  "$PWD/LiteWalletJNI-2026-08-unified-v1.1.9-publish" \
   '<registered-test-name>' \
-  'LiteWalletJNI-2026-08-unified'
+  'LiteWalletJNI-2026-08-unified-v1.1.9-test'
 ```
 
 The convenience command uses a timestamped output-file prefix, so a retry
@@ -215,8 +217,8 @@ existing directory:
 
 ```bash
 tools/stage-pirate-unified-qdn-bundle.sh \
-  pirate-unified-wallet-qortal-jni-artifacts-v1.1.6.zip \
-  LiteWalletJNI-2026-08-unified-release \
+  pirate-unified-wallet-qortal-jni-artifacts-v1.1.9.zip \
+  LiteWalletJNI-2026-08-unified-v1.1.9-release \
   all
 ```
 
@@ -236,7 +238,7 @@ Run the offline preflight before involving a Qortal API key or private key:
 ```bash
 tools/publish-pirate-unified-qdn.sh validate \
   release \
-  "$PWD/LiteWalletJNI-2026-08-unified-release"
+  "$PWD/LiteWalletJNI-2026-08-unified-v1.1.9-release"
 ```
 
 Choose the registered production QDN name controlled by the release signer and
@@ -249,9 +251,9 @@ export QORTAL_API_URL='http://127.0.0.1:12391'
 export QDN_FEE='1000000' # 0.01 QORT in atomic units
 
 tools/publish-pirate-unified-qdn.sh prepare-release \
-  "$PWD/LiteWalletJNI-2026-08-unified-release" \
+  "$PWD/LiteWalletJNI-2026-08-unified-v1.1.9-release" \
   '<registered-production-name>' \
-  'LiteWalletJNI-2026-08-unified-v1'
+  'LiteWalletJNI-2026-08-unified-v1.1.9'
 ```
 
 This writes `qdn-unified-wallet-release-to-sign.base58`. Sign it on the trusted
@@ -275,9 +277,9 @@ and requires the exact confirmation `PUBLISH RELEASE` before broadcasting:
 
 ```bash
 tools/publish-pirate-unified-qdn.sh release \
-  "$PWD/LiteWalletJNI-2026-08-unified-release" \
+  "$PWD/LiteWalletJNI-2026-08-unified-v1.1.9-release" \
   '<registered-production-name>' \
-  'LiteWalletJNI-2026-08-unified-v1'
+  'LiteWalletJNI-2026-08-unified-v1.1.9'
 ```
 
 It writes a fresh timestamped set of unsigned, signed, and signature files on
@@ -285,10 +287,11 @@ every run. This preserves prior attempts rather than refusing to overwrite
 them. Use the explicit three-step commands above when the signer is offline or
 when you need fixed output filenames.
 
-After the transaction confirms, record its signature and independently verify
-that it is an `ARBITRARY_DATA` `PUT` with the intended name, identifier, fee,
-and size. The confirmed production transaction above is pinned as
-`DEFAULT_QDN_WALLET_SIGNATURE` in Core.
+After the transaction confirms, record its block height and independently
+verify that it is an `ARBITRARY_DATA` `PUT` with the intended name, identifier,
+fee, and size. Update the production record above with that height, then run
+the focused controller tests before distributing the JAR or updating the pull
+request.
 
 ## Start an isolated test node
 

@@ -115,7 +115,7 @@ public class PirateChainWalletController extends Thread {
      * override it with pirateChainWalletQdnSignature to test a specific,
      * immutable QDN publication without changing production data.
      */
-    public static final String DEFAULT_QDN_WALLET_SIGNATURE = "5mjggoNvtQ9KCA5Ytbdc1BhQiUyjovSR62JgthQGWUgBzN8awE4KNS7LxjnHECqASSEZFfTXiTNv4WNa6nbWBEX8";
+    public static final String DEFAULT_QDN_WALLET_SIGNATURE = "5drafi8G5WTjGVGh8B66runy51DDxupEEFaT67rAXgosDf6u22NWGntHZZ3jxv7Sq7AXtker7dxeXUkgxQ5yPcG1";
 
     private PirateChainWalletController() {
         this.running = Settings.getInstance().isWalletEnabled("ARRR");

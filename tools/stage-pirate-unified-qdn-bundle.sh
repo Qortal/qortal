@@ -6,8 +6,8 @@ set -euo pipefail
 # library and is the only shape accepted by the guarded release workflow.
 # This script deliberately does not publish or sign anything.
 
-readonly EXPECTED_SHA256='27773b37510ac5f6e9a594e1ae8a98e8b3b0dc9069506776314ba6719341f299'
-readonly RELEASE_URL='https://github.com/PirateNetwork/Pirate-Unified-Light-Wallet/releases/download/v1.1.7/pirate-unified-wallet-qortal-jni-artifacts-v1.1.6.zip'
+readonly EXPECTED_SHA256='059781c5a2cdeb8c5d60f1130c4bf3a217822d39438e560bc11633993df0e1e9'
+readonly RELEASE_URL='https://github.com/PirateNetwork/Pirate-Unified-Light-Wallet/releases/download/v1.1.9/pirate-unified-wallet-qortal-jni-artifacts-v1.1.9.zip'
 
 usage() {
 	cat <<'EOF'
@@ -18,7 +18,7 @@ Platforms: linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64, windows-x86
 Use "all" to stage the five-library cross-platform production bundle.
 When omitted, platform defaults to the publishing host.
 
-The artifact must be the Pirate Unified Wallet v1.1.7 Qortal JNI archive with
+The artifact must be the Pirate Unified Wallet v1.1.9 Qortal JNI archive with
 the SHA-256 pinned in this script. The output directory must not exist.
 EOF
 }
