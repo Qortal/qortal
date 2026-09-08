@@ -10,6 +10,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.bitcoinj.core.Transaction;
 import org.qortal.api.ApiError;
+import org.qortal.crosschain.LocalWalletSupport;
 import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.Security;
@@ -104,6 +105,39 @@ public class CrossChainDigibyteResource {
 
 		return Boolean.toString(started);
 	}
+
+
+    @POST
+    @Path("/wallet/public/spend-context")
+    @javax.ws.rs.Produces(MediaType.APPLICATION_JSON)
+    @SecurityRequirement(name = "apiKey")
+    public org.qortal.api.model.crosschain.LocalWalletResponse publicSpendContext(org.qortal.api.model.crosschain.ForeignWalletRequest data) {
+        Security.checkApiCallAllowed(request);
+        try {
+            if (data == null) throw new IllegalArgumentException();
+            return new org.qortal.api.model.crosschain.LocalWalletResponse(LocalWalletSupport.spendContext(Digibyte.getInstance(), data.xpub58, data.expectedChainId));
+        } catch (IllegalArgumentException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+        } catch (ForeignBlockchainException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE);
+        }
+    }
+
+    @POST
+    @Path("/send/broadcast")
+    @javax.ws.rs.Produces(MediaType.TEXT_PLAIN)
+    @SecurityRequirement(name = "apiKey")
+    public String broadcastSignedSpend(org.qortal.api.model.crosschain.ForeignWalletRequest data) {
+        Security.checkApiCallAllowed(request);
+        try {
+            if (data == null) throw new IllegalArgumentException();
+            return LocalWalletSupport.broadcast(Digibyte.getInstance(), data.rawTransactionHex, data.expectedChainId);
+        } catch (IllegalArgumentException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+        } catch (ForeignBlockchainException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE);
+        }
+    }
 
 	@GET
 	@Path("/height")

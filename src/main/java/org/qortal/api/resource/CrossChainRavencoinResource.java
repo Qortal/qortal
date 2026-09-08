@@ -35,6 +35,39 @@ public class CrossChainRavencoinResource {
 	@Context
 	HttpServletRequest request;
 
+
+    @POST
+    @Path("/wallet/public/spend-context")
+    @javax.ws.rs.Produces(MediaType.APPLICATION_JSON)
+    @SecurityRequirement(name = "apiKey")
+    public org.qortal.api.model.crosschain.LocalWalletResponse publicSpendContext(org.qortal.api.model.crosschain.ForeignWalletRequest data) {
+        Security.checkApiCallAllowed(request);
+        try {
+            if (data == null) throw new IllegalArgumentException();
+            return new org.qortal.api.model.crosschain.LocalWalletResponse(LocalWalletSupport.spendContext(Ravencoin.getInstance(), data.xpub58, data.expectedChainId));
+        } catch (IllegalArgumentException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+        } catch (ForeignBlockchainException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE);
+        }
+    }
+
+    @POST
+    @Path("/send/broadcast")
+    @javax.ws.rs.Produces(MediaType.TEXT_PLAIN)
+    @SecurityRequirement(name = "apiKey")
+    public String broadcastSignedSpend(org.qortal.api.model.crosschain.ForeignWalletRequest data) {
+        Security.checkApiCallAllowed(request);
+        try {
+            if (data == null) throw new IllegalArgumentException();
+            return LocalWalletSupport.broadcast(Ravencoin.getInstance(), data.rawTransactionHex, data.expectedChainId);
+        } catch (IllegalArgumentException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+        } catch (ForeignBlockchainException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE);
+        }
+    }
+
 	@GET
 	@Path("/status")
 	@Operation(
