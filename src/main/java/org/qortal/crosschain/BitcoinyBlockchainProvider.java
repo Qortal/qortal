@@ -62,6 +62,11 @@ public abstract class BitcoinyBlockchainProvider {
 	/** Broadcasts raw, serialized, transaction bytes to network, returning success/failure. */
 	public abstract void broadcastTransaction(byte[] rawTransaction) throws ForeignBlockchainException;
 
+    /** Broadcast a locally signed transaction, binding the acknowledgement to its ID. */
+    public void broadcastTransaction(byte[] rawTransaction, String expectedTxId) throws ForeignBlockchainException {
+        throw new ForeignBlockchainException("Verified broadcast unsupported by provider");
+    }
+
 	public abstract Set<ChainableServer> getServers();
 
 	public abstract Set<ChainableServer> getUselessServers();

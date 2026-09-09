@@ -96,6 +96,42 @@ public class CrossChainTradeBotResource {
 		}
 	}
 
+    @POST
+    @Path("/respond/local")
+    @Produces(MediaType.APPLICATION_JSON)
+    @SecurityRequirement(name = "apiKey")
+    public synchronized org.qortal.api.model.crosschain.LocalWalletResponse prepareLocalFunding(org.qortal.api.model.crosschain.LocalTradeRequest data) {
+        Security.checkApiCallAllowed(request);
+        if (data == null || data.addresses == null || data.addresses.isEmpty() || data.addresses.size() > 20
+                || new java.util.HashSet<>(data.addresses).size() != data.addresses.size()
+                || data.xpub58 == null || !Crypto.isValidAddress(data.receivingAddress))
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+        if (NTP.getTime() == null || !Controller.getInstance().isUpToDate(NTP.getTime() - 3600000L))
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.BLOCKCHAIN_NEEDS_SYNC);
+        try (Repository repository = RepositoryManager.getRepository()) {
+            List<java.util.Map<String, Object>> result = new ArrayList<>();
+            for (String address : data.addresses) {
+                if (address == null || !Crypto.isValidAtAddress(address)) throw new IllegalArgumentException();
+                ATData at = fetchAtDataWithChecking(repository, address);
+                ACCT acct = TradeBot.getInstance().getAcctUsingAtData(at);
+                if (acct == null || !(acct.getBlockchain() instanceof Bitcoiny) || acct.getBlockchain() instanceof PirateChain)
+                    throw new IllegalArgumentException();
+                Bitcoiny coin = (Bitcoiny) acct.getBlockchain();
+                org.qortal.crosschain.LocalWalletSupport.checkPublicKey(coin, data.xpub58, data.expectedChainId);
+                CrossChainTradeData offer = acct.populateTradeData(repository, at);
+                if (offer == null || offer.mode != AcctMode.OFFERING) throw new IllegalArgumentException();
+                result.add(org.qortal.controller.tradebot.LocalTradeFunding.prepare(repository, acct, offer, data.xpub58, data.receivingAddress, coin));
+            }
+            return new org.qortal.api.model.crosschain.LocalWalletResponse(result);
+        } catch (IllegalArgumentException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+        } catch (org.qortal.crosschain.ForeignBlockchainException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE);
+        } catch (DataException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE);
+        }
+    }
+
 	@POST
 	@Path("/create")
 	@Operation(
