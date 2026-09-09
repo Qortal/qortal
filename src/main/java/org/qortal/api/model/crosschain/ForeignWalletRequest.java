@@ -5,4 +5,5 @@ public class ForeignWalletRequest {
     public String xpub58;
     public String expectedChainId;
     public String rawTransactionHex;
+    public String txId;
 }

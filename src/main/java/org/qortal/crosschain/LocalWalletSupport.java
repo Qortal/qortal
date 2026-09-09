@@ -125,4 +125,36 @@ public final class LocalWalletSupport {
         coin.blockchainProvider.broadcastTransaction(raw, tx.getTxId().toString());
         return tx.getTxId().toString();
     }
+
+    public static Map<String, Object> transactionStatus(Bitcoiny coin, String txId, String expected)
+            throws ForeignBlockchainException {
+        checkChain(coin, expected);
+        if (txId == null || !txId.matches("[0-9a-fA-F]{64}"))
+            throw new IllegalArgumentException("Invalid transaction ID");
+
+        String normalizedTxId = txId.toLowerCase(Locale.ROOT);
+        BitcoinyTransaction transaction;
+        try {
+            transaction = coin.blockchainProvider.getTransaction(normalizedTxId);
+        } catch (ForeignBlockchainException.NotFoundException e) {
+            transaction = null;
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("version", 1);
+        result.put("currencyCode", coin.currencyCode);
+        result.put("activeNetwork", "MAIN");
+        result.put("chainId", expected);
+        result.put("txId", normalizedTxId);
+        if (transaction == null) {
+            result.put("status", "UNKNOWN");
+        } else {
+            if (!normalizedTxId.equalsIgnoreCase(transaction.txHash))
+                throw new ForeignBlockchainException("Transaction ID mismatch");
+            result.put("status", transaction.timestamp == null ? "MEMPOOL" : "CONFIRMED");
+            if (transaction.timestamp != null)
+                result.put("timestamp", transaction.timestamp);
+        }
+        return result;
+    }
 }

@@ -67,6 +67,29 @@ public class LocalWalletTests extends org.qortal.test.common.Common {
         try { LocalWalletSupport.broadcast(coin, "nothex", chain); fail(); } catch (IllegalArgumentException expected) { }
         try { LocalWalletSupport.broadcast(coin, f.get("raw"), "wrong"); fail(); } catch (IllegalArgumentException expected) { }
     }
+    @Test public void transactionStatusDistinguishesUnknownMempoolAndConfirmed() throws Exception {
+        Map<String, String> f = fixture("LTC");
+        FakeProvider provider = new FakeProvider(f);
+        FakeCoin coin = new FakeCoin(provider);
+        String chain = "bip122:12a765e31ffd4059bada1e25190f6e98";
+        String txId = f.get("txId");
+
+        assertEquals("UNKNOWN", LocalWalletSupport.transactionStatus(coin, txId, chain).get("status"));
+        provider.transaction = new BitcoinyTransaction(txId, 100, 0, null, List.of(), List.of());
+        assertEquals("MEMPOOL", LocalWalletSupport.transactionStatus(coin, txId, chain).get("status"));
+        provider.transaction = new BitcoinyTransaction(txId, 100, 0, 123456, List.of(), List.of());
+        Map<String, Object> confirmed = LocalWalletSupport.transactionStatus(coin, txId.toUpperCase(Locale.ROOT), chain);
+        assertEquals("CONFIRMED", confirmed.get("status"));
+        assertEquals(txId, confirmed.get("txId"));
+        assertEquals(123456, confirmed.get("timestamp"));
+        assertEquals(3, provider.transactionReads);
+
+        try { LocalWalletSupport.transactionStatus(coin, txId, "wrong"); fail("Wrong chain accepted"); }
+        catch (IllegalArgumentException expected) { }
+        try { LocalWalletSupport.transactionStatus(coin, "not-a-txid", chain); fail("Invalid txid accepted"); }
+        catch (IllegalArgumentException expected) { }
+        assertEquals("Validation must happen before provider access", 3, provider.transactionReads);
+    }
     @Test public void localTradePreparationIsDurableWatchOnlyAndIdempotent() throws Exception {
         org.qortal.utils.NTP.setFixedOffset(0L);
         Map<String, String> f = fixture("LTC");
@@ -106,7 +129,8 @@ public class LocalWalletTests extends org.qortal.test.common.Common {
         public void setFeeRequired(long fee) { }
     }
     static class FakeProvider extends BitcoinyBlockchainProvider {
-        final byte[] raw; final Transaction tx; int reads; int unspentReads; boolean tamper; String broadcast;
+        final byte[] raw; final Transaction tx; int reads; int unspentReads; int transactionReads;
+        boolean tamper; String broadcast; BitcoinyTransaction transaction;
         FakeProvider(Map<String, String> fixture) { raw = HashCode.fromString(fixture.get("previous")).asBytes(); tx = new Transaction(PARAMS.get("LTC"), raw); }
         public String getNetId() { return "Litecoin-MAIN"; }
         public int getCurrentHeight() { return 200; }
@@ -121,7 +145,11 @@ public class LocalWalletTests extends org.qortal.test.common.Common {
         @Override public long getConfirmedBalance(byte[] scriptPubKey) throws ForeignBlockchainException { throw new UnsupportedOperationException(); }
         @Override public long getConfirmedAddressBalance(String base58Address) throws ForeignBlockchainException { throw new UnsupportedOperationException(); }
         @Override public byte[] getRawTransaction(String txHash) throws ForeignBlockchainException { throw new UnsupportedOperationException(); }
-        @Override public BitcoinyTransaction getTransaction(String txHash) throws ForeignBlockchainException { throw new UnsupportedOperationException(); }
+        @Override public BitcoinyTransaction getTransaction(String txHash) throws ForeignBlockchainException {
+            transactionReads++;
+            if (transaction == null) throw new ForeignBlockchainException.NotFoundException();
+            return transaction;
+        }
         @Override public List<BitcoinyTransaction> getAddressBitcoinyTransactions(String address, boolean includeUnconfirmed) throws ForeignBlockchainException { throw new UnsupportedOperationException(); }
         @Override public List<UnspentOutput> getUnspentOutputs(String address, boolean includeUnconfirmed) throws ForeignBlockchainException { throw new UnsupportedOperationException(); }
         @Override public void broadcastTransaction(byte[] rawTransaction) throws ForeignBlockchainException { throw new UnsupportedOperationException(); }

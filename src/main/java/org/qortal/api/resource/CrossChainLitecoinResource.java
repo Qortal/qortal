@@ -53,6 +53,22 @@ public class CrossChainLitecoinResource {
     }
 
     @POST
+    @Path("/wallet/public/transaction-status")
+    @javax.ws.rs.Produces(MediaType.APPLICATION_JSON)
+    @SecurityRequirement(name = "apiKey")
+    public org.qortal.api.model.crosschain.LocalWalletResponse publicTransactionStatus(org.qortal.api.model.crosschain.ForeignWalletRequest data) {
+        Security.checkApiCallAllowed(request);
+        try {
+            if (data == null) throw new IllegalArgumentException();
+            return new org.qortal.api.model.crosschain.LocalWalletResponse(LocalWalletSupport.transactionStatus(Litecoin.getInstance(), data.txId, data.expectedChainId));
+        } catch (IllegalArgumentException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+        } catch (ForeignBlockchainException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE);
+        }
+    }
+
+    @POST
     @Path("/send/broadcast")
     @javax.ws.rs.Produces(MediaType.TEXT_PLAIN)
     @SecurityRequirement(name = "apiKey")
