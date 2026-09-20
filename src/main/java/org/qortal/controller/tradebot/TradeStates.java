@@ -13,6 +13,7 @@ public class TradeStates {
         BOB_DONE(30, false, false),
         BOB_REFUNDED(35, false, false),
 
+        ALICE_WAITING_FOR_FUNDING(80, true, true),
         ALICE_WAITING_FOR_AT_LOCK(85, true, true),
         ALICE_DONE(95, false, false),
         ALICE_REFUNDING_A(105, true, true),

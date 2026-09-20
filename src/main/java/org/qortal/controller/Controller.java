@@ -1490,7 +1490,7 @@ public class Controller extends Thread {
 
 		if (this.notifyGroupMembershipChange) {
 			this.notifyGroupMembershipChange = false;
-			ChatNotifier.getInstance().onGroupMembershipChange();
+			ChatTransactionDelegate.getInstance().refreshGroupsAndNotify();
 		}
 	}
 

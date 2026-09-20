@@ -266,6 +266,14 @@ public class ChatTransactionDelegate implements ChatRepository {
     private final Map<String, List<Integer>> groupIdsByAddress;
 
     /**
+     * Group Refresh Lock
+     *
+     * Prevents an older periodic database snapshot from overwriting a newer
+     * snapshot loaded after a block has been committed.
+     */
+    private final Object groupRefreshLock = new Object();
+
+    /**
      * Cleanup Scheduler
      *
      * A scheduler that periodically removes verified chats.
@@ -339,9 +347,9 @@ public class ChatTransactionDelegate implements ChatRepository {
         this.balanceDataScheduler = Executors.newScheduledThreadPool(1);
         this.balanceDataScheduler.scheduleWithFixedDelay(this::processBalances, 5, 5, TimeUnit.MINUTES);
 
-        processGroups();
+        refreshGroups();
         this.groupDataScheduler = Executors.newScheduledThreadPool(1);
-        this.groupDataScheduler.scheduleWithFixedDelay(this::processGroups, 6, 5, TimeUnit.MINUTES);
+        this.groupDataScheduler.scheduleWithFixedDelay(this::refreshGroupsAndNotify, 6, 5, TimeUnit.MINUTES);
 
         cleanup();
         this.cleanupScheduler = Executors.newScheduledThreadPool(1);
@@ -545,42 +553,67 @@ public class ChatTransactionDelegate implements ChatRepository {
     /**
      * Process Groups
      *
-     * Gets all the groups and group members from the database repository and sets them to the balances by address map.
+     * Gets all groups and memberships from the database repository and installs
+     * them as the current active-chat membership snapshot.
      */
-    private void processGroups() {
+    private boolean refreshGroups() {
+        synchronized (this.groupRefreshLock) {
+            try {
+                List<GroupMemberData> collectedMemberships;
+                List<GroupData> collectedGroups;
 
-        List<GroupMemberData> collectedMemberships;
-        List<GroupData> collectedGroups;
+                try( final Repository repository = RepositoryManager.getRepository()) {
+                    collectedGroups = repository.getGroupRepository().getAllGroups();
+                    collectedMemberships = repository.getGroupRepository().getAllGroupMemberships();
+                }
 
-        try( final Repository repository = RepositoryManager.getRepository()) {
+                Map<Integer, GroupData> mappedGroups
+                        = collectedGroups.stream().collect(Collectors.toMap(GroupData::getGroupId, Function.identity()));
 
-            collectedGroups = repository.getGroupRepository().getAllGroups();
-            collectedMemberships = repository.getGroupRepository().getAllGroupMemberships();
-        } catch (DataException e) {
-            LOGGER.error(e.getMessage(), e);
+                Map<String, List<Integer>> mappedMemberships = collectedMemberships.stream()
+                        .collect(Collectors.groupingBy(
+                                GroupMemberData::getMember,
+                                Collectors.mapping(GroupMemberData::getGroupId, Collectors.toList())
+                        ));
+
+                // Stable ordering makes snapshot comparison independent of database row order.
+                mappedMemberships.values().forEach(groupIds -> groupIds.sort(Integer::compareTo));
+
+                boolean membershipsChanged;
+                synchronized (this.groupDataLock) {
+                    membershipsChanged = !this.groupIdsByAddress.equals(mappedMemberships);
+
+                    this.groupById.clear();
+                    this.groupById.putAll(mappedGroups);
+
+                    this.groupIdsByAddress.clear();
+                    this.groupIdsByAddress.putAll(mappedMemberships);
+                }
+
+                LOGGER.info("processed groups {} groups {} addresses", mappedGroups.size(), mappedMemberships.size());
+                return membershipsChanged;
+            } catch (Exception e) {
+                // ScheduledExecutorService suppresses future runs if a task throws.
+                LOGGER.error("unable to refresh group data", e);
+                return false;
+            }
+        }
+    }
+
+    /**
+     * Refresh group membership from committed repository state, then notify
+     * active-chat websocket listeners if the membership snapshot changed.
+     */
+    public void refreshGroupsAndNotify() {
+        if (!refreshGroups())
             return;
+
+        try {
+            ChatNotifier.getInstance().onGroupMembershipChange();
+        } catch (RuntimeException e) {
+            // Keep the periodic refresh alive even if a websocket listener fails.
+            LOGGER.error("unable to notify active-chat listeners of group membership changes", e);
         }
-
-        Map<Integer, GroupData> mappedGroups
-                = collectedGroups.stream().collect(Collectors.toMap(GroupData::getGroupId, Function.identity()));
-
-        Map<String, List<Integer>> mappedMemberships = collectedMemberships.stream()
-                .collect(Collectors.groupingBy(
-                        GroupMemberData::getMember,  // The key mapper (function to extract the key)
-                        Collectors.mapping(           // The downstream collector
-                                GroupMemberData::getGroupId, // The value mapper (function to extract the value)
-                                Collectors.toList()       // Collect the mapped values into a List
-                        )
-                ));
-        synchronized (this.groupDataLock) {
-            this.groupById.clear();
-            this.groupById.putAll(mappedGroups);
-
-            this.groupIdsByAddress.clear();
-            this.groupIdsByAddress.putAll(mappedMemberships);
-        }
-
-        LOGGER.info("processed groups {} groups {} addresses", mappedGroups.size(), mappedMemberships.size());
     }
 
     /**

@@ -75,6 +75,7 @@ public class ApiService {
 		config.packages(API_RESOURCE_PACKAGES.toArray(String[]::new));
 		config.register(org.glassfish.jersey.media.multipart.MultiPartFeature.class);
 		config.register(org.qortal.api.model.ConnectedPeerJacksonWriter.class, 10000);
+		config.register(org.qortal.api.model.crosschain.LocalWalletResponseWriter.class, 10000);
 		config.register(createOpenApiResource());
 		config.register(ApiDefinition.class);
 		config.register(AnnotationPostProcessor.class);

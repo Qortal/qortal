@@ -376,6 +376,10 @@ public class BitcoinACCTv3TradeBot implements AcctTradeBot {
 				handleBobWaitingForMessage(repository, tradeBotData, atData, tradeData);
 				break;
 
+            case ALICE_WAITING_FOR_FUNDING:
+                LocalTradeFunding.progress(repository, tradeBotData, tradeData, Bitcoin.getInstance());
+                break;
+
 			case ALICE_WAITING_FOR_AT_LOCK:
 				TradeBot.getInstance().updatePresence(repository, tradeBotData, tradeData);
 				handleAliceWaitingForAtLock(repository, tradeBotData, atData, tradeData);
