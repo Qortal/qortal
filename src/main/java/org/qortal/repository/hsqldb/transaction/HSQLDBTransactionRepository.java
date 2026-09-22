@@ -167,7 +167,7 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 		sql.append(")");
 
 		List<TransactionData> list;
-		try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), signatures.toArray(new byte[0][]))) {
+		try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), (Object[]) signatures.toArray(new byte[0][]))) {
 			if (resultSet == null) {
 				return new ArrayList<>(0);
 			}

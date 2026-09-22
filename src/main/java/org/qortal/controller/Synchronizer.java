@@ -953,32 +953,29 @@ public class Synchronizer extends Thread {
 		}
 	}
 	public boolean containsInvalidBlockSummary(List<BlockSummaryData> blockSummaries) {
-		if (blockSummaries == null || invalidBlockSignatures == null) {
+		if (blockSummaries == null || invalidBlockSignatures == null || invalidBlockSignatures.isEmpty()) {
 			return false;
 		}
 
-		// Loop through our known invalid blocks and check each one against supplied block summaries
-		for (ByteArray invalidSignature : invalidBlockSignatures.keySet()) {
-			for (BlockSummaryData blockSummary : blockSummaries) {
-				byte[] signature = blockSummary.getSignature();
-				if (Arrays.equals(signature, invalidSignature.value)) {
-					return true;
-				}
+		// Fast O(1) lookup per block summary using cached ByteArray hash code
+		for (BlockSummaryData blockSummary : blockSummaries) {
+			byte[] signature = blockSummary.getSignature();
+			if (signature != null && invalidBlockSignatures.containsKey(ByteArray.wrap(signature))) {
+				return true;
 			}
 		}
 		return false;
 	}
+
 	private boolean containsInvalidBlockSignature(List<byte[]> blockSignatures) {
-		if (blockSignatures == null || invalidBlockSignatures == null) {
+		if (blockSignatures == null || invalidBlockSignatures == null || invalidBlockSignatures.isEmpty()) {
 			return false;
 		}
 
-		// Loop through our known invalid blocks and check each one against supplied block signatures
-		for (ByteArray invalidSignature : invalidBlockSignatures.keySet()) {
-			for (byte[] signature : blockSignatures) {
-				if (Arrays.equals(signature, invalidSignature.value)) {
-					return true;
-				}
+		// Fast O(1) lookup per signature using cached ByteArray hash code
+		for (byte[] signature : blockSignatures) {
+			if (signature != null && invalidBlockSignatures.containsKey(ByteArray.wrap(signature))) {
+				return true;
 			}
 		}
 		return false;
