@@ -19,11 +19,13 @@ import org.qortal.repository.hsqldb.HSQLDBSaver;
 import org.qortal.transaction.Transaction.ApprovalStatus;
 import org.qortal.transaction.Transaction.TransactionType;
 import org.qortal.utils.Base58;
+import org.qortal.utils.ByteArray;
 import org.qortal.utils.Unicode;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
@@ -33,6 +35,16 @@ import static org.qortal.transaction.Transaction.TransactionType.*;
 public class HSQLDBTransactionRepository implements TransactionRepository {
 
 	private static final Logger LOGGER = LogManager.getLogger(HSQLDBTransactionRepository.class);
+
+	private static final int MAX_TRANSACTION_CACHE_SIZE = 4000;
+	private static final Map<ByteArray, TransactionData> TRANSACTION_CACHE = Collections.synchronizedMap(
+		new LinkedHashMap<ByteArray, TransactionData>(MAX_TRANSACTION_CACHE_SIZE + 1, 0.75F, true) {
+			@Override
+			protected boolean removeEldestEntry(Map.Entry<ByteArray, TransactionData> eldest) {
+				return size() > MAX_TRANSACTION_CACHE_SIZE;
+			}
+		}
+	);
 
 	public static class RepositorySubclassInfo {
 		public Class<?> clazz;
@@ -122,6 +134,14 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 	@Override
 	public TransactionData fromSignature(byte[] signature) throws DataException {
+		if (signature == null)
+			return null;
+
+		ByteArray cacheKey = ByteArray.wrap(signature);
+		TransactionData cachedData = TRANSACTION_CACHE.get(cacheKey);
+		if (cachedData != null)
+			return cachedData;
+
 		String sql = "SELECT type, reference, creator, created_when, fee, tx_group_id, block_height, approval_status, approval_height "
 				+ "FROM Transactions WHERE signature = ?";
 
@@ -151,7 +171,13 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 				approvalHeight = null;
 
 			BaseTransactionData baseTransactionData = new BaseTransactionData(timestamp, txGroupId, reference, creatorPublicKey, fee, approvalStatus, blockHeight, approvalHeight, signature);
-			return this.fromBase(type, baseTransactionData);
+			TransactionData transactionData = this.fromBase(type, baseTransactionData);
+
+			if (transactionData != null) {
+				TRANSACTION_CACHE.put(cacheKey, transactionData);
+			}
+
+			return transactionData;
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch transaction from repository", e);
 		}
@@ -159,56 +185,82 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 	@Override
 	public List<TransactionData> fromSignatures(List<byte[]> signatures) throws DataException {
-		StringBuffer sql = new StringBuffer();
-
-		sql.append("SELECT type, reference, creator, created_when, fee, tx_group_id, block_height, approval_status, approval_height, signature ");
-		sql.append("FROM Transactions WHERE signature IN (");
-		sql.append(String.join(", ", Collections.nCopies(signatures.size(), "?")));
-		sql.append(")");
-
-		List<TransactionData> list;
-		try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), signatures.toArray(new byte[0][]))) {
-			if (resultSet == null) {
-				return new ArrayList<>(0);
-			}
-
-			list = new ArrayList<>(signatures.size());
-
-			do {
-				TransactionType type = TransactionType.valueOf(resultSet.getInt(1));
-
-				byte[] reference = resultSet.getBytes(2);
-				byte[] creatorPublicKey = resultSet.getBytes(3);
-				long timestamp = resultSet.getLong(4);
-
-				Long fee = resultSet.getLong(5);
-				if (fee == 0 && resultSet.wasNull())
-					fee = null;
-
-				int txGroupId = resultSet.getInt(6);
-
-				Integer blockHeight = resultSet.getInt(7);
-				if (blockHeight == 0 && resultSet.wasNull())
-					blockHeight = null;
-
-				ApprovalStatus approvalStatus = ApprovalStatus.valueOf(resultSet.getInt(8));
-				Integer approvalHeight = resultSet.getInt(9);
-				if (approvalHeight == 0 && resultSet.wasNull())
-					approvalHeight = null;
-
-				byte[] signature = resultSet.getBytes(10);
-
-				BaseTransactionData baseTransactionData = new BaseTransactionData(timestamp, txGroupId, reference, creatorPublicKey, fee, approvalStatus, blockHeight, approvalHeight, signature);
-
-				TransactionData data = fromBase(type, baseTransactionData);
-				if (data != null)
-					list.add(data);
-			} while( resultSet.next());
-
-			return list;
-		} catch (SQLException e) {
-			throw new DataException("Unable to fetch transactions from repository", e);
+		if (signatures == null || signatures.isEmpty()) {
+			return new ArrayList<>(0);
 		}
+
+		List<TransactionData> resultList = new ArrayList<>(signatures.size());
+		List<byte[]> uncachedSignatures = new ArrayList<>();
+		Map<ByteArray, TransactionData> foundMap = new HashMap<>();
+
+		for (byte[] sig : signatures) {
+			if (sig == null) continue;
+			ByteArray cacheKey = ByteArray.wrap(sig);
+			TransactionData cachedData = TRANSACTION_CACHE.get(cacheKey);
+			if (cachedData != null) {
+				foundMap.put(cacheKey, cachedData);
+			} else {
+				uncachedSignatures.add(sig);
+			}
+		}
+
+		if (!uncachedSignatures.isEmpty()) {
+			StringBuffer sql = new StringBuffer();
+			sql.append("SELECT type, reference, creator, created_when, fee, tx_group_id, block_height, approval_status, approval_height, signature ");
+			sql.append("FROM Transactions WHERE signature IN (");
+			sql.append(String.join(", ", Collections.nCopies(uncachedSignatures.size(), "?")));
+			sql.append(")");
+
+			try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), (Object[]) uncachedSignatures.toArray(new byte[0][]))) {
+				if (resultSet != null) {
+					do {
+						TransactionType type = TransactionType.valueOf(resultSet.getInt(1));
+
+						byte[] reference = resultSet.getBytes(2);
+						byte[] creatorPublicKey = resultSet.getBytes(3);
+						long timestamp = resultSet.getLong(4);
+
+						Long fee = resultSet.getLong(5);
+						if (fee == 0 && resultSet.wasNull())
+							fee = null;
+
+						int txGroupId = resultSet.getInt(6);
+
+						Integer blockHeight = resultSet.getInt(7);
+						if (blockHeight == 0 && resultSet.wasNull())
+							blockHeight = null;
+
+						ApprovalStatus approvalStatus = ApprovalStatus.valueOf(resultSet.getInt(8));
+						Integer approvalHeight = resultSet.getInt(9);
+						if (approvalHeight == 0 && resultSet.wasNull())
+							approvalHeight = null;
+
+						byte[] signature = resultSet.getBytes(10);
+
+						BaseTransactionData baseTransactionData = new BaseTransactionData(timestamp, txGroupId, reference, creatorPublicKey, fee, approvalStatus, blockHeight, approvalHeight, signature);
+
+						TransactionData data = fromBase(type, baseTransactionData);
+						if (data != null) {
+							ByteArray cacheKey = ByteArray.wrap(signature);
+							TRANSACTION_CACHE.put(cacheKey, data);
+							foundMap.put(cacheKey, data);
+						}
+					} while (resultSet.next());
+				}
+			} catch (SQLException e) {
+				throw new DataException("Unable to fetch transactions from repository", e);
+			}
+		}
+
+		for (byte[] sig : signatures) {
+			if (sig == null) continue;
+			TransactionData data = foundMap.get(ByteArray.wrap(sig));
+			if (data != null) {
+				resultList.add(data);
+			}
+		}
+
+		return resultList;
 	}
 
 	@Override
@@ -386,16 +438,20 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 
 	@Override
 	public void saveParticipants(TransactionData transactionData, List<String> participants) throws DataException {
+		if (participants == null || participants.isEmpty()) {
+			return;
+		}
+
 		byte[] signature = transactionData.getSignature();
+		String sql = "INSERT INTO TransactionParticipants (signature, participant) VALUES (?, ?)";
 
-		try {
+		try (PreparedStatement preparedStatement = this.repository.prepareStatement(sql)) {
 			for (String participant : participants) {
-				HSQLDBSaver saver = new HSQLDBSaver("TransactionParticipants");
-
-				saver.bind("signature", signature).bind("participant", participant);
-
-				saver.execute(this.repository);
+				preparedStatement.setBytes(1, signature);
+				preparedStatement.setString(2, participant);
+				preparedStatement.addBatch();
 			}
+			preparedStatement.executeBatch();
 		} catch (SQLException e) {
 			throw new DataException("Unable to save transaction participant into repository", e);
 		}
@@ -1993,10 +2049,18 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 		} catch (IllegalAccessException | IllegalArgumentException e) {
 			throw new DataException("Unsupported transaction type [" + type.name() + "] during save into HSQLDB repository");
 		}
+
+		if (transactionData.getSignature() != null) {
+			TRANSACTION_CACHE.put(ByteArray.wrap(transactionData.getSignature()), transactionData);
+		}
 	}
 
 	@Override
 	public void delete(TransactionData transactionData) throws DataException {
+		if (transactionData.getSignature() != null) {
+			TRANSACTION_CACHE.remove(ByteArray.wrap(transactionData.getSignature()));
+		}
+
 		// NOTE: The corresponding row in sub-table is deleted automatically by the database thanks to "ON DELETE CASCADE" in the sub-table's FOREIGN KEY
 		// definition.
 		try {

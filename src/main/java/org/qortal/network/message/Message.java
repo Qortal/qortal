@@ -66,6 +66,9 @@ public abstract class Message {
 		this(-1, type);
 	}
 
+	/** Cached serialized message bytes for outgoing messages */
+	protected transient byte[] cachedBytes;
+
 	public boolean hasId() {
 		return this.id != -1;
 	}
@@ -76,6 +79,7 @@ public abstract class Message {
 
 	public void setId(int id) {
 		this.id = id;
+		this.cachedBytes = null;
 	}
 
 	public MessageType getType() {
@@ -172,41 +176,46 @@ public abstract class Message {
 	public byte[] toBytes() throws MessageException {
 		checkValidOutgoing();
 
+		if (this.cachedBytes != null) {
+			return this.cachedBytes;
+		}
+
 		// We can calculate exact length
 		int messageLength = MAGIC_LENGTH + TYPE_LENGTH + HAS_ID_LENGTH;
 		messageLength += this.hasId() ? ID_LENGTH : 0;
-		messageLength += DATA_SIZE_LENGTH + this.dataBytes.length > 0 ? CHECKSUM_LENGTH + this.dataBytes.length : 0;
+		messageLength += DATA_SIZE_LENGTH + (this.dataBytes.length > 0 ? CHECKSUM_LENGTH + this.dataBytes.length : 0);
 
 		if (messageLength > MAX_DATA_SIZE)
 			throw new MessageException(String.format("About to send message with length %d larger than allowed %d", messageLength, MAX_DATA_SIZE));
 
-		try {
-			ByteArrayOutputStream bytes = new ByteArrayOutputStream(messageLength);
+		byte[] bytes = new byte[messageLength];
+		ByteBuffer buffer = ByteBuffer.wrap(bytes);
 
-			// Magic
-			bytes.write(Network.getInstance().getMessageMagic());
+		// Magic
+		buffer.put(Network.getInstance().getMessageMagic());
 
-			bytes.write(Ints.toByteArray(this.type.value));
+		// Type
+		buffer.putInt(this.type.value);
 
-			if (this.hasId()) {
-				bytes.write(1);
-
-				bytes.write(Ints.toByteArray(this.id));
-			} else {
-				bytes.write(0);
-			}
-
-			bytes.write(Ints.toByteArray(this.dataBytes.length));
-
-			if (this.dataBytes.length > 0) {
-				bytes.write(this.checksumBytes);
-				bytes.write(this.dataBytes);
-			}
-
-			return bytes.toByteArray();
-		} catch (IOException e) {
-			throw new MessageException("Failed to serialize message", e);
+		// ID
+		if (this.hasId()) {
+			buffer.put((byte) 1);
+			buffer.putInt(this.id);
+		} else {
+			buffer.put((byte) 0);
 		}
+
+		// Data size
+		buffer.putInt(this.dataBytes.length);
+
+		// Checksum and data
+		if (this.dataBytes.length > 0) {
+			buffer.put(this.checksumBytes);
+			buffer.put(this.dataBytes);
+		}
+
+		this.cachedBytes = bytes;
+		return bytes;
 	}
 
 	public static <M extends Message> M cloneWithNewId(M message, int newId) {

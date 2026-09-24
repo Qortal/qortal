@@ -107,6 +107,7 @@ public class Peer {
 
     private final UUID peerConnectionId = UUID.randomUUID();
     private final Object byteBufferLock = new Object();
+    private static final int INITIAL_BUFFER_SIZE = 256 * 1024; // 256KB initial read buffer
     private ByteBuffer byteBuffer;
     private Map<Integer, BlockingQueue<Message>> replyQueues;
     private LinkedBlockingQueue<Message> pendingMessages;
@@ -780,7 +781,13 @@ public class Peer {
 
                 // Do we need to allocate byteBuffer?
                 if (this.byteBuffer == null) {
-                    this.byteBuffer = ByteBuffer.allocate(Network.getInstance().getMaxMessageSize());
+                    this.byteBuffer = ByteBuffer.allocate(INITIAL_BUFFER_SIZE);
+                } else if (!this.byteBuffer.hasRemaining() && this.byteBuffer.capacity() < Network.getInstance().getMaxMessageSize()) {
+                    int newCapacity = Math.min(this.byteBuffer.capacity() * 2, Network.getInstance().getMaxMessageSize());
+                    ByteBuffer newBuffer = ByteBuffer.allocate(newCapacity);
+                    this.byteBuffer.flip();
+                    newBuffer.put(this.byteBuffer);
+                    this.byteBuffer = newBuffer;
                 }
 
                 final int priorPosition = this.byteBuffer.position();
