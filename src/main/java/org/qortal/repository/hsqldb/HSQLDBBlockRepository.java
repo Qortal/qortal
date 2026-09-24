@@ -9,11 +9,14 @@ import org.qortal.repository.BlockRepository;
 import org.qortal.repository.DataException;
 import org.qortal.repository.TransactionRepository;
 
+import java.nio.ByteBuffer;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.logging.Logger;
 
 public class HSQLDBBlockRepository implements BlockRepository {
@@ -214,21 +217,39 @@ public class HSQLDBBlockRepository implements BlockRepository {
 
 		HSQLDBRepository.limitOffsetSql(sql, limit, offset);
 
-		List<TransactionData> transactions = new ArrayList<>();
+		List<byte[]> transactionSignatures = new ArrayList<>();
 
 		try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), signature)) {
 			if (resultSet == null)
-				return transactions; // No transactions in this block
+				return new ArrayList<>(); // No transactions in this block
 
-			TransactionRepository transactionRepo = this.repository.getTransactionRepository();
-
-			// NB: do-while loop because .checkedExecute() implicitly calls ResultSet.next() for us
 			do {
-				byte[] transactionSignature = resultSet.getBytes(1);
-				transactions.add(transactionRepo.fromSignature(transactionSignature));
+				transactionSignatures.add(resultSet.getBytes(1));
 			} while (resultSet.next());
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch block's transactions from repository", e);
+		}
+
+		if (transactionSignatures.isEmpty()) {
+			return new ArrayList<>();
+		}
+
+		TransactionRepository transactionRepo = this.repository.getTransactionRepository();
+		List<TransactionData> fetchedTransactions = transactionRepo.fromSignatures(transactionSignatures);
+
+		Map<ByteBuffer, TransactionData> txBySig = new HashMap<>();
+		for (TransactionData tx : fetchedTransactions) {
+			if (tx != null && tx.getSignature() != null) {
+				txBySig.put(ByteBuffer.wrap(tx.getSignature()), tx);
+			}
+		}
+
+		List<TransactionData> transactions = new ArrayList<>(transactionSignatures.size());
+		for (byte[] sig : transactionSignatures) {
+			TransactionData tx = txBySig.get(ByteBuffer.wrap(sig));
+			if (tx != null) {
+				transactions.add(tx);
+			}
 		}
 
 		return transactions;
