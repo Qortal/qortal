@@ -303,8 +303,9 @@ public class Settings {
 
 	/**
 	 * Optional birthday for a brand-new Pirate Unified Wallet. When omitted, a
-	 * fresh wallet begins at the current lightwallet height. Set this only when
-	 * recovering an address that could already have historical funds.
+	 * fresh wallet begins at the current lightwallet height. Set this before first
+	 * initialization when recovering an address that could have historical funds.
+	 * This setting is not an in-place rescan command.
 	 */
 	private Integer arrrNewWalletBirthday = null;
 

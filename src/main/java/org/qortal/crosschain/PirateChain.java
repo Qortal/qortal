@@ -39,6 +39,10 @@ public class PirateChain extends Bitcoiny {
 	// Temporary values until a dynamic fee system is written.
 	private static final long MAINNET_FEE = 10000L; // 0.0001 ARRR
 	private static final long NON_MAINNET_FEE = 10000L; // 0.0001 ARRR
+	private static final long RECIPIENT_ENRICHMENT_RETRY_MS = 15_000L;
+	private static final int RECIPIENT_ENRICHMENT_BATCH_SIZE = 4;
+	private static final int MAX_RECIPIENT_CACHE_WALLETS = 64;
+	private static final int MAX_RECIPIENT_CACHE_TRANSACTIONS = 2_048;
 
 	private static final Map<ConnectionType, Integer> DEFAULT_LITEWALLET_PORTS = new EnumMap<>(ConnectionType.class);
 	static {
@@ -145,6 +149,17 @@ public class PirateChain extends Bitcoiny {
 
 	// Scheduled executor service to check connection to Pirate Chain server
 	private final ScheduledExecutorService pirateChainCheckScheduler = Executors.newScheduledThreadPool(1);
+	private final ScheduledExecutorService recipientEnrichmentScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+		Thread thread = new Thread(runnable, "PirateRecipientEnrichment");
+		thread.setDaemon(true);
+		return thread;
+	});
+	private final Map<String, RecipientEnrichmentCache> recipientCaches = new LinkedHashMap<>(16, 0.75f, true) {
+		@Override
+		protected boolean removeEldestEntry(Map.Entry<String, RecipientEnrichmentCache> eldest) {
+			return size() > MAX_RECIPIENT_CACHE_WALLETS;
+		}
+	};
 
 	// Constructors and instance
 
@@ -350,110 +365,361 @@ public class PirateChain extends Bitcoiny {
 	public List<SimpleTransaction> getWalletTransactions(String entropy58) throws ForeignBlockchainException {
 
 		synchronized (this) {
+			long requestStarted = System.nanoTime();
 			PirateChainWalletController walletController = PirateChainWalletController.getInstance();
-			walletController.beginWalletUse(entropy58, false, true, true);
+			// Transaction history is a read of the wallet's persisted view. Q-Wallets
+			// already waits for the sync-status endpoint to report "Synchronized", and
+			// repeating the native height/info/syncStatus gate here can push this request
+			// beyond the Q-App host's 30-second response timeout. Direct API callers can
+			// safely receive the currently scanned history while a sync is in progress.
+			walletController.beginWalletUse(entropy58, false, false, true);
 			try {
-				String myAddress = walletController.getCurrentWallet().getWalletAddress();
-
-				List<SimpleTransaction> transactions = new ArrayList<>();
-
-				// Get transactions list
-				String response = LiteWalletJni.execute("list", "");
-				JSONArray transactionsJson = parseLitewalletArray(response, "list");
-				if (transactionsJson != null) {
-					for (int i = 0; i < transactionsJson.length(); i++) {
-						JSONObject transactionJson = transactionsJson.getJSONObject(i);
-
-						if (transactionJson.has("txid")) {
-							String txId = transactionJson.getString("txid");
-							Long timestamp = transactionJson.getLong("datetime");
-							boolean hasAmount = transactionJson.has("amount");
-							Long amount = transactionJson.optLong("amount", 0L);
-							boolean hasFee = transactionJson.has("fee");
-							Long fee = transactionJson.optLong("fee", 0L);
-							String memo = null;
-
-							List<SimpleTransaction.Input> inputs = new ArrayList<>();
-							List<SimpleTransaction.Output> outputs = new ArrayList<>();
-							long computedAmount = 0L;
-							int outgoingCount = 0;
-
-							JSONArray incomingMetadatas = transactionJson.optJSONArray("incoming_metadata");
-							JSONArray outgoingMetadatas = transactionJson.optJSONArray("outgoing_metadata");
-							boolean hasIncoming = incomingMetadatas != null && incomingMetadatas.length() > 0;
-							boolean hasOutgoing = outgoingMetadatas != null && outgoingMetadatas.length() > 0;
-
-							if (!hasIncoming && !hasOutgoing) {
-								incomingMetadatas = transactionJson.optJSONArray("incoming_metadata_change");
-								outgoingMetadatas = transactionJson.optJSONArray("outgoing_metadata_change");
-							}
-
-								if (incomingMetadatas != null) {
-									for (int j = 0; j < incomingMetadatas.length(); j++) {
-										JSONObject incomingMetadata = incomingMetadatas.getJSONObject(j);
-										if (incomingMetadata.has("value")) {
-											Long value = incomingMetadata.getLong("value");
-											computedAmount += value;
-
-											if (incomingMetadata.has("address")) {
-												inputs.add(new SimpleTransaction.Input("[PRIVATE]", value, false));
-
-												String address = incomingMetadata.getString("address");
-											outputs.add(new SimpleTransaction.Output(address, value, address.equals(myAddress)));
-										}
-									}
-
-									if (incomingMetadata.has("memo") && !incomingMetadata.isNull("memo")) {
-										memo = incomingMetadata.getString("memo");
-									}
-								}
-							}
-
-							if (outgoingMetadatas != null) {
-								for (int j = 0; j < outgoingMetadatas.length(); j++) {
-									JSONObject outgoingMetadata = outgoingMetadatas.getJSONObject(j);
-
-									if (outgoingMetadata.has("value")) {
-										Long value = outgoingMetadata.getLong("value");
-										computedAmount -= value;
-										outgoingCount++;
-
-										if (outgoingMetadata.has("address")) {
-											inputs.add(new SimpleTransaction.Input(myAddress, value, true));
-
-											String address = outgoingMetadata.getString("address");
-											outputs.add(new SimpleTransaction.Output(address, value, address.equals(myAddress)));
-										}
-									}
-
-									if (outgoingMetadata.has("memo") && !outgoingMetadata.isNull("memo")) {
-										memo = outgoingMetadata.getString("memo");
-									}
-								}
-							}
-
-							if (!hasAmount) {
-								amount = computedAmount;
-							}
-							if (!hasFee && outgoingCount > 0) {
-								fee = MAINNET_FEE * outgoingCount;
-							}
-
-							long timestampMillis = Math.toIntExact(timestamp) * 1000L;
-							SimpleTransaction transaction = new SimpleTransaction(txId, timestampMillis, amount, fee, inputs, outputs,
-									memo);
-							transactions.add(transaction);
-						}
-					}
+				long walletReady = System.nanoTime();
+				PirateWallet wallet = walletController.getCurrentWallet();
+				String myAddress = wallet.getWalletAddress();
+				RecipientEnrichmentCache recipientCache = this.recipientCacheFor(myAddress);
+				List<SimpleTransaction> cachedTransactions = wallet.getCachedTransactionHistory();
+				if (cachedTransactions != null) {
+					cachedTransactions = recipientCache.overlay(cachedTransactions);
+					wallet.cacheTransactionHistory(cachedTransactions);
+					this.scheduleRecipientEnrichment(entropy58, myAddress, recipientCache, cachedTransactions);
+					long completed = System.nanoTime();
+					LOGGER.info(
+							"Pirate wallet transaction history completed (count={}, source=cache, walletReadyMs={}, totalMs={})",
+							cachedTransactions.size(),
+							elapsedMillis(requestStarted, walletReady),
+							elapsedMillis(requestStarted, completed));
+					return cachedTransactions;
 				}
 
-				double sum = transactions.stream().mapToDouble(SimpleTransaction::getTotalAmount).sum() / 100000000.0;
-				double fees = transactions.stream().mapToDouble(SimpleTransaction::getFeeAmount).sum() / 100000000.0;
-				LOGGER.info("balance = " + (sum - fees));
+				long addressReady = System.nanoTime();
+				List<SimpleTransaction> transactions;
+				String source;
+				if (wallet.usesPersistentUnifiedStorage()) {
+					transactions = this.getUnifiedWalletTransactions(myAddress, recipientCache);
+					source = "unified-local";
+				} else {
+					transactions = this.getCompatibilityWalletTransactions(myAddress);
+					source = "legacy";
+				}
+				long historyReady = System.nanoTime();
+				transactions = recipientCache.overlay(transactions);
+				wallet.cacheTransactionHistory(transactions);
+				if (wallet.usesPersistentUnifiedStorage()) {
+					this.scheduleRecipientEnrichment(entropy58, myAddress, recipientCache, transactions);
+				}
+
+				long completed = System.nanoTime();
+				LOGGER.info(
+						"Pirate wallet transaction history completed (count={}, source={}, walletReadyMs={}, addressMs={}, historyMs={}, cacheMs={}, totalMs={})",
+						transactions.size(),
+						source,
+						elapsedMillis(requestStarted, walletReady),
+						elapsedMillis(walletReady, addressReady),
+						elapsedMillis(addressReady, historyReady),
+						elapsedMillis(historyReady, completed),
+						elapsedMillis(requestStarted, completed));
 
 				return transactions;
 			} finally {
 				walletController.endWalletUse();
+			}
+		}
+	}
+
+	private List<SimpleTransaction> getUnifiedWalletTransactions(String myAddress,
+			RecipientEnrichmentCache recipientCache)
+			throws ForeignBlockchainException {
+		JSONObject activeWallet = parseLitewalletResponse(
+				LiteWalletJni.invokeJson("{\"method\":\"get_active_wallet\"}", false),
+				"get_active_wallet");
+		String walletId = getUnifiedEnvelopeString(activeWallet, "get_active_wallet");
+
+		JSONObject transactionsRequest = new JSONObject()
+				.put("method", "list_transactions")
+				.put("wallet_id", walletId)
+				.put("limit", JSONObject.NULL);
+		JSONArray transactions = getUnifiedEnvelopeArray(parseLitewalletResponse(
+				LiteWalletJni.invokeJson(transactionsRequest.toString(), false),
+				"list_transactions"), "list_transactions");
+
+		JSONObject depositsRequest = new JSONObject()
+				.put("method", "list_incoming_deposits")
+				.put("wallet_id", walletId)
+				.put("limit", JSONObject.NULL);
+		JSONArray deposits = getUnifiedEnvelopeArray(parseLitewalletResponse(
+				LiteWalletJni.invokeJson(depositsRequest.toString(), false),
+				"list_incoming_deposits"), "list_incoming_deposits");
+		recipientCache.rememberInternalAddresses(PirateTransactionHistory.internalAddresses(deposits));
+
+		return PirateTransactionHistory.parseUnified(transactions, deposits, myAddress);
+	}
+
+	private RecipientEnrichmentCache recipientCacheFor(String walletAddress) {
+		synchronized (this.recipientCaches) {
+			return this.recipientCaches.computeIfAbsent(walletAddress,
+					ignored -> new RecipientEnrichmentCache(MAX_RECIPIENT_CACHE_TRANSACTIONS));
+		}
+	}
+
+	private void scheduleRecipientEnrichment(String entropy58, String walletAddress,
+			RecipientEnrichmentCache recipientCache, List<SimpleTransaction> transactions) {
+		// The stock Unified JNI serializes all calls process-wide. Keep recovery off
+		// the response path and release the controller lock between a small number of
+		// detail calls so other wallets get a chance to run.
+		this.scheduleRecipientEnrichment(entropy58, walletAddress, recipientCache, transactions,
+				RECIPIENT_ENRICHMENT_BATCH_SIZE, 1L, TimeUnit.SECONDS);
+	}
+
+	private void scheduleRecipientEnrichment(String entropy58, String walletAddress,
+			RecipientEnrichmentCache recipientCache, List<SimpleTransaction> transactions,
+			int remaining, long delay, TimeUnit delayUnit) {
+		if (remaining <= 0) {
+			return;
+		}
+		String txId = recipientCache.claimNext(transactions, System.currentTimeMillis());
+		if (txId == null) {
+			return;
+		}
+
+		try {
+			this.recipientEnrichmentScheduler.schedule(
+					() -> {
+						boolean completed = this.enrichTransactionRecipient(
+								entropy58, walletAddress, txId, recipientCache);
+						if (completed) {
+							this.scheduleRecipientEnrichment(entropy58, walletAddress, recipientCache,
+									transactions, remaining - 1, 250L, TimeUnit.MILLISECONDS);
+						}
+					},
+					delay, delayUnit);
+		} catch (RuntimeException e) {
+			recipientCache.failed(txId, 0L);
+			LOGGER.info("Unable to schedule Pirate recipient enrichment ({})", e.getClass().getSimpleName());
+		}
+	}
+
+	private boolean enrichTransactionRecipient(String entropy58, String expectedWalletAddress, String txId,
+			RecipientEnrichmentCache recipientCache) {
+		PirateChainWalletController walletController = PirateChainWalletController.getInstance();
+		boolean walletUseStarted = false;
+		try {
+			walletController.beginWalletUse(entropy58, false, false, true);
+			walletUseStarted = true;
+			PirateWallet wallet = walletController.getCurrentWallet();
+			String walletAddress = wallet.getWalletAddress();
+			if (!Objects.equals(expectedWalletAddress, walletAddress)) {
+				throw new ForeignBlockchainException("Pirate wallet changed before recipient enrichment");
+			}
+			if (!wallet.isSynchronized()) {
+				throw new ForeignBlockchainException("Pirate wallet is not synchronized for recipient enrichment");
+			}
+
+			JSONObject activeWallet = parseLitewalletResponse(
+					LiteWalletJni.invokeJson("{\"method\":\"get_active_wallet\"}", false),
+					"get_active_wallet");
+			String walletId = getUnifiedEnvelopeString(activeWallet, "get_active_wallet");
+			if (!wallet.isNativeEndpointPoolConfigured()) {
+				this.configureNativeEndpointPool(walletId, wallet);
+				wallet.setNativeEndpointPoolConfigured();
+			}
+
+			JSONObject request = new JSONObject()
+					.put("method", "get_transaction_details")
+					.put("wallet_id", walletId)
+					.put("txid", txId);
+			JSONObject response = parseLitewalletResponse(
+					LiteWalletJni.invokeJson(request.toString(), false), "get_transaction_details");
+			JSONObject details = getUnifiedEnvelopeObject(response, "get_transaction_details");
+			PirateTransactionHistory.RecoveredRecipients recovered =
+					PirateTransactionHistory.parseTransactionDetails(
+							details, recipientCache.getInternalAddresses(), walletAddress);
+			if (!txId.equals(recovered.getTxId()) || recovered.getOutputs().isEmpty()) {
+				throw new ForeignBlockchainException("Pirate recipient recovery returned no external recipients");
+			}
+
+			recipientCache.completed(txId, recovered);
+			List<SimpleTransaction> cachedTransactions = wallet.getCachedTransactionHistory();
+			if (cachedTransactions != null) {
+				wallet.cacheTransactionHistory(recipientCache.overlay(cachedTransactions));
+			}
+			LOGGER.info("Pirate transaction recipient enrichment completed for one transaction");
+			return true;
+		} catch (ForeignBlockchainException | RuntimeException e) {
+			recipientCache.failed(txId, System.currentTimeMillis() + RECIPIENT_ENRICHMENT_RETRY_MS);
+			LOGGER.info("Pirate transaction recipient enrichment deferred ({})", e.getClass().getSimpleName());
+			return false;
+		} finally {
+			if (walletUseStarted) {
+				walletController.endWalletUse();
+			}
+		}
+	}
+
+	private void configureNativeEndpointPool(String walletId, PirateWallet wallet)
+			throws ForeignBlockchainException {
+		if (this.pirateChainNet != PirateChainNet.MAIN
+				|| !(this.blockchainProvider instanceof PirateLightClient)) {
+			return;
+		}
+
+		String primary = wallet.getServerUri();
+		if (primary == null || primary.isBlank()) {
+			return;
+		}
+		PirateLightClient lightClient = (PirateLightClient) this.blockchainProvider;
+		JSONArray failovers = new JSONArray();
+		for (ChainableServer server : lightClient.getServers()) {
+			if (server.getConnectionType() != ConnectionType.SSL || lightClient.getUselessServers().contains(server)) {
+				continue;
+			}
+			String candidate = PirateWallet.serverUri(server);
+			if (!primary.equalsIgnoreCase(candidate)) {
+				failovers.put(candidate);
+			}
+		}
+
+		JSONObject request = new JSONObject()
+				.put("method", "set_lightd_endpoint_pool")
+				.put("wallet_id", walletId)
+				.put("url", primary)
+				.put("tls_pin_opt", JSONObject.NULL)
+				.put("failover_endpoints", failovers);
+		getUnifiedEnvelopeResult(parseLitewalletResponse(
+				LiteWalletJni.invokeJson(request.toString(), false), "set_lightd_endpoint_pool"),
+				"set_lightd_endpoint_pool");
+	}
+
+	private void rememberSentRecipient(PirateWallet wallet, String txId, String address, long amount, String memo) {
+		if (wallet == null || txId == null || address == null) {
+			return;
+		}
+		String walletAddress = wallet.getWalletAddress();
+		if (walletAddress == null) {
+			return;
+		}
+		PirateTransactionHistory.RecoveredRecipients recovered =
+				new PirateTransactionHistory.RecoveredRecipients(txId,
+						List.of(new SimpleTransaction.Output(address, amount, address.equals(walletAddress))), memo);
+		this.recipientCacheFor(walletAddress).completed(txId, recovered);
+	}
+
+	private List<SimpleTransaction> getCompatibilityWalletTransactions(String myAddress)
+			throws ForeignBlockchainException {
+		String response = LiteWalletJni.execute("list", "");
+		return parseCompatibilityTransactionHistory(parseLitewalletArray(response, "list"), myAddress);
+	}
+
+	private static List<SimpleTransaction> parseCompatibilityTransactionHistory(JSONArray transactionsJson,
+			String myAddress) throws ForeignBlockchainException {
+		return PirateTransactionHistory.parseQortal(transactionsJson, myAddress, MAINNET_FEE);
+	}
+
+	private static String getUnifiedEnvelopeString(JSONObject envelope, String command)
+			throws ForeignBlockchainException {
+		Object result = getUnifiedEnvelopeResult(envelope, command);
+		if (!(result instanceof String) || ((String) result).isBlank()) {
+			throw new ForeignBlockchainException("Pirate Unified " + command + " returned an invalid result");
+		}
+		return (String) result;
+	}
+
+	private static JSONArray getUnifiedEnvelopeArray(JSONObject envelope, String command)
+			throws ForeignBlockchainException {
+		Object result = getUnifiedEnvelopeResult(envelope, command);
+		if (!(result instanceof JSONArray)) {
+			throw new ForeignBlockchainException("Pirate Unified " + command + " returned an invalid result");
+		}
+		return (JSONArray) result;
+	}
+
+	private static JSONObject getUnifiedEnvelopeObject(JSONObject envelope, String command)
+			throws ForeignBlockchainException {
+		Object result = getUnifiedEnvelopeResult(envelope, command);
+		if (!(result instanceof JSONObject)) {
+			throw new ForeignBlockchainException("Pirate Unified " + command + " returned an invalid result");
+		}
+		return (JSONObject) result;
+	}
+
+	private static Object getUnifiedEnvelopeResult(JSONObject envelope, String command)
+			throws ForeignBlockchainException {
+		if (!envelope.optBoolean("ok", false) || !envelope.has("result") || envelope.isNull("result")) {
+			throw new ForeignBlockchainException("Pirate Unified " + command + " failed");
+		}
+		return envelope.get("result");
+	}
+
+	private static long elapsedMillis(long started, long completed) {
+		return TimeUnit.NANOSECONDS.toMillis(completed - started);
+	}
+
+	static final class RecipientEnrichmentCache {
+		private final int maximumTransactions;
+		private final LinkedHashMap<String, PirateTransactionHistory.RecoveredRecipients> recovered =
+				new LinkedHashMap<>(16, 0.75f, true);
+		private final Map<String, Long> retryAfter = new HashMap<>();
+		private final Set<String> internalAddresses = new HashSet<>();
+		private String inFlightTxId;
+
+		RecipientEnrichmentCache(int maximumTransactions) {
+			this.maximumTransactions = maximumTransactions;
+		}
+
+		synchronized void rememberInternalAddresses(Set<String> addresses) {
+			if (addresses != null) {
+				this.internalAddresses.addAll(addresses);
+			}
+		}
+
+		synchronized Set<String> getInternalAddresses() {
+			return new HashSet<>(this.internalAddresses);
+		}
+
+		synchronized List<SimpleTransaction> overlay(List<SimpleTransaction> transactions) {
+			return PirateTransactionHistory.overlayRecoveredRecipients(transactions,
+					new HashMap<>(this.recovered));
+		}
+
+		synchronized String claimNext(List<SimpleTransaction> transactions, long now) {
+			if (this.inFlightTxId != null || transactions == null) {
+				return null;
+			}
+			for (SimpleTransaction transaction : transactions) {
+				String txId = transaction == null ? null : transaction.getTxHash();
+				if (txId == null || this.recovered.containsKey(txId)
+						|| this.retryAfter.getOrDefault(txId, 0L) > now
+						|| !PirateTransactionHistory.hasUnresolvedRecipients(Collections.singletonList(transaction))) {
+					continue;
+				}
+				this.inFlightTxId = txId;
+				return txId;
+			}
+			return null;
+		}
+
+		synchronized void completed(String txId,
+				PirateTransactionHistory.RecoveredRecipients recoveredRecipients) {
+			if (txId != null && recoveredRecipients != null) {
+				this.recovered.put(txId, recoveredRecipients);
+				this.retryAfter.remove(txId);
+				while (this.recovered.size() > this.maximumTransactions) {
+					Iterator<String> iterator = this.recovered.keySet().iterator();
+					iterator.next();
+					iterator.remove();
+				}
+			}
+			if (Objects.equals(this.inFlightTxId, txId)) {
+				this.inFlightTxId = null;
+			}
+		}
+
+		synchronized void failed(String txId, long retryAt) {
+			if (txId != null && retryAt > 0L) {
+				this.retryAfter.put(txId, retryAt);
+			}
+			if (Objects.equals(this.inFlightTxId, txId)) {
+				this.inFlightTxId = null;
 			}
 		}
 	}
@@ -526,11 +792,16 @@ public class PirateChain extends Bitcoiny {
 			String txnString = txn.toString();
 
 			// Send the coins
+			walletController.getCurrentWallet().clearTransactionHistoryCache();
 			String response = LiteWalletJni.execute("send", txnString);
 			JSONObject json = parseLitewalletResponse(response, "send");
 			try {
 				if (json.has("txid")) { // Success
-					return json.getString("txid");
+					String txId = json.getString("txid");
+					this.rememberSentRecipient(walletController.getCurrentWallet(), txId,
+							pirateChainSendRequest.receivingAddress, pirateChainSendRequest.arrrAmount,
+							pirateChainSendRequest.memo);
+					return txId;
 				} else if (json.has("error")) {
 					String error = json.getString("error");
 					throw new ForeignBlockchainException(error);
@@ -573,11 +844,15 @@ public class PirateChain extends Bitcoiny {
 			String txnString = txn.toString();
 
 			// Send the coins
+			walletController.getCurrentWallet().clearTransactionHistoryCache();
 			String response = LiteWalletJni.execute("sendp2sh", txnString);
 			JSONObject json = parseLitewalletResponse(response, "sendp2sh");
 			try {
 				if (json.has("txid")) { // Success
-					return json.getString("txid");
+					String txId = json.getString("txid");
+					this.rememberSentRecipient(walletController.getCurrentWallet(), txId,
+							receivingAddress, amount, null);
+					return txId;
 				} else if (json.has("error")) {
 					String error = json.getString("error");
 					throw new ForeignBlockchainException(error);
@@ -626,6 +901,7 @@ public class PirateChain extends Bitcoiny {
 			String txnString = txn.toString();
 
 			// Redeem the P2SH
+			walletController.getCurrentWallet().clearTransactionHistoryCache();
 			String response = LiteWalletJni.execute("redeemp2sh", txnString);
 			JSONObject json = parseLitewalletResponse(response, "redeemp2sh");
 			try {
@@ -679,6 +955,7 @@ public class PirateChain extends Bitcoiny {
 			String txnString = txn.toString();
 
 			// Redeem the P2SH
+			walletController.getCurrentWallet().clearTransactionHistoryCache();
 			String response = LiteWalletJni.execute("redeemp2sh", txnString);
 			JSONObject json = parseLitewalletResponse(response, "redeemp2sh");
 			try {
@@ -704,12 +981,12 @@ public class PirateChain extends Bitcoiny {
 			throw new ForeignBlockchainException(
 					String.format("LiteWalletJni %s returned empty response", command));
 		}
-		try {
-			return new JSONObject(response);
-		} catch (JSONException e) {
-			String trimmedResponse = response == null ? "" : response.trim();
-			String message = String.format("LiteWalletJni %s returned non-JSON: %s", command, trimmedResponse);
-			throw new ForeignBlockchainException(message);
+			try {
+				return new JSONObject(response);
+			} catch (JSONException e) {
+				String message = String.format("LiteWalletJni %s returned non-JSON (length %d)",
+						command, response.trim().length());
+				throw new ForeignBlockchainException(message);
 		}
 	}
 
@@ -718,12 +995,12 @@ public class PirateChain extends Bitcoiny {
 			throw new ForeignBlockchainException(
 					String.format("LiteWalletJni %s returned empty response", command));
 		}
-		try {
-			return new JSONArray(response);
-		} catch (JSONException e) {
-			String trimmedResponse = response == null ? "" : response.trim();
-			String message = String.format("LiteWalletJni %s returned non-JSON: %s", command, trimmedResponse);
-			throw new ForeignBlockchainException(message);
+			try {
+				return new JSONArray(response);
+			} catch (JSONException e) {
+				String message = String.format("LiteWalletJni %s returned non-JSON (length %d)",
+						command, response.trim().length());
+				throw new ForeignBlockchainException(message);
 		}
 	}
 

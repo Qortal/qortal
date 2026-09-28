@@ -79,11 +79,11 @@ public class PirateWalletValidator {
             return 10;
         }
         if (response.contains("failed to fill whole buffer")) {
-            LOGGER.info("Wallet validation failed: {}", response);
+            LOGGER.info("Wallet validation failed: incomplete wallet buffer");
             return 11;
         }
         if (!isInitSuccess(response)) {
-            LOGGER.info("Wallet validation failed: {}", response);
+            LOGGER.info("Wallet validation failed: initialization was rejected (responseLength={})", response.length());
             return 12;
         }
 

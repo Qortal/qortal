@@ -64,4 +64,17 @@ public class PirateChainWalletControllerTests {
                 new JSONObject("{\"syncing\":true,\"synced_blocks\":2029001,\"total_blocks\":4095410}")));
         assertFalse(PirateChainWalletController.isSyncInProgress(new JSONObject("{\"scanned_height\":4095410}")));
     }
+
+    @Test
+    public void testUnifiedSyncIsNotRestartedWhileCurrentOrAlreadyRunning() {
+        assertFalse(PirateChainWalletController.shouldStartUnifiedSync(null, false));
+        assertFalse(PirateChainWalletController.shouldStartUnifiedSync(
+                new JSONObject("{\"in_progress\":true}"), false));
+        assertFalse(PirateChainWalletController.shouldStartUnifiedSync(
+                new JSONObject("{\"syncing\":true}"), false));
+        assertFalse(PirateChainWalletController.shouldStartUnifiedSync(
+                new JSONObject("{\"scanned_height\":4095410}"), true));
+        assertTrue(PirateChainWalletController.shouldStartUnifiedSync(
+                new JSONObject("{\"scanned_height\":4095400}"), false));
+    }
 }

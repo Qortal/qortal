@@ -82,8 +82,32 @@ public class PirateWalletMigrationTests {
     public void explicitNewWalletBirthdaySupportsHistoricRecovery() {
         assertEquals(1_500_000, PirateWallet.chooseUnifiedWalletBirthday(
                 2_000_000, 1_500_000, false, false, false, 4_095_410));
+        assertEquals(3_000_000, PirateWallet.chooseUnifiedWalletBirthday(
+                2_000_000, 3_000_000, false, false, false, 4_095_410));
         assertEquals(2_000_000, PirateWallet.chooseUnifiedWalletBirthday(
                 2_000_000, null, false, false, false, null));
+    }
+
+    @Test
+    public void explicitNewWalletBirthdayDoesNotReplaceExistingWalletPolicy() {
+        assertEquals(2_000_000, PirateWallet.chooseUnifiedWalletBirthday(
+                2_000_000, 1_500_000, false, true, false, null));
+        assertEquals(2_000_000, PirateWallet.chooseUnifiedWalletBirthday(
+                2_000_000, 1_500_000, false, false, true, null));
+    }
+
+    @Test
+    public void nullSeedWalletAloneMayStartAtLiveTip() {
+        assertEquals(4_095_410, PirateWallet.chooseUnifiedWalletBirthday(
+                2_000_000, null, true, false, false, 4_095_410));
+    }
+
+    @Test
+    public void nativeServerUriPreservesTransport() {
+        assertEquals("https://ready.example:443/", PirateWallet.serverUri(
+                new PirateLightClient.Server("ready.example", ChainableServer.ConnectionType.SSL, 443)));
+        assertEquals("http://127.0.0.1:9067/", PirateWallet.serverUri(
+                new PirateLightClient.Server("127.0.0.1", ChainableServer.ConnectionType.TCP, 9067)));
     }
 
     private static void deleteTemporaryDirectory(Path temporaryDirectory) throws IOException {

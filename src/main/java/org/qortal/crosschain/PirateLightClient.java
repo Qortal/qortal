@@ -22,7 +22,7 @@ import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntSupplier;
 
 /**
  * Pirate Chain network support for querying Bitcoiny-related info like block
@@ -38,8 +38,78 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	private static final int MAX_INBOUND_MESSAGE_BYTES = 16 * 1024 * 1024;
 	private static final int MAX_INBOUND_METADATA_BYTES = 8 * 1024;
 	private static final ChainSpec DEFAULT_CHAIN_SPEC = ChainSpec.newBuilder().build();
-	private static final int MAX_SERVER_HEIGHT_BEHIND = 100_000; // avoid connecting to servers that lag far behind the
-																																// best known height
+	static final long SERVER_HEIGHT_AGREEMENT_TOLERANCE = 100L;
+	static final long MAX_SERVER_HEIGHT_DIVERGENCE = 100_000L;
+
+	enum HeightAssessment {
+		ACCEPTED_UNCORROBORATED,
+		ACCEPTED_TRUSTED,
+		STALE,
+		IMPLAUSIBLY_AHEAD
+	}
+
+	static final class ServerHeightTracker {
+		private final Map<ChainableServer, Long> observations = new LinkedHashMap<>();
+		private Long trustedReferenceHeight;
+
+		synchronized HeightAssessment assess(ChainableServer server, long height) {
+			if (this.trustedReferenceHeight != null) {
+				long delta = height - this.trustedReferenceHeight;
+				if (delta < -MAX_SERVER_HEIGHT_DIVERGENCE)
+					return HeightAssessment.STALE;
+				if (delta > MAX_SERVER_HEIGHT_DIVERGENCE)
+					return HeightAssessment.IMPLAUSIBLY_AHEAD;
+
+				this.observations.put(server, height);
+				if (Math.abs(delta) <= SERVER_HEIGHT_AGREEMENT_TOLERANCE) {
+					this.trustedReferenceHeight = Math.max(this.trustedReferenceHeight, height);
+				} else {
+					boolean corroboratedAdvance = this.observations.entrySet().stream()
+							.anyMatch(observation -> !observation.getKey().equals(server)
+									&& Math.abs(observation.getValue() - height) <= SERVER_HEIGHT_AGREEMENT_TOLERANCE);
+					if (corroboratedAdvance)
+						this.trustedReferenceHeight = height;
+				}
+				return HeightAssessment.ACCEPTED_TRUSTED;
+			}
+
+			Long corroboratingHeight = null;
+			for (Map.Entry<ChainableServer, Long> observation : this.observations.entrySet()) {
+				if (!observation.getKey().equals(server)
+						&& Math.abs(observation.getValue() - height) <= SERVER_HEIGHT_AGREEMENT_TOLERANCE) {
+					corroboratingHeight = observation.getValue();
+					break;
+				}
+			}
+
+			this.observations.put(server, height);
+			if (corroboratingHeight != null) {
+				this.trustedReferenceHeight = Math.max(corroboratingHeight, height);
+				return HeightAssessment.ACCEPTED_TRUSTED;
+			}
+			return HeightAssessment.ACCEPTED_UNCORROBORATED;
+		}
+
+		synchronized Long getTrustedReferenceHeight() {
+			return this.trustedReferenceHeight;
+		}
+	}
+
+	static boolean matchesExpectedChainName(String expectedChainName, String actualChainName) {
+		return expectedChainName == null
+				|| (actualChainName != null && expectedChainName.equalsIgnoreCase(actualChainName));
+	}
+
+	static String expectedChainName(String netId) {
+		if (netId == null)
+			return null;
+		String normalized = netId.toLowerCase(Locale.ROOT);
+		if (normalized.contains("regtest"))
+			return "regtest";
+		if (normalized.contains("test"))
+			return "test";
+		return "main";
+	}
 
 	public static class Server implements ChainableServer {
 		String hostname;
@@ -122,7 +192,9 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	private final Map<ChainableServer, Long> behindBirthdayServers = new ConcurrentHashMap<>();
 
 	private final String netId;
+	private final String expectedChainName;
 	private final String expectedGenesisHash;
+	private final IntSupplier defaultBirthdaySupplier;
 	private final Map<Server.ConnectionType, Integer> defaultPorts = new EnumMap<>(Server.ConnectionType.class);
 	private Bitcoiny blockchain;
 
@@ -130,7 +202,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	private ChainableServer currentServer;
 	private ManagedChannel channel;
 	private int nextId = 1;
-	private final AtomicInteger highestObservedBlockHeight = new AtomicInteger(0);
+	private final ServerHeightTracker serverHeightTracker = new ServerHeightTracker();
 
 	private static final int TX_CACHE_SIZE = 1000;
 	@SuppressWarnings("serial")
@@ -150,8 +222,16 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 
 	public PirateLightClient(String netId, String genesisHash, Collection<Server> initialServerList,
 			Map<Server.ConnectionType, Integer> defaultPorts) {
+		this(netId, genesisHash, initialServerList, defaultPorts,
+				() -> Settings.getInstance().getArrrDefaultBirthday());
+	}
+
+	PirateLightClient(String netId, String genesisHash, Collection<Server> initialServerList,
+			Map<Server.ConnectionType, Integer> defaultPorts, IntSupplier defaultBirthdaySupplier) {
 		this.netId = netId;
+		this.expectedChainName = expectedChainName(netId);
 		this.expectedGenesisHash = genesisHash;
+		this.defaultBirthdaySupplier = defaultBirthdaySupplier;
 		this.servers.addAll(initialServerList);
 		this.defaultPorts.putAll(defaultPorts);
 	}
@@ -176,7 +256,9 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	 */
 	@Override
 	public int getCurrentHeight() throws ForeignBlockchainException {
-		BlockID latestBlock = this.getCompactTxStreamerStub().getLatestBlock(DEFAULT_CHAIN_SPEC);
+		BlockID latestBlock = this.getCompactTxStreamerStub()
+				.withDeadlineAfter(10, TimeUnit.SECONDS)
+				.getLatestBlock(DEFAULT_CHAIN_SPEC);
 
 		if (!(latestBlock instanceof BlockID))
 			throw new ForeignBlockchainException.NetworkException("Unexpected output from Pirate Chain getLatestBlock gRPC");
@@ -610,13 +692,13 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	public String getServerStatusSummary() {
 		ChainableServer server = this.currentServer;
 		Integer serverHeight = server != null ? this.serverHeights.get(server) : null;
-		int highestKnownHeight = this.highestObservedBlockHeight.get();
+		Long highestKnownHeight = this.serverHeightTracker.getTrustedReferenceHeight();
 		int totalServers = this.servers.size();
 		int remainingCount = this.remainingServers.size();
 		int uselessCount = this.uselessServers.size();
 		int behindBirthdayCount = this.behindBirthdayServers.size();
 		return String.format(
-				"current=%s height=%s highestKnown=%d total=%d remaining=%d useless=%d behindBirthday=%d",
+				"current=%s height=%s highestKnown=%s total=%d remaining=%d useless=%d behindBirthday=%d",
 				server,
 				serverHeight,
 				highestKnownHeight,
@@ -654,6 +736,21 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 		}
 
 		return connection;
+	}
+
+	/** Performs one bounded admission probe without silently failing over to another endpoint. */
+	Optional<ChainableServerConnection> probeServer(ChainableServer server, String requestedBy) {
+		synchronized (this.serverLock) {
+			this.shutdownChannel();
+			return this.makeConnection(server, requestedBy);
+		}
+	}
+
+	/** Releases the current gRPC channel. Primarily useful to bound opt-in acceptance tests. */
+	void closeCurrentConnection() {
+		synchronized (this.serverLock) {
+			this.shutdownChannel();
+		}
 	}
 
 	@Override
@@ -788,70 +885,136 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 
 	private Optional<ChainableServerConnection> makeConnection(ChainableServer server, String requestedBy) {
 		LOGGER.info(() -> String.format("Connecting to %s", server));
-
+		ManagedChannel probeChannel = null;
 		try {
-			ManagedChannelBuilder<?> channelBuilder = ManagedChannelBuilder.forAddress(server.getHostName(), server.getPort());
-			channelBuilder.maxInboundMessageSize(MAX_INBOUND_MESSAGE_BYTES);
-			channelBuilder.maxInboundMetadataSize(MAX_INBOUND_METADATA_BYTES);
-			if (server.getConnectionType() == ChainableServer.ConnectionType.SSL)
-				channelBuilder.useTransportSecurity();
-			else
-				channelBuilder.usePlaintext();
+			probeChannel = this.buildProbeChannel(server);
+			LightdInfo lightdInfo = this.fetchLightdInfo(probeChannel);
 
-			this.channel = channelBuilder.build();
-			CompactTxStreamerGrpc.CompactTxStreamerBlockingStub stub = CompactTxStreamerGrpc.newBlockingStub(this.channel);
-			LightdInfo lightdInfo = stub.withDeadlineAfter(10, TimeUnit.SECONDS).getLightdInfo(Empty.newBuilder().build());
-
-			if (lightdInfo == null || lightdInfo.getBlockHeight() <= 0)
+			if (lightdInfo == null || lightdInfo.getBlockHeight() <= 0) {
+				this.shutdownChannel(probeChannel);
 				return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false, "lightd info issues"));
+			}
 
-			int serverHeight = (int) lightdInfo.getBlockHeight();
+			if (!matchesExpectedChainName(this.expectedChainName, lightdInfo.getChainName())) {
+				String message = String.format("unexpected chain identity '%s' (expected '%s')",
+						lightdInfo.getChainName(), this.expectedChainName);
+				this.uselessServers.add(server);
+				this.shutdownChannel(probeChannel);
+				return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false, message));
+			}
+
+			BlockID latestBlock;
+			try {
+				latestBlock = this.fetchLatestBlock(probeChannel);
+			} catch (RuntimeException e) {
+				String message = "latest block probe failed: " + CrossChainUtils.getNotes(e);
+				this.shutdownChannel(probeChannel);
+				return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false, message));
+			}
+			if (latestBlock == null || latestBlock.getHeight() <= 0) {
+				this.shutdownChannel(probeChannel);
+				return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false,
+						"latest block is unavailable"));
+			}
+
+			long reportedHeight = lightdInfo.getBlockHeight();
+			long latestHeight = latestBlock.getHeight();
+			if (Math.abs(reportedHeight - latestHeight) > SERVER_HEIGHT_AGREEMENT_TOLERANCE) {
+				String message = String.format("lightd info height %d disagrees with latest block height %d",
+						reportedHeight, latestHeight);
+				this.shutdownChannel(probeChannel);
+				return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false, message));
+			}
+
+			int serverHeight = Math.toIntExact(latestHeight);
 			this.serverHeights.put(server, serverHeight);
-			int configuredBirthday = Settings.getInstance().getArrrDefaultBirthday();
+			int configuredBirthday = this.defaultBirthdaySupplier.getAsInt();
 			LOGGER.info("Pirate lightwallet server {} reported height {} (configured birthday {})",
 					server, serverHeight, configuredBirthday);
-			if (configuredBirthday > 0 && serverHeight < configuredBirthday) {
+			if ("main".equalsIgnoreCase(this.expectedChainName)
+					&& configuredBirthday > 0 && serverHeight < configuredBirthday) {
 				String message = String.format("%s height %d is below configured birthday %d, skipping",
 						server, serverHeight, configuredBirthday);
 				LOGGER.info(message);
 				this.behindBirthdayServers.put(server, System.currentTimeMillis());
-				this.shutdownChannel();
+				this.shutdownChannel(probeChannel);
 				return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false, message));
 			}
 			this.behindBirthdayServers.remove(server);
-			int highestKnownHeight = this.highestObservedBlockHeight.get();
-			if (highestKnownHeight > 0 && highestKnownHeight - serverHeight > MAX_SERVER_HEIGHT_BEHIND) {
-				String message = String.format("%s height %d is %d blocks behind best known %d, skipping",
-						server, serverHeight, highestKnownHeight - serverHeight, highestKnownHeight);
-				LOGGER.info(message);
-
+			HeightAssessment heightAssessment = this.serverHeightTracker.assess(server, serverHeight);
+			if (heightAssessment == HeightAssessment.STALE
+					|| heightAssessment == HeightAssessment.IMPLAUSIBLY_AHEAD) {
+				String message = String.format("server height %d rejected against corroborated reference %d (%s)",
+						serverHeight, this.serverHeightTracker.getTrustedReferenceHeight(), heightAssessment);
 				this.uselessServers.add(server);
-				this.shutdownChannel();
+				this.shutdownChannel(probeChannel);
 				return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false, message));
 			}
 
-			// TODO: find a way to verify that the server is using the expected chain
-
-			// if (featuresJson == null || Double.valueOf((String)
-			// featuresJson.get("protocol_min")) < MIN_PROTOCOL_VERSION)
-			// continue;
-
-			// if (this.expectedGenesisHash != null && !((String)
-			// featuresJson.get("genesis_hash")).equals(this.expectedGenesisHash))
-			// continue;
-
-			if (highestKnownHeight == 0 || serverHeight <= highestKnownHeight + MAX_SERVER_HEIGHT_BEHIND) {
-				this.highestObservedBlockHeight.accumulateAndGet(serverHeight, Math::max);
-			} else {
-				LOGGER.info("Ignoring implausible server height {} (highestKnown={})", serverHeight, highestKnownHeight);
-			}
-
 			LOGGER.info(() -> String.format("Connected to %s", server));
+			this.channel = probeChannel;
 			this.currentServer = server;
 			return Optional.of(this.recorder.recordConnection(server, requestedBy, true, true, EMPTY));
 		} catch (Exception e) {
-			// Didn't work, try another server...
+			if (probeChannel != null) {
+				this.shutdownChannel(probeChannel);
+			}
 			return Optional.of(this.recorder.recordConnection(server, requestedBy, true, false, CrossChainUtils.getNotes(e)));
+		}
+	}
+
+	protected ManagedChannel buildProbeChannel(ChainableServer server) {
+		ManagedChannelBuilder<?> channelBuilder = ManagedChannelBuilder.forAddress(server.getHostName(), server.getPort());
+		channelBuilder.maxInboundMessageSize(MAX_INBOUND_MESSAGE_BYTES);
+		channelBuilder.maxInboundMetadataSize(MAX_INBOUND_METADATA_BYTES);
+		if (server.getConnectionType() == ChainableServer.ConnectionType.SSL)
+			channelBuilder.useTransportSecurity();
+		else
+			channelBuilder.usePlaintext();
+		return channelBuilder.build();
+	}
+
+	protected LightdInfo fetchLightdInfo(ManagedChannel probeChannel) {
+		return CompactTxStreamerGrpc.newBlockingStub(probeChannel)
+				.withDeadlineAfter(10, TimeUnit.SECONDS)
+				.getLightdInfo(Empty.newBuilder().build());
+	}
+
+	protected BlockID fetchLatestBlock(ManagedChannel probeChannel) {
+		return CompactTxStreamerGrpc.newBlockingStub(probeChannel)
+				.withDeadlineAfter(10, TimeUnit.SECONDS)
+				.getLatestBlock(DEFAULT_CHAIN_SPEC);
+	}
+
+	List<CompactBlock> getCompactBlocksBounded(long startHeight, long endHeight, long timeoutSeconds)
+			throws ForeignBlockchainException {
+		BlockRange range = BlockRange.newBuilder()
+				.setStart(BlockID.newBuilder().setHeight(startHeight).build())
+				.setEnd(BlockID.newBuilder().setHeight(endHeight).build())
+				.build();
+		Iterator<CompactBlock> iterator = this.getCompactTxStreamerStub()
+				.withDeadlineAfter(timeoutSeconds, TimeUnit.SECONDS)
+				.getBlockRange(range);
+		List<CompactBlock> blocks = new ArrayList<>();
+		iterator.forEachRemaining(blocks::add);
+		return blocks;
+	}
+
+	private void shutdownChannel(ManagedChannel channel) {
+		if (channel == null)
+			return;
+		try {
+			if (!channel.isShutdown()) {
+				channel.shutdown();
+				if (!channel.awaitTermination(5, TimeUnit.SECONDS)) {
+					channel.shutdownNow();
+				}
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			channel.shutdownNow();
+		} catch (RuntimeException e) {
+			channel.shutdownNow();
 		}
 	}
 
