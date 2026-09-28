@@ -15,6 +15,22 @@ public final class LocalWalletSupport {
         "DOGE", "1a91e3dace36e2be3bf030a65679fe82",
         "DGB", "7497ea1b465eb39f1c8f507bc877078f",
         "RVN", "0000006b444bc2f2ffe627be9d9e7e7a");
+    // altcoinj's NetworkParameters values are stale for several supported
+    // chains. These are the current default minimums for standard P2PKH
+    // outputs; P2PKH is also the script type used for Hub wallet change.
+    private static final Map<String, Long> MINIMUM_P2PKH_OUTPUTS = Map.of(
+        "BTC", 546L,
+        "LTC", 5_460L,
+        "DOGE", 1_000_000L,
+        "DGB", 5_460L,
+        "RVN", 546L);
+
+    public static long minimumP2pkhOutput(String currencyCode) {
+        Long value = currencyCode == null ? null : MINIMUM_P2PKH_OUTPUTS.get(currencyCode);
+        if (value == null)
+            throw new IllegalArgumentException("Unsupported foreign currency");
+        return value;
+    }
 
     public static void checkChain(Bitcoiny coin, String expected) {
         if (coin == null || !CHAINS.containsKey(coin.currencyCode) || !coin.blockchainProvider.getNetId().endsWith("-MAIN")
@@ -103,7 +119,7 @@ public final class LocalWalletSupport {
         result.put("sighashType", 1);
         result.put("sequence", 0xffffffffL);
         result.put("lockTime", 0L);
-        result.put("minimumNonDustOutput", Long.toString(coin.params.getMinNonDustOutput().value));
+        result.put("minimumNonDustOutput", Long.toString(minimumP2pkhOutput(coin.currencyCode)));
         result.put("recommendedFeePerByte", Long.toString(Math.max(1, (coin.getFeePerKb().value + 999) / 1000)));
         Set<String> referenced = new HashSet<>();
         for (Map<String, Object> output : outputs) referenced.add((String) output.get("txHash"));
