@@ -58,27 +58,27 @@ public class LiteWalletJni {
      * Pirate Unified Wallet. This entry point is absent from the legacy JNI
      * bundle, so callers must only invoke it for a verified unified bundle.
      */
-    public static native String configurestorage(final String baseDir, final String passphrase);
+    public static synchronized native String configurestorage(final String baseDir, final String passphrase);
 
-    public static native String initlogging();
-    public static native String initnew(final String serveruri, final String params, final String saplingOutputb64, final String saplingSpendb64);
-    public static native String initfromseed(final String serveruri, final String params, final String seed, final String birthday, final String saplingOutputb64, final String saplingSpendb64);
-    public static native String initfromb64(final String serveruri, final String params, final String datab64, final String saplingOutputb64, final String saplingSpendb64);
-    public static native String save();
+    public static synchronized native String initlogging();
+    public static synchronized native String initnew(final String serveruri, final String params, final String saplingOutputb64, final String saplingSpendb64);
+    public static synchronized native String initfromseed(final String serveruri, final String params, final String seed, final String birthday, final String saplingOutputb64, final String saplingSpendb64);
+    public static synchronized native String initfromb64(final String serveruri, final String params, final String datab64, final String saplingOutputb64, final String saplingSpendb64);
+    public static synchronized native String save();
 
-    public static native String execute(final String cmd, final String args);
-    public static native String getseedphrase();
-    public static native String getseedphrasefromentropy(final String entropy);
-    public static native String getseedphrasefromentropyb64(final String entropy64);
-    public static native String checkseedphrase(final String input);
+    public static synchronized native String execute(final String cmd, final String args);
+    public static synchronized native String getseedphrase();
+    public static synchronized native String getseedphrasefromentropy(final String entropy);
+    public static synchronized native String getseedphrasefromentropyb64(final String entropy64);
+    public static synchronized native String checkseedphrase(final String input);
 
     /** Exposes the versioned Unified Wallet JSON service contract. */
-    public static native String invokeJson(final String requestJson, final boolean pretty);
+    public static synchronized native String invokeJson(final String requestJson, final boolean pretty);
 
 
     private static boolean loaded = false;
 
-    public static void loadLibrary() {
+    public static synchronized void loadLibrary() {
         if (loaded) {
             return;
         }
@@ -104,11 +104,11 @@ public class LiteWalletJni {
         }
     }
 
-    public static boolean isLoaded() {
+    public static synchronized boolean isLoaded() {
         return loaded;
     }
 
-    public static void loadLibraryFrom(Path libPath) {
+    public static synchronized void loadLibraryFrom(Path libPath) {
         if (loaded) {
             return;
         }

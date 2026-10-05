@@ -406,6 +406,12 @@ public class CrossChainPirateChainResource {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_DATA);
 		try {
 			ServerConnectionInfo response = CrossChainUtils.setCurrentServer(PirateChain.getInstance(), serverInfo);
+			if (response != null && response.isSuccess()) {
+				PirateChainWalletController controller = PirateChainWalletController.getInstance();
+				if (controller != null) {
+					controller.requestNativeEndpointCutover("lightwallet server changed by API request");
+				}
+			}
 			this.logResponse("setcurrentserver", response, false);
 			return response;
 		} catch (IllegalArgumentException e) {

@@ -108,4 +108,8 @@ public class SimpleTransaction {
     public List<Output> getOutputs() {
         return this.outputs;
     }
+
+    public String getMemo() {
+        return this.memo;
+    }
 }

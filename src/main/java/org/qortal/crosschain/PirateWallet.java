@@ -45,7 +45,11 @@ public class PirateWallet {
     private byte[] entropyBytes;
     private final boolean isNullSeedWallet;
     private final boolean unifiedWallet;
+    private String serverUri;
     private String seedPhrase;
+    private volatile String walletAddress;
+    private final TransactionHistoryCache transactionHistoryCache = new TransactionHistoryCache();
+    private boolean nativeEndpointPoolConfigured;
     private boolean ready = false;
 
     private String params;
@@ -98,7 +102,8 @@ public class PirateWallet {
                 LOGGER.info("Unable to initialize Pirate wallet: no lightwallet server available");
                 return false;
             }
-            String serverUri = String.format("https://%s:%d/", server.getHostName(), server.getPort());
+            String serverUri = PirateWallet.serverUri(server);
+            this.serverUri = serverUri;
             LOGGER.info("Initializing Pirate wallet using server {} (nullSeed={})", serverUri, this.isNullSeedWallet);
 
             // Pirate library uses base64 encoding
@@ -207,7 +212,8 @@ public class PirateWallet {
                                     saplingSpend64);
                         }
                         if (response != null && !isInitSuccess(response)) {
-                            LOGGER.info("Unable to initialize Pirate Chain wallet at {}: {}", serverUri, response);
+                            LOGGER.info("Unable to initialize Pirate Chain wallet at {} (responseLength={})",
+                                    serverUri, response.length());
                             return false;
                         }
                     }
@@ -264,7 +270,8 @@ public class PirateWallet {
         String response = LiteWalletJni.configurestorage(storageDirectory.toString(), encryptionKey);
         JSONObject json = parseJsonObject(response, "configurestorage");
         if (json == null || !json.optBoolean("initialized", false)) {
-            LOGGER.info("Unable to configure Pirate Unified Wallet storage: {}", response);
+            LOGGER.info("Unable to configure Pirate Unified Wallet storage (responseLength={})",
+                    response == null ? 0 : response.length());
             return false;
         }
 
@@ -310,9 +317,10 @@ public class PirateWallet {
 
     /**
      * A stored Unified wallet or a legacy cache might represent historic funds,
-     * so it must retain the conservative configured birthday. Only a clean,
-     * entropy-backed Unified namespace can safely use the current tip by
-     * default. Recovery callers can set arrrNewWalletBirthday explicitly.
+     * so it must retain the conservative configured birthday. A clean,
+     * entropy-backed Unified namespace uses the current tip by default to avoid
+     * scanning old history. Recovery callers can set arrrNewWalletBirthday
+     * before the namespace is first initialized.
      */
     static int chooseUnifiedWalletBirthday(int configuredBirthday, Integer requestedNewWalletBirthday,
                                            boolean nullSeedWallet, boolean hasUnifiedWalletRegistry,
@@ -871,6 +879,59 @@ public class PirateWallet {
         return this.unifiedWallet;
     }
 
+    public List<SimpleTransaction> getCachedTransactionHistory() {
+        return this.transactionHistoryCache.get();
+    }
+
+    public void cacheTransactionHistory(List<SimpleTransaction> transactions) {
+        this.transactionHistoryCache.put(transactions);
+    }
+
+    public void clearTransactionHistoryCache() {
+        this.transactionHistoryCache.clear();
+    }
+
+    static final class TransactionHistoryCache {
+        private List<SimpleTransaction> transactions;
+
+        synchronized List<SimpleTransaction> get() {
+            return this.transactions == null ? null : new ArrayList<>(this.transactions);
+        }
+
+        synchronized void put(List<SimpleTransaction> transactions) {
+            this.transactions = transactions == null ? null : List.copyOf(transactions);
+        }
+
+        synchronized void clear() {
+            this.transactions = null;
+        }
+    }
+
+    public boolean usesServer(ChainableServer server) {
+        if (server == null || this.serverUri == null) {
+            return false;
+        }
+        String expected = PirateWallet.serverUri(server);
+        return this.serverUri.equalsIgnoreCase(expected);
+    }
+
+    String getServerUri() {
+        return this.serverUri;
+    }
+
+    boolean isNativeEndpointPoolConfigured() {
+        return this.nativeEndpointPoolConfigured;
+    }
+
+    void setNativeEndpointPoolConfigured() {
+        this.nativeEndpointPoolConfigured = true;
+    }
+
+    static String serverUri(ChainableServer server) {
+        String scheme = server.getConnectionType() == ChainableServer.ConnectionType.SSL ? "https" : "http";
+        return String.format("%s://%s:%d/", scheme, server.getHostName(), server.getPort());
+    }
+
     /**
      * The Unified JNI owns the sync task asynchronously. Its legacy command
      * surface intentionally has no "stop" command, so ask its JSON service to
@@ -1017,7 +1078,7 @@ public class PirateWallet {
         if (server == null) {
             return null;
         }
-        return String.format("https://%s:%d/", server.getHostName(), server.getPort());
+        return PirateWallet.serverUri(server);
     }
 
     private String readProcessOutput(Process process) throws IOException {
@@ -1092,7 +1153,7 @@ public class PirateWallet {
                 return json.getString("seed");
             }
             if (json.has("error")) {
-                LOGGER.info("Pirate wallet {} error: {}", context, json.optString("error"));
+                LOGGER.info("Pirate wallet {} returned an error", context);
                 return null;
             }
             LOGGER.info("Pirate wallet {} response missing seed phrase", context);
@@ -1100,7 +1161,7 @@ public class PirateWallet {
         }
 
         if (trimmed.startsWith("Error:")) {
-            LOGGER.info("Pirate wallet {} error: {}", context, trimmed);
+            LOGGER.info("Pirate wallet {} returned an error response (length {})", context, trimmed.length());
             return null;
         }
 
@@ -1195,6 +1256,11 @@ public class PirateWallet {
     }
 
     public String getWalletAddress() {
+        String cachedAddress = this.walletAddress;
+        if (cachedAddress != null) {
+            return cachedAddress;
+        }
+
         if (this.unifiedWallet) {
             // The Unified Wallet's export command returns the active address and
             // its matching key material. Do not pick the first balance address:
@@ -1202,6 +1268,8 @@ public class PirateWallet {
             String address = PirateWallet.getUnifiedExportAddress(LiteWalletJni.execute("export", ""));
             if (address == null) {
                 LOGGER.info("Unable to obtain active Unified Wallet address from export");
+            } else {
+                this.walletAddress = address;
             }
             return address;
         }
@@ -1220,6 +1288,9 @@ public class PirateWallet {
                     address = firstAddress.getString("address");
                 }
             }
+        }
+        if (address != null) {
+            this.walletAddress = address;
         }
         return address;
     }
