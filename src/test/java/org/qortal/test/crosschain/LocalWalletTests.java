@@ -53,11 +53,27 @@ public class LocalWalletTests extends org.qortal.test.common.Common {
         assertEquals("Only the used address needs an unspent-output query", 1, provider.unspentReads);
         assertEquals(List.of(0, 0), outputs.get(0).get("path"));
         assertEquals("1000000000", outputs.get(0).get("value"));
+        assertEquals("5460", result.get("minimumNonDustOutput"));
         assertFalse(new ObjectMapper().writeValueAsString(result).contains(f.get("xprv")));
         provider.tamper = true;
         try { LocalWalletSupport.spendContext(coin, xpub, chain); fail("Forged value accepted"); }
         catch (ForeignBlockchainException expected) { }
         assertEquals("A second scan must fetch current outputs again", 2, provider.unspentReads);
+    }
+    @Test public void publicSpendPolicyUsesCurrentP2pkhMinimums() {
+        assertEquals(546L, LocalWalletSupport.minimumP2pkhOutput("BTC"));
+        assertEquals(5_460L, LocalWalletSupport.minimumP2pkhOutput("LTC"));
+        assertEquals(1_000_000L, LocalWalletSupport.minimumP2pkhOutput("DOGE"));
+        assertEquals(5_460L, LocalWalletSupport.minimumP2pkhOutput("DGB"));
+        assertEquals(546L, LocalWalletSupport.minimumP2pkhOutput("RVN"));
+        try {
+            LocalWalletSupport.minimumP2pkhOutput("ARRR");
+            fail("Unsupported currency accepted");
+        } catch (IllegalArgumentException expected) { }
+        try {
+            LocalWalletSupport.minimumP2pkhOutput(null);
+            fail("Null currency accepted");
+        } catch (IllegalArgumentException expected) { }
     }
     @Test public void broadcastChecksChainAndForwardsExactlySignedBytes() throws Exception {
         Map<String, String> f = fixture("LTC"); FakeProvider provider = new FakeProvider(f); FakeCoin coin = new FakeCoin(provider);
