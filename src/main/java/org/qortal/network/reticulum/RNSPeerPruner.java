@@ -3,13 +3,18 @@ package org.qortal.network.reticulum;
 import io.reticulum.link.Link;
 import lombok.extern.slf4j.Slf4j;
 import org.qortal.network.reticulum.RNSCommon.PeerAspect;
+import org.qortal.settings.Settings;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.IntSupplier;
+import java.util.stream.Collectors;
 
 import static io.reticulum.link.LinkStatus.ACTIVE;
 import static io.reticulum.link.LinkStatus.CLOSED;
@@ -21,12 +26,13 @@ import static org.apache.commons.codec.binary.Hex.encodeHexString;
  * The periodic peer-list garbage collector, run from {@code Controller} every 90 seconds via
  * {@link RNS#prunePeers()}.
  * <p>
- * Four independent passes, each taking its own snapshot from the registry at the point it runs:
+ * Five independent passes, each taking its own snapshot from the registry at the point it runs:
  * <ol>
  *   <li>initiator peers: timed-out, unreachable-but-ACTIVE, CLOSED/deleteMe, stuck-PENDING;</li>
  *   <li>incoming peers whose link is no longer ACTIVE;</li>
  *   <li>duplicate ACTIVE incoming peers from the same remote identity+aspect;</li>
- *   <li>ACTIVE incoming peers that have gone silent.</li>
+ *   <li>ACTIVE incoming peers that have gone silent;</li>
+ *   <li>healthy DATA peers above {@code reticulumMaxDataPeers}.</li>
  * </ol>
  * Removal itself stays in {@code RNS} — the two remove callbacks carry the side effects
  * ({@code shutdownChannel}, {@code closeIfActive}, {@code makePeerUnavailable}) that must not run
@@ -54,15 +60,36 @@ final class RNSPeerPruner {
     private final Consumer<ReticulumPeer> removeLinkedPeer;
     private final Consumer<ReticulumPeer> removeIncomingPeer;
     private final BiConsumer<String, PeerAspect> recordPendingFailure;
+    private final IntSupplier maxDataPeers;
+    private final IntSupplier minDesiredDataPeers;
 
+    /**
+     * Reads its peer limits from {@code Settings}. The limits are suppliers rather
+     * than values so a settings reload is picked up, and so the other constructor can
+     * supply them directly — {@code Settings.getInstance()} loads the blockchain config
+     * too, which a unit test has no business doing.
+     */
     RNSPeerPruner(RNSPeerRegistry registry,
                   Consumer<ReticulumPeer> removeLinkedPeer,
                   Consumer<ReticulumPeer> removeIncomingPeer,
                   BiConsumer<String, PeerAspect> recordPendingFailure) {
+        this(registry, removeLinkedPeer, removeIncomingPeer, recordPendingFailure,
+                () -> Settings.getInstance().getReticulumMaxDataPeers(),
+                () -> Settings.getInstance().getReticulumMinDesiredDataPeers());
+    }
+
+    RNSPeerPruner(RNSPeerRegistry registry,
+                  Consumer<ReticulumPeer> removeLinkedPeer,
+                  Consumer<ReticulumPeer> removeIncomingPeer,
+                  BiConsumer<String, PeerAspect> recordPendingFailure,
+                  IntSupplier maxDataPeers,
+                  IntSupplier minDesiredDataPeers) {
         this.registry = registry;
         this.removeLinkedPeer = removeLinkedPeer;
         this.removeIncomingPeer = removeIncomingPeer;
         this.recordPendingFailure = recordPendingFailure;
+        this.maxDataPeers = maxDataPeers;
+        this.minDesiredDataPeers = minDesiredDataPeers;
     }
 
     void prune() {
@@ -71,6 +98,10 @@ final class RNSPeerPruner {
         pruneNonActiveIncoming();
         dedupActiveIncomingByIdentity();
         pruneSilentActiveIncoming();
+        // Last, deliberately: the passes above remove peers that are already dead, so
+        // the census the cap works from counts only healthy peers. Running it earlier
+        // would evict a live peer to make room for a corpse.
+        capDataPeers();
         logCounts("after");
         // announce() and requestPath() are intentionally NOT called here — both involve
         // Reticulum library calls that can block if the library holds a lock. The Controller
@@ -187,6 +218,99 @@ final class RNSPeerPruner {
                 removeIncomingPeer.accept(p);
             }
         }
+    }
+
+    /**
+     * Hold DATA peers at or below {@code reticulumMaxDataPeers}, counting both directions.
+     * <p>
+     * The per-aspect counterpart of the IP side's {@code maxDataPeers} handling in
+     * {@code NetworkData}, which trims the least recently used when over the count.
+     * Nothing previously bounded Reticulum peers by number: {@code reticulumMaxPeers}
+     * only feeds {@code Network.maxPeers}, {@code reticulumMinDesiredDataPeers} is a
+     * floor the reconnect loop aims for, and the passes above prune by liveness rather
+     * than by count. A node could therefore accumulate DATA peers without limit, each
+     * carrying a Link and its watchdog.
+     * <p>
+     * Incoming peers are dropped before outbound ones. Outbound peers exist because
+     * this node chose them to reach the desired-peer floor, so evicting them just sets
+     * the reconnect loop to work recreating them.
+     */
+    private void capDataPeers() {
+        var linkedData = registry.activeLinked(PeerAspect.DATA);
+        var incomingData = registry.activeIncoming(PeerAspect.DATA);
+
+        var victims = selectDataPeersOverCap(linkedData, incomingData,
+                maxDataPeers.getAsInt(), minDesiredDataPeers.getAsInt());
+        if (victims.isEmpty()) {
+            return;
+        }
+
+        log.info("DATA peers over cap: {} linked + {} incoming — removing {} least recently used",
+                linkedData.size(), incomingData.size(), victims.size());
+
+        for (ReticulumPeer p : victims) {
+            if (incomingData.contains(p)) {
+                log.info("Removing incoming DATA peer over cap: {}", encodeHexString(p.getDestinationHash()));
+                removeIncomingPeer.accept(p);
+            } else {
+                log.info("Removing outbound DATA peer over cap: {}", encodeHexString(p.getDestinationHash()));
+                p.makePeerUnavailable();
+                removeLinkedPeer.accept(p);
+            }
+        }
+    }
+
+    /**
+     * Which DATA peers to evict, in eviction order. Pure, so the policy can be checked
+     * without a registry or a settings file.
+     *
+     * @param maxDataPeers         cap across both directions; 0 or less disables it
+     * @param minDesiredDataPeers  floor the reconnect loop aims for; the cap is raised
+     *                             to this if it is lower, since a cap under the floor
+     *                             would have the two fighting every 90 seconds
+     */
+    static List<ReticulumPeer> selectDataPeersOverCap(List<ReticulumPeer> linkedData,
+                                                      List<ReticulumPeer> incomingData,
+                                                      int maxDataPeers,
+                                                      int minDesiredDataPeers) {
+        if (maxDataPeers <= 0) {
+            return List.of();
+        }
+        if (maxDataPeers < minDesiredDataPeers) {
+            log.warn("reticulumMaxDataPeers ({}) is below reticulumMinDesiredDataPeers ({}) — "
+                    + "using {} instead to avoid continuous peer churn",
+                    maxDataPeers, minDesiredDataPeers, minDesiredDataPeers);
+            maxDataPeers = minDesiredDataPeers;
+        }
+
+        var overCount = linkedData.size() + incomingData.size() - maxDataPeers;
+        if (overCount <= 0) {
+            return List.of();
+        }
+
+        // Incoming first: outbound peers exist because this node chose them to reach the
+        // desired-peer floor, so evicting those just sets the reconnect loop to work
+        // recreating them.
+        var victims = new ArrayList<ReticulumPeer>(leastRecentlyUsed(incomingData, overCount));
+        victims.addAll(leastRecentlyUsed(linkedData, overCount - victims.size()));
+
+        return victims;
+    }
+
+    /**
+     * The {@code count} peers that have gone longest without traffic. A null timestamp
+     * sorts oldest, so a peer that has never been used is evicted first.
+     */
+    private static List<ReticulumPeer> leastRecentlyUsed(List<ReticulumPeer> peers, int count) {
+        if (count <= 0) {
+            return List.of();
+        }
+
+        return peers.stream()
+                .sorted(Comparator.comparing(ReticulumPeer::getLastAccessTimestamp,
+                        Comparator.nullsFirst(Comparator.naturalOrder())))
+                .limit(count)
+                .collect(Collectors.toList());
     }
 
     /**

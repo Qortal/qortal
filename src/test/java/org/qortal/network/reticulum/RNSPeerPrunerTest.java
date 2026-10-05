@@ -21,7 +21,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Unit tests for the four prune passes.
+ * Unit tests for the five prune passes.
  * <p>
  * Lives in the production package for the same reason as {@link RNSPeerRegistryTest}:
  * {@link RNSPeerPruner} is package-private. Peers are Mockito stubs — a real
@@ -37,10 +37,15 @@ class RNSPeerPrunerTest {
     private final List<ReticulumPeer> removedIncoming = new ArrayList<>();
     private final Map<String, PeerAspect> recordedFailures = new LinkedHashMap<>();
 
+    // Limits supplied directly: the Settings-reading constructor would load the
+    // blockchain config, which a unit test has no business doing. The cap is set high
+    // enough that the passes under test are unaffected; capDataPeers has its own tests.
     private final RNSPeerPruner pruner = new RNSPeerPruner(registry,
             peer -> { removedLinked.add(peer); registry.removeLinked(peer); },
             peer -> { removedIncoming.add(peer); registry.removeIncoming(peer); },
-            recordedFailures::put);
+            recordedFailures::put,
+            () -> 1000,
+            () -> 8);
 
     // ── isUnreachable ────────────────────────────────────────────────────────
 
@@ -215,6 +220,105 @@ class RNSPeerPrunerTest {
         when(peer.getServerIdentity()).thenReturn(null);
         registry.addIncoming(peer);
         when(peer.getServerIdentity()).thenReturn(identity);
+    }
+
+    // ── DATA peer cap ────────────────────────────────────────────────────────
+
+    @Test
+    void noEvictionWhileAtOrUnderTheCap() {
+        var linked = dataPeers(3, true);
+        var incoming = dataPeers(2, false);
+
+        assertTrue(RNSPeerPruner.selectDataPeersOverCap(linked, incoming, 5, 2).isEmpty());
+        assertTrue(RNSPeerPruner.selectDataPeersOverCap(linked, incoming, 9, 2).isEmpty());
+    }
+
+    @Test
+    void capOfZeroDisablesEviction() {
+        // Nothing previously bounded Reticulum peers by count, so the cap has to be
+        // switchable off for anyone relying on that.
+        var linked = dataPeers(20, true);
+        var incoming = dataPeers(20, false);
+
+        assertTrue(RNSPeerPruner.selectDataPeersOverCap(linked, incoming, 0, 8).isEmpty());
+        assertTrue(RNSPeerPruner.selectDataPeersOverCap(linked, incoming, -1, 8).isEmpty());
+    }
+
+    @Test
+    void evictsIncomingBeforeOutbound() {
+        // Outbound peers were chosen to reach the desired-peer floor; evicting them
+        // only sets the reconnect loop to work recreating them.
+        var linked = dataPeers(4, true);
+        var incoming = dataPeers(4, false);
+
+        var victims = RNSPeerPruner.selectDataPeersOverCap(linked, incoming, 6, 2);
+
+        assertEquals(2, victims.size());
+        assertTrue(incoming.containsAll(victims), "incoming peers must go first");
+    }
+
+    @Test
+    void spillsOntoOutboundOnlyWhenIncomingRunsOut() {
+        var linked = dataPeers(5, true);
+        var incoming = dataPeers(2, false);
+
+        var victims = RNSPeerPruner.selectDataPeersOverCap(linked, incoming, 3, 2);
+
+        assertEquals(4, victims.size());
+        assertTrue(victims.containsAll(incoming), "both incoming peers go first");
+        assertEquals(2, victims.stream().filter(linked::contains).count(),
+                "then the two least recently used outbound peers");
+    }
+
+    @Test
+    void evictsTheLeastRecentlyUsedFirst() {
+        var now = Instant.now();
+        var freshest = dataPeer(true, now);
+        var middle = dataPeer(true, now.minusSeconds(600));
+        var stalest = dataPeer(true, now.minusSeconds(6000));
+        var linked = List.of(freshest, middle, stalest);
+
+        var victims = RNSPeerPruner.selectDataPeersOverCap(linked, List.of(), 2, 1);
+
+        assertEquals(List.of(stalest), victims);
+    }
+
+    @Test
+    void aPeerNeverUsedIsEvictedBeforeOneWithATimestamp() {
+        var used = dataPeer(true, Instant.now().minusSeconds(9999));
+        var neverUsed = dataPeer(true, null);
+
+        var victims = RNSPeerPruner.selectDataPeersOverCap(List.of(used, neverUsed), List.of(), 1, 1);
+
+        assertEquals(List.of(neverUsed), victims);
+    }
+
+    @Test
+    void aCapBelowTheDesiredFloorIsRaisedToIt() {
+        // Otherwise the reconnect loop adds peers to reach the floor and this pass
+        // removes them again, every 90 seconds, for as long as the node runs.
+        var linked = dataPeers(8, true);
+
+        assertTrue(RNSPeerPruner.selectDataPeersOverCap(linked, List.of(), 2, 8).isEmpty());
+        assertEquals(2, RNSPeerPruner.selectDataPeersOverCap(dataPeers(10, true), List.of(), 2, 8).size());
+    }
+
+    private static List<ReticulumPeer> dataPeers(int count, boolean outbound) {
+        var peers = new ArrayList<ReticulumPeer>();
+        var now = Instant.now();
+        for (var i = 0; i < count; i++) {
+            // Descending age, so list order is never accidentally the eviction order
+            peers.add(dataPeer(outbound, now.minusSeconds(i)));
+        }
+        return peers;
+    }
+
+    private static ReticulumPeer dataPeer(boolean outbound, Instant lastAccess) {
+        ReticulumPeer peer = mock(ReticulumPeer.class);
+        when(peer.getPeerAspect()).thenReturn(PeerAspect.DATA);
+        when(peer.getLastAccessTimestamp()).thenReturn(lastAccess);
+        when(peer.getDestinationHash()).thenReturn(new byte[] { (byte) (outbound ? 1 : 2) });
+        return peer;
     }
 
     private static ReticulumPeer linkedPeer(byte[] destinationHash, LinkStatus status) {

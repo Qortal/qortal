@@ -68,13 +68,24 @@ interfaces:
     type: AutoInterface
     enabled: true
 
-  # This interface enables communication with a "backbone"
-  # server over TCP.
+  # This interface enables communication with a "server"
+  # server over TCP using a TCPClientInterface (Mac, Windows).
   # Note: others may be added for redundancy
-  "TCP Client Interface mobilefabrik":
+  "TCP Client Interface reticulum.qortal.link":
     type: TCPClientInterface
     enabled: true
-    target_host: phantom.mobilefabrik.com
+    target_host: reticulum.qortal.link
+    target_port: 4242
+    network_name: qortal
+
+  # This interface enables communication with a "backbone"
+  # server over TCP. The Backbone interface uses a high
+  # bandwidth feature that is a feature of the Linux kernel.
+  # Note: This interface type is only valid on Linux
+  "Backbone Client Interface reticulum3.qortal.link":
+    type: BackboneClientInterface
+    enabled: true
+    target_host: reticulum3.qortal.link
     target_port: 4242
     network_name: qortal
 
@@ -82,10 +93,8 @@ interfaces:
   # server other clients can connect to over TCP.
   # To enable this instance to route traffic the above
   # setting "enable_transport" needs to be set (to true).
-  # Note: this interface type is not yet supported by
-  #       reticulum-network-stack.
-  #"TCP Server Interface":
-  #  type: TCPServerInterface
+  #"TCP Backbone Server Interface":
+  #  type: BackboneServerInterface
   #  enabled: true
   #  listen_ip: 0.0.0.0
   #  listen_port: 4242

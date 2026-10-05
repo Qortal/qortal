@@ -696,18 +696,29 @@ public class Settings {
 	private int reticulumMinDesiredCorePeers = 5;
 	/** Minimum number of Reticulum Data peers desired. */
 	private int reticulumMinDesiredDataPeers = 8;
+	/**
+	 * Upper bound on simultaneous Reticulum DATA peers, counting both directions.
+	 * The per-aspect counterpart of {@code maxDataPeers} on the IP side; enforced by
+	 * the peer pruner, which drops the least recently used above the cap. 0 disables
+	 * the cap. Values below {@code reticulumMinDesiredDataPeers} are raised to it,
+	 * since a cap under the floor would make the reconnect loop and the pruner fight
+	 * each other.
+	 */
+	private int reticulumMaxDataPeers = 24;
 	/** Maximum number of task executor network threads */
 	private int reticulumMaxNetworkThreadPoolSize = 20;
 	/** Node provides a TCPServerInterface or other "qortal"/"qortaltest" gateway interface */
 	private boolean reticulumHasServerInterface = false;
 	/** Number of desired client Interfaces (taken from core server list) */
-	private int reticulumDesiredClientInterfaces = 1;
+	private int reticulumDesiredClientInterfaces = 2;
 	/** Array of core Reticulum server hostname[:port], TCP or Backbone only */
 	private String[] reticulumTcpGatewayServers = new String[]{
 			""
 	};
 	private String[] reticulumBackboneGatewayServers = new String[]{
-			""
+			"reticulum.qortal.link:4442",
+			"reticulum2.qortal.link:4442",
+			"reticulum3.qortal.link:4442"
 	};
 	/** There is a Python rnsd running on the node with a gateway inteface to use */
 	private boolean reticulumUsePythonRNS = false;
@@ -718,7 +729,7 @@ public class Settings {
 	/** Override network_name in generated config. Empty string = use APP_NAME (qortal/qortaltest). */
 	private String reticulumNetworkName = "";
 	/** Regenerate .reticulum/config.yml on every startup instead of only when missing. */
-	private boolean reticulumRegenerateConfigOnRestart = false;
+	private boolean reticulumRegenerateConfigOnRestart = true;
 	/** Announce us as routing gateway.
 	 * Prerequisite: Transport has to be enabled (enable_transport: true) and
 	 *               there has to be a server interface configured.
@@ -1606,6 +1617,10 @@ public class Settings {
 
     public int getReticulumMinDesiredDataPeers() {
         return this.reticulumMinDesiredDataPeers;
+    }
+
+    public int getReticulumMaxDataPeers() {
+        return this.reticulumMaxDataPeers;
     }
 
 	public int getReticulumMaxNetworkThreadPoolSize() {

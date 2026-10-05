@@ -1,4 +1,3 @@
----
 # Reticulum server config
 #
 # Qortal settings (settins.json) used for generation of this config:
@@ -39,6 +38,7 @@ reticulum:
 
   panic_on_interface_error: false
 
+# operating system: {{ os }}
 interfaces:
 
   # This interface enables communication with other
@@ -49,6 +49,10 @@ interfaces:
   "Default Interface":
     type: AutoInterface
     enabled: true
+    network_name: {{ qortal_network_name }}
+{%- if passphrase %}
+    passphrase: {{ passphrase }}
+{%- endif -%}
 
 {% if is_reticulum_gateway %}
   # full gateway node with BackboneServerInterface
@@ -85,8 +89,13 @@ interfaces:
     {%- set item_target_port = target_port -%}
   {%- endif -%}
   {% if (loop.index <= num_client_interfaces) and (item_fqdn != host_fqdn) %}
+    {% if os == "linux" %}
   "Backbone Client Interface qortal {{ item_fqdn }}":
     type: BackboneClientInterface
+    {%- else %}
+  "TCP Client Interface qortal {{ item_fqdn }}":
+    type: TCPClientInterface
+    {%- endif %}
     enabled: true
     target_host: {{ item_fqdn }}
     target_port: {{ item_target_port }}
@@ -113,5 +122,8 @@ interfaces:
     target_host: {{ item_fqdn }}
     target_port: {{ item_target_port }}
     network_name: {{ qortal_network_name }}
+{%- if passphrase %}
+    passphrase: {{ passphrase }}
+{% endif %}
   {% endif %}
 {%- endfor -%}

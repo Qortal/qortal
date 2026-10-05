@@ -4,6 +4,7 @@ import com.google.common.collect.Maps;
 import com.hubspot.jinjava.Jinjava;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.SystemUtils;
 import org.qortal.settings.Settings;
 
 import java.io.BufferedReader;
@@ -18,6 +19,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.stream.Collectors;
 
 import static io.reticulum.constant.ReticulumConstant.CONFIG_FILE_NAME;
@@ -111,6 +113,11 @@ final class RNSConfigWriter {
         context.put("use_python_rns", Settings.getInstance().getReticulumUsePythonRNS() ? "true" : "false");
         context.put("python_rns_if_port", Settings.getInstance().getReticulumPythonRNSGatewayPort());
         context.put("passphrase", Settings.getInstance().getReticulumPassphrase());
+        context.put("os_windows", SystemUtils.IS_OS_WINDOWS ? "true" : "false");
+        context.put("os_mac", SystemUtils.IS_OS_MAC ? "true" : "false");
+        context.put("os_linux", SystemUtils.IS_OS_LINUX ? "true" : "false");
+        context.put("os_name", SystemUtils.OS_NAME);
+        context.put("os", System.getProperties().getProperty("os.name").toLowerCase());
 
         log.info("Rendering new Reticulum configuration file from resource {}", RNSCommon.jinjaConfigTemplateName);
         InputStream templateStream = RNSConfigWriter.class.getClassLoader()
