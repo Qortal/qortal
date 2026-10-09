@@ -2,6 +2,7 @@ package org.qortal.data.transaction;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.media.Schema.AccessMode;
+import org.qortal.crypto.Crypto;
 import org.qortal.transaction.Transaction.TransactionType;
 
 import javax.xml.bind.Unmarshaller;
@@ -42,6 +43,9 @@ public class ChatTransactionData extends TransactionData {
 
 	public void afterUnmarshal(Unmarshaller u, Object parent) {
 		this.creatorPublicKey = this.senderPublicKey;
+
+		if (this.senderPublicKey != null)
+			this.sender = Crypto.toAddress(this.senderPublicKey);
 	}
 
 	public ChatTransactionData(BaseTransactionData baseTransactionData,
