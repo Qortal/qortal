@@ -7,10 +7,12 @@ Typical command line for sqltool would be:
 `rlwrap java -cp ${HSQLDB_JAR}:${SQLTOOL_JAR} org.hsqldb.cmdline.SqlTool --rcFile=${SQLTOOL_RC} qortal`
 
 `${HSQLDB_JAR}` should be set with pathname where Maven downloaded hsqldb, 
-typically `${HOME}/.m2/repository/org/hsqldb/hsqldb/2.5.1/hsqldb-2.5.1.jar`
+typically `${HOME}/.m2/repository/org/hsqldb/hsqldb/2.7.4/hsqldb-2.7.4.jar`
 
-`${SQLTOOL_JAR}` should be set with pathname where Maven downloaded sqltool,
-typically  `${HOME}/.m2/repository/org/hsqldb/sqltool/2.5.0/sqltool-2.5.0.jar`
+`${SQLTOOL_JAR}` should be set with pathname where Maven downloaded sqltool.
+The Qortal build does not include sqltool, so fetch the version matching hsqldb first,
+e.g. `mvn dependency:get -Dartifact=org.hsqldb:sqltool:2.7.4`, which saves it to
+`${HOME}/.m2/repository/org/hsqldb/sqltool/2.7.4/sqltool-2.7.4.jar`
 
 `${SQLTOOL_RC}` should be set with pathname of a text file describing HSQLDB databases, 
 e.g. `${HOME}/.sqltool.rc`, with contents like:
@@ -25,8 +27,8 @@ Above `url` component `file:db/blockchain` assumes you will call `sqltool` from 
 
 Another idea is to assign a shell alias in your `.bashrc` like:
 ```
-export HSQLDB_JAR=${HOME}/.m2/repository/org/hsqldb/hsqldb/2.5.1/hsqldb-2.5.1.jar
-export SQLTOOL_JAR=${HOME}/.m2/repository/org/hsqldb/sqltool/2.5.0/sqltool-2.5.0.jar
+export HSQLDB_JAR=${HOME}/.m2/repository/org/hsqldb/hsqldb/2.7.4/hsqldb-2.7.4.jar
+export SQLTOOL_JAR=${HOME}/.m2/repository/org/hsqldb/sqltool/2.7.4/sqltool-2.7.4.jar
 alias sqltool='rlwrap java -cp ${HSQLDB_JAR}:${SQLTOOL_JAR} org.hsqldb.cmdline.SqlTool --rcFile=${SQLTOOL_RC}'
 ```
 So you can simply type: `sqltool qortal`
@@ -35,6 +37,6 @@ Don't forget to use `SHUTDOWN;` before exiting sqltool so that database files ar
 
 ## Quick and dirty version
 
-With `sqltool-2.5.0.jar` and `qortal.jar` in current directory, and database in `db/`
+With `sqltool-2.7.4.jar` and `qortal.jar` in current directory, and database in `db/`
 
-`java -cp qortal.jar:sqltool-2.5.0.jar org.hsqldb.cmdline.SqlTool --inlineRc=url=jdbc:hsqldb:file:db/blockchain`
+`java -cp qortal.jar:sqltool-2.7.4.jar org.hsqldb.cmdline.SqlTool --inlineRc=url=jdbc:hsqldb:file:db/blockchain`
