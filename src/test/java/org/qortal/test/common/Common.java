@@ -23,6 +23,7 @@ import org.qortal.utils.NTP;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -64,7 +65,7 @@ public class Common {
 		// Load/check settings, which potentially sets up blockchain config, etc.
 		URL testSettingsUrl = Common.class.getClassLoader().getResource(testSettingsFilename);
 		assertNotNull("Test settings JSON file not found", testSettingsUrl);
-		Settings.fileInstance(testSettingsUrl.getPath());
+		Settings.fileInstance(resourcePath(testSettingsUrl));
 	}
 
 	private static List<AssetData> initialAssets;
@@ -114,6 +115,15 @@ public class Common {
 		return new PrivateKeyAccount(repository, seed);
 	}
 
+	/** Filesystem path of a classpath resource, correct on Windows too (URL.getPath() yields "/C:/..." there). */
+	private static String resourcePath(URL resourceUrl) {
+		try {
+			return Paths.get(resourceUrl.toURI()).toString();
+		} catch (URISyntaxException e) {
+			throw new IllegalStateException("Unable to resolve test resource " + resourceUrl, e);
+		}
+	}
+
 	public static void useSettingsAndDb(String settingsFilename, boolean dbInMemory) throws DataException {
 		if (RepositoryManager.getRepositoryFactory() != null) {
 			closeRepository();
@@ -123,7 +133,7 @@ public class Common {
 		LOGGER.debug(String.format("Using setting file: %s", settingsFilename));
 		URL testSettingsUrl = Common.class.getClassLoader().getResource(settingsFilename);
 		assertNotNull("Test settings JSON file not found", testSettingsUrl);
-		Settings.fileInstance(testSettingsUrl.getPath());
+		Settings.fileInstance(resourcePath(testSettingsUrl));
 
 		setRepository(dbInMemory);
 
