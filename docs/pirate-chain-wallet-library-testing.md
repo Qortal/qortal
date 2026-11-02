@@ -85,6 +85,127 @@ P2SH-A: …`. The send endpoint also preserves the native error message and
 distinguishes insufficient funds from other errors. These diagnostics do not
 establish the cause of a tester's failure without that tester's status or log.
 
+### Multiple Hub accounts on one Core (2 November 2026)
+
+Core uses one active JNI wallet context, with a separate encrypted storage
+namespace for each account. Requests from different Hub instances must select,
+read or spend, and release that context as one serialized operation.
+
+The controller now queues requests before claiming a wallet switch. Sync status
+keeps its requested account locked through both initialization and the read,
+and failed initialization propagates instead of returning the previous account's
+status. JSON status obeys the same lock as other wallet operations. Native
+background sync is started before releasing the selected context; a delayed
+Java worker can no longer start sync for the next account by accident. Late
+status workers check that their captured wallet is still selected. Wallet init
+cooldowns are scoped to the failed account, and a queued status request timing
+out no longer triggers a server rotation for another account. Interrupted init
+retries stop promptly. Concurrent first requests also share one controller.
+
+These Java changes work with the existing v1.2.6 JNI bundle. They do not alter
+wallet storage, keys, the default QDN signature or the separate native trade
+funding patch below. Rebuild Core and restart the JVM to apply them.
+
+Verification includes three offline session regression tests and an opt-in
+test using the checksum-verified shipped Linux JNI library, isolated wallet
+directories and a loopback-only lightwalletd. One public fixture wallet recovers
+synthetic historical funds; another remains empty. The test checks queued
+requests and repeatedly reopens both namespaces, verifying their distinct
+addresses and balances. No real wallet, send or broadcast is involved.
+
+All 21 selected controller, session, two-wallet native, spend-response and
+trade-bot tests passed. The three new session regressions all fail against the
+original controller, confirming the selection/read gap is covered. Run:
+
+```bash
+PIRATE_DEBUG_LOG_PATH=/absolute/path/to/isolated-native.log \
+mvn -DskipJUnitTests=false \
+  -Dtest=PirateWalletSessionTests,PirateChainWalletControllerTests,PirateUnifiedMultipleWalletTests \
+  -Dqortal.runPirateUnifiedMultipleWalletTests=true \
+  -Dqortal.pirateUnifiedBundlePath=/absolute/path/to/verified-v1.2.6-bundle \
+  test
+```
+
+**The native engine still has one active storage context.** Changing accounts
+resets its native runtime and can interrupt a historical scan. This correction
+does not implement parallel rescans or certify two deep restores under constant
+account switching. Let historical recovery complete before switching accounts,
+or use separate Core processes for simultaneous recovery. Native context
+isolation would require further work. After installing the rebuilt Core, test
+two Hub accounts with already-synchronized wallets and verify each address,
+balance and status; test recovery separately. Retain the prior JAR/settings and
+wallet/trade backups so the Core change can be rolled back by restoring the
+previous JAR and restarting, without replacing wallet data.
+
+### Trade funding: missing Ironwood Merkle path (2 November 2026)
+
+The reported log `Transaction build error: Missing Ironwood merkle path` has a
+specific defect in the pinned Stashi `v1.2.6` native library. Its
+`qortal_send_p2sh` adapter calls `get_unspent_selectable_notes_filtered`, which
+restores Ironwood note plaintext and positions but does not construct Merkle
+paths. The P2SH builder then requires the omitted path. Wallet height and the
+overall spendability status can both be current while this adapter still fails.
+This error occurs before signing/broadcasting the funding transaction. It does
+not establish that every other trade failure has the same cause.
+
+The native fix and offline regression tests are preserved in
+[`stashi-v1.2.6-qortal-p2sh-witnesses.patch`](../tools/patches/stashi-v1.2.6-qortal-p2sh-witnesses.patch).
+The patch targets upstream commit
+`dedf63381996c5770945d16a4afa63ec7e35a676` (`v1.2.6`). It makes P2SH funding
+reuse ordinary sends' confirmation, account/key-group, shard-scan and witness
+selection gates, including separate Sapling and Ironwood anchor heights. The
+Ironwood builder uses the same pool anchor as the hydrated notes. Funding output
+zero, the extra redeem-script output, fees and redeem/refund contracts are
+unchanged. No wallet schema or data migration is introduced.
+
+Apply it to a separate clean checkout of that exact release, preserving any
+existing native-wallet work. From the native repository root, with the patch's
+absolute path substituted:
+
+```bash
+git apply --check /absolute/path/to/stashi-v1.2.6-qortal-p2sh-witnesses.patch
+git apply /absolute/path/to/stashi-v1.2.6-qortal-p2sh-witnesses.patch
+cd crates
+cargo test --locked -p pirate-wallet-service --lib qortal_funding_
+cargo test --locked -p pirate-wallet-service --lib qortal
+cargo test --locked -p pirate-qortal-jni
+cargo test --locked -p pirate-core qortal_p2sh
+cd ..
+bash scripts/build-qortal-jni.sh
+```
+
+The new tests use synthetic encrypted wallet databases and local shardtrees.
+They cover witness hydration for both pools with different checkpoint heights,
+missing witness state, recent notes and isolation of other key groups. They do
+not synchronize a real wallet or broadcast a transaction.
+
+Local Linux x86_64 verification passed 40 wallet-service Qortal tests (including
+the three new regressions), five JNI tests, seven native P2SH tests and 11 Core
+trade/response tests, with no failures or skips. All three new regressions fail
+when the helper is switched back to the original raw-note loader. The patch
+also applies cleanly to the pristine pinned release. Funded settlement and the
+other native platforms remain untested for this patch.
+
+**The existing v1.2.6 QDN publication remains unpatched.** Updating Java alone,
+retrying the trade, changing servers or rescanning does not fix this missing
+native-loader step. A corrected native build must be integrated and published
+under a new reviewed release/version, archive checksum and immutable QDN
+signature. The staging scripts intentionally reject a modified archive presented
+as the official v1.2.6 artifact; do not weaken those checks. Build all five native
+targets using upstream's supported toolchains and Linux ABI baseline before
+preparing a cross-platform release.
+
+Before funded testing, back up the wallet directories and trade-bot data and
+retain the previous JAR/settings/native bundle. Select the newly published
+signature, restart the JVM, and verify synchronization and spendability. Then
+complete a small funded trade, confirm funding output zero and the script
+output, verify change is spendable in a second trade, and exercise both redeem
+and refund flows. These acceptance tests require separately authorized funds
+and publication; the offline regressions alone do not certify settlement.
+To recover from a failed candidate, stop it and restore the prior JAR and
+signature/settings, then restart. Retain wallet/trade data and backups; an older
+bundle still has this defect, so rollback is containment, not a trading fix.
+
 ## January candidate publication (legacy only)
 
 The January 2026 branch work already published an isolated candidate bundle:
