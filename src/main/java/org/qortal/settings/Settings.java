@@ -405,7 +405,8 @@ public class Settings {
 	/** Storage policy to indicate which data should be hosted */
 	private String storagePolicy = "FOLLOWED_OR_VIEWED";
 
-	/** Whether to allow data outside of the storage policy to be relayed between other peers */
+	/** Whether to relay data outside of the storage policy between other peers.
+	 * File discovery and background metadata fetching remain enabled independently. */
 	private boolean relayModeEnabled = true;
 
 	/** Whether to remember which data was originally uploaded using this node.

@@ -9,7 +9,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -511,18 +510,13 @@ public class ArbitraryDataFileListManager {
     }
 
     public void deleteFileListRequestsForSignature(String signature58) {
-
-        for (Iterator<Map.Entry<Integer, Triple<String, Peer, Long>>> it = arbitraryDataFileListRequests.entrySet().iterator(); it.hasNext();) {
-            Map.Entry<Integer, Triple<String, Peer, Long>> entry = it.next();
-            if (entry == null || entry.getKey() == null || entry.getValue() == null) {
-                continue;
+        arbitraryDataFileListRequests.replaceAll((id, request) -> {
+            if (request != null && request.getB() == null && Objects.equals(request.getA(), signature58)) {
+                // Completing our download must not cancel other peers' discovery requests.
+                return new Triple<>(null, null, request.getC());
             }
-            if (Objects.equals(entry.getValue().getA(), signature58)) {
-                // Update requests map to reflect that we've received all chunks
-                Triple<String, Peer, Long> newEntry = new Triple<>(null, null, entry.getValue().getC());
-                arbitraryDataFileListRequests.put(entry.getKey(), newEntry);
-            }
-        }
+            return request;
+        });
     }
 
     // Network handlers
@@ -561,12 +555,9 @@ public class ArbitraryDataFileListManager {
 
             if (messagesToProcess.isEmpty()) return;
 
-            // Store ALL peer messages per signature (not just the last one)
+            // Batch transaction lookups, but keep each reply's request ID and hashes.
             Map<String, List<PeerMessage>> peerMessagesBySignature58 = new HashMap<>(messagesToProcess.size());
             Map<String, byte[]> signatureBySignature58 = new HashMap<>(messagesToProcess.size());
-            Map<String, Boolean> isRelayRequestBySignature58 = new HashMap<>(messagesToProcess.size());
-            Map<String, List<byte[]>> hashesBySignature58 = new HashMap<>(messagesToProcess.size());
-            Map<String, Triple<String, Peer, Long>> requestBySignature58 = new HashMap<>(messagesToProcess.size());
 
             for (PeerMessage peerMessage : messagesToProcess) {
                 Peer peer = peerMessage.getPeer();
@@ -576,8 +567,6 @@ public class ArbitraryDataFileListManager {
                 Message message = peerMessage.getMessage();
 
                 ArbitraryDataFileListMessage arbitraryDataFileListMessage = (ArbitraryDataFileListMessage) message;
-
-                LOGGER.trace("Received hash list from peer {} with {} hashes", peer, arbitraryDataFileListMessage.getHashes().size());
 
                 if (LOGGER.isDebugEnabled() && arbitraryDataFileListMessage.getRequestTime() != null) {
                     long totalRequestTime = NTP.getTime() - arbitraryDataFileListMessage.getRequestTime();
@@ -593,8 +582,6 @@ public class ArbitraryDataFileListManager {
                     continue;
                 }
 
-                boolean isRelayRequest = (request.getB() != null); //Peer?
-                LOGGER.trace("isRelayRequest: {}", isRelayRequest);
                 // Does this message's signature match what we're expecting?
                 byte[] signature = arbitraryDataFileListMessage.getSignature();
                 String signature58 = Base58.encode(signature);
@@ -612,9 +599,6 @@ public class ArbitraryDataFileListManager {
                 // Append to list instead of overwriting - this allows multiple peers per signature
                 peerMessagesBySignature58.computeIfAbsent(signature58, k -> new ArrayList<>()).add(peerMessage);
                 signatureBySignature58.put(signature58, signature);
-                isRelayRequestBySignature58.put(signature58, isRelayRequest);
-                hashesBySignature58.put(signature58, hashes);
-                requestBySignature58.put(signature58, request);
             }
 
             if (signatureBySignature58.isEmpty()) {
@@ -650,37 +634,29 @@ public class ArbitraryDataFileListManager {
                 byte[] signature = arbitraryTransactionData.getSignature();
                 String signature58 = Base58.encode(signature);
 
-                List<byte[]> hashes = hashesBySignature58.get(signature58);
-                
                 // Process ALL peers that responded for this signature
                 List<PeerMessage> peerMessages = peerMessagesBySignature58.get(signature58);
                 if (peerMessages == null || peerMessages.isEmpty()) {
                     continue;
                 }
                 
-                Boolean isRelayRequest = isRelayRequestBySignature58.get(signature58);
-                
-                // Determine how many peers to process based on request type
-                List<PeerMessage> peersToProcess;
-                if (isRelayRequest != null && isRelayRequest && this.isRelayAvailable) {
-                    // For relay requests, only process first peer to avoid duplicate forwards
-                    peersToProcess = Collections.singletonList(peerMessages.get(0));
-                   
-                } else {
-                    // For direct requests, process all peers to maximize download speed
-                    peersToProcess = peerMessages;
-                  
-                }
-
-                // Iterate over selected peers
-                for (PeerMessage peerMessage : peersToProcess) {
+                for (PeerMessage peerMessage : peerMessages) {
                     Peer peer = peerMessage.getPeer();
                     Message message = peerMessage.getMessage();
 
                     ArbitraryDataFileListMessage arbitraryDataFileListMessage = (ArbitraryDataFileListMessage) message;
 
-                    // Process direct download responses (not relay forwarding)
-                    if (!isRelayRequest || !this.isRelayAvailable) {
+                    // Ownership belongs to the individual request, not the resource signature.
+                    // Recheck after the repository lookup in case the request completed meanwhile.
+                    Triple<String, Peer, Long> request = arbitraryDataFileListRequests.get(message.getId());
+                    if (request == null || !signature58.equals(request.getA())) {
+                        continue;
+                    }
+                    boolean isRelayRequest = request.getB() != null;
+                    List<byte[]> hashes = arbitraryDataFileListMessage.getHashes();
+
+                    // Relay mode never turns another peer's discovery into our own download.
+                    if (!isRelayRequest) {
 
                         Long now = NTP.getTime();
 
@@ -727,14 +703,14 @@ public class ArbitraryDataFileListManager {
                             int requestHops = arbitraryDataFileListMessage.getRequestHops() != null ? arbitraryDataFileListMessage.getRequestHops() : 100;
 
                             String peerWithFilesString = arbitraryDataFileListMessage.getPeerAddress();
-                            PeerAddress pa = PeerAddress.fromString(peerWithFilesString); // HOST:PORT
-                            PeerData pd = new PeerData(pa,now, "INIT");
-                            Peer peerWithFiles = new Peer(pd, Peer.NETWORKDATA);
                             String nodeId = arbitraryDataFileListMessage.getNodeId();
                             // Update Response based on Content Holder being able to access direct connect
                             ArbitraryFileListResponseInfo responseInfo;
 
-                            if(arbitraryDataFileListMessage.isDirectConnectable()) {
+                            if (Boolean.TRUE.equals(arbitraryDataFileListMessage.isDirectConnectable())) {
+                                PeerAddress pa = PeerAddress.fromString(peerWithFilesString); // HOST:PORT
+                                PeerData pd = new PeerData(pa, now, "INIT");
+                                Peer peerWithFiles = new Peer(pd, Peer.NETWORKDATA);
                                 responseInfo = new ArbitraryFileListResponseInfo(hash58, signature58,
                                         peerWithFiles, nodeId, now, arbitraryDataFileListMessage.getRequestTime(), requestHops, true);
                                 LOGGER.debug("Adding QDN Direct Connect responseInfo to ArbDataFileManager peer: {} FileHash: {}", peerWithFilesString, hash58);
@@ -755,8 +731,7 @@ public class ArbitraryDataFileListManager {
 
                     // Forwarding - We are not the original requestor, just in the middle
                     LOGGER.trace("Status of isRelayRequest {}", isRelayRequest);
-                    if (isRelayRequest && this.isRelayAvailable) {
-                        Triple<String, Peer, Long> request = requestBySignature58.get(signature58);
+                    if (isRelayRequest) {
                         Peer requestingPeer = request.getB();
                         if (requestingPeer != null) {
                             LOGGER.trace("Requesting Peer is: {}", requestingPeer);
@@ -764,12 +739,20 @@ public class ArbitraryDataFileListManager {
                             Integer requestHops = arbitraryDataFileListMessage.getRequestHops();
                             Boolean isDirectConnectable = arbitraryDataFileListMessage.isDirectConnectable();
                             String nodeId = arbitraryDataFileListMessage.getNodeId();
-                            // Add each hash to our local mapping so we know who to ask later
-                            Long now = NTP.getTime();
-                            for (byte[] hash : hashes) {
-                                String hash58 = Base58.encode(hash);
-                                ArbitraryRelayInfo relayInfo = new ArbitraryRelayInfo(hash58, signature58, peer, nodeId, now, requestTime, requestHops, isDirectConnectable);
-                                ArbitraryDataFileManager.getInstance().addToRelayMap(relayInfo);
+
+                            // Discovery can cross a node with payload relay disabled only if
+                            // the requester can connect directly to the advertised holder.
+                            if (!this.isRelayAvailable && !Boolean.TRUE.equals(isDirectConnectable)) {
+                                continue;
+                            }
+
+                            if (this.isRelayAvailable) {
+                                Long now = NTP.getTime();
+                                for (byte[] hash : hashes) {
+                                    String hash58 = Base58.encode(hash);
+                                    ArbitraryRelayInfo relayInfo = new ArbitraryRelayInfo(hash58, signature58, peer, nodeId, now, requestTime, requestHops, isDirectConnectable);
+                                    ArbitraryDataFileManager.getInstance().addToRelayMap(relayInfo);
+                                }
                             }
 
                             // Bump requestHops if it exists
@@ -778,7 +761,7 @@ public class ArbitraryDataFileListManager {
                             }
 
                             ArbitraryDataFileListMessage forwardArbitraryDataFileListMessage = new ArbitraryDataFileListMessage(signature, hashes, requestTime, requestHops,
-                                    arbitraryDataFileListMessage.getPeerAddress(), arbitraryDataFileListMessage.getNodeId(), arbitraryDataFileListMessage.isRelayPossible(), arbitraryDataFileListMessage.isDirectConnectable());
+                                    arbitraryDataFileListMessage.getPeerAddress(), nodeId, this.isRelayAvailable, isDirectConnectable);
 
                             forwardArbitraryDataFileListMessage.setId(message.getId());
 
@@ -830,10 +813,7 @@ public class ArbitraryDataFileListManager {
             if (messagesToProcess.isEmpty()) return;
 
             Map<String, byte[]> signatureBySignature58 = new HashMap<>(messagesToProcess.size());
-            Map<String, List<byte[]>> requestedHashesBySignature58 = new HashMap<>(messagesToProcess.size());
-            Map<String, String> requestingPeerBySignature58 = new HashMap<>(messagesToProcess.size());
-            Map<String, Long> nowBySignature58 = new HashMap<>((messagesToProcess.size()));
-            Map<String, PeerMessage> peerMessageBySignature58 = new HashMap<>(messagesToProcess.size());
+            List<PeerMessage> requestsToProcess = new ArrayList<>(messagesToProcess.size());
 
             for (PeerMessage messagePeer : messagesToProcess) {
                 Controller.getInstance().stats.getArbitraryDataFileListMessageStats.requests.incrementAndGet();
@@ -866,10 +846,7 @@ public class ArbitraryDataFileListManager {
                 }
 
                 signatureBySignature58.put(signature58, signature);
-                requestedHashesBySignature58.put(signature58, requestedHashes);
-                requestingPeerBySignature58.put(signature58, requestingPeer);
-                nowBySignature58.put(signature58, now);
-                peerMessageBySignature58.put(signature58, messagePeer);
+                requestsToProcess.add(messagePeer);
             }
 
             if (signatureBySignature58.isEmpty()) {
@@ -893,7 +870,18 @@ public class ArbitraryDataFileListManager {
                 return;
             }
 
-            for (ArbitraryTransactionData transactionData : transactionDataList) {
+            Map<String, ArbitraryTransactionData> transactionBySignature58 = transactionDataList.stream()
+                    .collect(Collectors.toMap(data -> Base58.encode(data.getSignature()), data -> data));
+
+            // Multiple peers can request different chunks of the same resource in one batch.
+            // Only the database lookup is shared; requester, hashes and message ID stay together.
+            for (PeerMessage peerMessage : requestsToProcess) {
+                Peer peer = peerMessage.getPeer();
+                Message message = peerMessage.getMessage();
+                GetArbitraryDataFileListMessage getArbitraryDataFileListMessage = (GetArbitraryDataFileListMessage) message;
+                byte[] signature = getArbitraryDataFileListMessage.getSignature();
+                String signature58 = Base58.encode(signature);
+                ArbitraryTransactionData transactionData = transactionBySignature58.get(signature58);
 
                 // Moved up in check priority to prevent "dead work"
                 if(transactionData == null)
@@ -904,9 +892,9 @@ public class ArbitraryDataFileListManager {
                     continue;
                 }
 
-                byte[] signature = transactionData.getSignature();
-                String signature58 = Base58.encode(signature);
-                List<byte[]> requestedHashes = requestedHashesBySignature58.get(signature58);
+                List<byte[]> requestedHashes = getArbitraryDataFileListMessage.getHashes();
+                String requestingPeer = getArbitraryDataFileListMessage.getRequestingPeer();
+                Long now = NTP.getTime();
                 List<byte[]> hashes = new ArrayList<>();
                 List<byte[]> originalRequestedHashes = requestedHashes;
                 List<byte[]> missingRequestedHashes = null;
@@ -1009,14 +997,7 @@ public class ArbitraryDataFileListManager {
                     hashes.clear();
                 }
 
-                PeerMessage peerMessage = peerMessageBySignature58.get(signature58);
-                Peer peer = peerMessage.getPeer();
-                Message message = peerMessage.getMessage();
-
-                Long now = nowBySignature58.get(signature58);
-
                 // We should only respond if we have at least one hash
-                String requestingPeer = requestingPeerBySignature58.get(signature58);
                 LOGGER.trace("Preparing our response to GetArbitraryDataFileList, {}", signature58);
                 if (!hashes.isEmpty()) {
 
@@ -1066,52 +1047,43 @@ public class ArbitraryDataFileListManager {
                     }
                 }
 
-                LOGGER.trace("We don't have hashes or all hashes - Checking Relay Mode");
-                // We may need to forward this request on
+                // File discovery is independent of payload relay. Forwarding its replies
+                // must never enqueue local downloads, even when payload relay is disabled.
 
-                //if (this.isRelayAvailable ) { = We do not want to block the relay of file find requests, this prevents Direct-Connect finding
-                    // In relay mode - so ask our other peers if they have it
+                long requestTime = getArbitraryDataFileListMessage.getRequestTime();
+                int requestHops = getArbitraryDataFileListMessage.getRequestHops() + 1;
+                long totalRequestTime = now - requestTime;
 
-                    GetArbitraryDataFileListMessage getArbitraryDataFileListMessage = (GetArbitraryDataFileListMessage) message;
+                // If we checked locally and don't need anything else, don't relay.
+                // (An empty list can be interpreted as "request all" by the receiver.)
+                if (missingRequestedHashes != null && missingRequestedHashes.isEmpty()) {
+                    LOGGER.trace("No missing hashes remaining for signature {}, skipping relay", signature58);
+                    continue;
+                }
 
-                    long requestTime = getArbitraryDataFileListMessage.getRequestTime();
-                    int requestHops = getArbitraryDataFileListMessage.getRequestHops() + 1;
-                    long totalRequestTime = now - requestTime;
+                if (totalRequestTime < RELAY_REQUEST_MAX_DURATION) { // 5 Seconds
+                    // Relay request hasn't timed out yet, so can potentially be rebroadcast
+                    if (requestHops < SEARCH_DEPTH_MAX_HOPS) { // 6 Hops
+                        // Relay request hasn't reached the maximum number of hops yet, so can be rebroadcast
 
-                   
-                    // If we checked locally and don't need anything else, don't relay.
-                    // (An empty list can be interpreted as "request all" by the receiver.)
-                    if (missingRequestedHashes != null && missingRequestedHashes.isEmpty()) {
-                        LOGGER.trace("No missing hashes remaining for signature {}, skipping relay", signature58);
-                        continue;
-                    }
+                        // When relaying, always forward the original request unchanged to preserve the requester's intent.
+                        // Using missingRequestedHashes would filter based on our incomplete knowledge (we may not have metadata).
+                        // This ensures the origin node can provide the complete picture directly to the requester.
+                        List<byte[]> relayHashes = originalRequestedHashes;
+                        Message relayGetArbitraryDataFileListMessage = new GetArbitraryDataFileListMessage(signature, relayHashes, requestTime, requestHops, requestingPeer);
+                        relayGetArbitraryDataFileListMessage.setId(message.getId());
 
-                    if (totalRequestTime < RELAY_REQUEST_MAX_DURATION) { // 5 Seconds
-                        // Relay request hasn't timed out yet, so can potentially be rebroadcast
-                        if (requestHops < SEARCH_DEPTH_MAX_HOPS) { // 6 Hops
-                            // Relay request hasn't reached the maximum number of hops yet, so can be rebroadcast
-
-                            // When relaying, always forward the original request unchanged to preserve the requester's intent.
-                            // Using missingRequestedHashes would filter based on our incomplete knowledge (we may not have metadata).
-                            // This ensures the origin node can provide the complete picture directly to the requester.
-                            List<byte[]> relayHashes = originalRequestedHashes;
-                            Message relayGetArbitraryDataFileListMessage = new GetArbitraryDataFileListMessage(signature, relayHashes, requestTime, requestHops, requestingPeer);
-                            relayGetArbitraryDataFileListMessage.setId(message.getId());
-
-                            LOGGER.debug("Rebroadcasting hash list request from peer {} for signature {} to our other peers... totalRequestTime: {}, requestHops: {}", peer, Base58.encode(signature), totalRequestTime, requestHops);
-                            NetworkData.getInstance().broadcast(
-                                    broadcastPeer ->
-                                            broadcastPeer == peer || Objects.equals(broadcastPeer.getPeerData().getAddress().getHost(), peer.getPeerData().getAddress().getHost()) ? null : relayGetArbitraryDataFileListMessage
-                            );
-                        } else {
-                            LOGGER.trace("Request has reached the maximum number of allowed hops");
-                        }
+                        LOGGER.debug("Rebroadcasting hash list request from peer {} for signature {} to our other peers... totalRequestTime: {}, requestHops: {}", peer, Base58.encode(signature), totalRequestTime, requestHops);
+                        NetworkData.getInstance().broadcast(
+                                broadcastPeer ->
+                                        broadcastPeer == peer || Objects.equals(broadcastPeer.getPeerData().getAddress().getHost(), peer.getPeerData().getAddress().getHost()) ? null : relayGetArbitraryDataFileListMessage
+                        );
                     } else {
-                        LOGGER.trace("Relay Request has timed out");
+                        LOGGER.trace("Request has reached the maximum number of allowed hops");
                     }
-                //} else {
-                //    LOGGER.debug("Relay (fetch-reserve) is disabled");
-                //}
+                } else {
+                    LOGGER.trace("Relay Request has timed out");
+                }
             }
         } catch (Exception e) {
             LOGGER.error(e.getMessage(), e);
