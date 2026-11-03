@@ -14,7 +14,7 @@
 		<bouncycastle.version>1.78.1</bouncycastle.version>
 		<build.timestamp>${maven.build.timestamp}</build.timestamp>
 		<ciyam-at.version>1b731d1</ciyam-at.version> <!-- This is the hash for v1.4.3 -->
-		<commons-net.version>3.9.0</commons-net.version>
+		<commons-net.version>3.11.1</commons-net.version>
 		<commons-text.version>1.12.0</commons-text.version>
 		<commons-io.version>2.18.0</commons-io.version>
 		<commons-compress.version>1.27.1</commons-compress.version>
@@ -28,14 +28,15 @@
 		<homoglyph.version>1.2.1</homoglyph.version>
 		<hsqldb.version>2.7.4</hsqldb.version>
 		<icu4j.version>76.1</icu4j.version>
+		<jackson.version>2.18.2</jackson.version>
 		<java-diff-utils.version>4.15</java-diff-utils.version>
 		<javax.servlet-api.version>4.0.1</javax.servlet-api.version>
 		<jaxb-runtime.version>2.3.9</jaxb-runtime.version>
 		<jersey.version>2.47</jersey.version>
 		<jetty.version>10.0.26</jetty.version> <!-- Next logical jump -->
 		<json-simple.version>1.1.1</json-simple.version>
-		<json.version>20240303</json.version>
-		<jsoup.version>1.18.1</jsoup.version>
+		<json.version>20241224</json.version>
+		<jsoup.version>1.18.3</jsoup.version>
 		<junit-jupiter-engine.version>5.11.0-M2</junit-jupiter-engine.version>
 		<log4j.version>2.23.1</log4j.version>
 		<mail.version>1.5.0-b01</mail.version>
@@ -916,7 +917,7 @@
 		<dependency>
 			<groupId>com.fasterxml.jackson.core</groupId>
 			<artifactId>jackson-databind</artifactId>
-			<version>2.15.2</version> <!-- Use the latest stable version -->
+			<version>${jackson.version}</version>
 		</dependency>
 	</dependencies>
 </project>
