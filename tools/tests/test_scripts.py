@@ -279,7 +279,7 @@ esac''')
         bundle = self.work / 'bundle'
         bundle.mkdir()
         (bundle / 'MANIFEST.txt').write_text(
-            'artifact-sha256: 60c91d1abfba16f97e22bf0f78b4aa846f9bd5b7455ab7d2f7155a3f5f9d1bc5\n'
+            'artifact-sha256: 55bd5979c01d424ce4b26428ac35b51aed2da2131ceb18c29443e0b46c18e018\n'
             'bundle-kind: host-specific\nplatform: linux-x86_64\nnative-library: librust-linux-x86_64.so\n')
         for file in ('LICENSE-qortal-jni.txt', 'qortal-handoff.md', 'librust-linux-x86_64.so'):
             (bundle / file).write_text('fixture content; never executed')

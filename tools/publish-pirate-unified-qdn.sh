@@ -8,8 +8,8 @@ set -euo pipefail
 # it locally or offline, then submit the signed transaction. The source ZIP is
 # never published.
 
-readonly EXPECTED_ARTIFACT_SHA256='60c91d1abfba16f97e22bf0f78b4aa846f9bd5b7455ab7d2f7155a3f5f9d1bc5'
-readonly DEFAULT_IDENTIFIER='LiteWalletJNI-2026-10-unified-v1.2.6-test'
+readonly EXPECTED_ARTIFACT_SHA256='55bd5979c01d424ce4b26428ac35b51aed2da2131ceb18c29443e0b46c18e018'
+readonly DEFAULT_IDENTIFIER='LiteWalletJNI-2026-11-qortal-v0.3.9-test'
 
 usage() {
 	cat <<'EOF'
@@ -149,7 +149,7 @@ validate_bundle() {
 	done
 
 	grep -Fqx "artifact-sha256: $EXPECTED_ARTIFACT_SHA256" "$bundle_directory/MANIFEST.txt" \
-		|| die 'Bundle manifest does not identify the pinned Stashi v1.2.6 Qortal JNI artifact.'
+		|| die 'Bundle manifest does not identify the pinned Qortal JNI 0.3.9 artifact (Stashi v1.2.6 base).'
 	grep -Fqx "bundle-kind: $expected_bundle_kind" "$bundle_directory/MANIFEST.txt" \
 		|| die "Bundle is not a $expected_bundle_kind bundle."
 

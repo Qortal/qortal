@@ -39,5 +39,6 @@ qdn-unified-wallet*
 /LiteWalletJNI-*-publish/
 /LiteWalletJNI-*-release/
 /pirate-unified-wallet-qortal-jni-artifacts-*.zip
+/stashi-qortal-jni-*.zip
 qortal.log
 *.gz

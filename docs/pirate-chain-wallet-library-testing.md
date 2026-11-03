@@ -15,6 +15,43 @@ There are two intentionally separate publication paths:
 The scripts reject a host-specific bundle in the release path and reject the
 cross-platform bundle in the test path.
 
+## One-command publication
+
+Run from the Core source checkout:
+
+```bash
+tools/prep-and-publish-arrr-wallet.sh
+```
+
+Choose the **inner combined JNI ZIP**, or the build directory containing that
+ZIP. For the current build it is
+`stashi-qortal-jni-0.3.9-deb736549e9b.zip`; the outer GitHub Actions download
+must first be extracted to get this file. Enter the registered QDN name and a
+new identifier, then the name owner's private key at the hidden signing prompt.
+The default identifier includes a timestamp and is marked as a test candidate.
+
+The helper verifies the pinned archive checksum, stages all five libraries,
+reads the local API key from `~/qortal/apikey.txt`, prepares a fee-paying
+`ARBITRARY_DATA` transaction, and runs the existing `sign` and `submit` commands
+back to back. Invoking this helper is a request to broadcast; it has no second
+broadcast prompt. It prints the immutable transaction signature and verification
+command. Wait for confirmation before selecting the signature and restarting
+Core. The `prepare-release` command used internally enforces the five-library
+bundle shape; this does not certify a test candidate for production.
+
+`QORTAL_API_URL` defaults to `http://127.0.0.1:12391`. `QORTAL_API_KEY` overrides
+file discovery; `QORTAL_API_KEY_FILE` selects another file. If neither supplies
+a key, the helper prompts privately. `QDN_FEE` defaults to `1000000` atomic
+units (0.01 QORT). `QDN_OUTPUT_DIR` changes the output parent directory;
+otherwise bundles and transaction files are retained in unique directories
+under `${XDG_STATE_HOME:-$HOME/.local/state}/qortal/arrr-publications`, including
+on failure. Private keys and API key values are not written to those files.
+
+Only the reviewed combined archive is accepted. A later native build requires
+reviewing its provenance/checksum and updating the staging and publishing pins;
+choosing an arbitrary ZIP does not bypass verification. The explicit staging,
+prepare, sign and submit steps below remain available for offline signing.
+
 ## Q-App address validation and spend readiness
 
 Q-Apps should validate ARRR recipients against the selected Core instead of
@@ -102,9 +139,10 @@ cooldowns are scoped to the failed account, and a queued status request timing
 out no longer triggers a server rotation for another account. Interrupted init
 retries stop promptly. Concurrent first requests also share one controller.
 
-These Java changes work with the existing v1.2.6 JNI bundle. They do not alter
-wallet storage, keys, the default QDN signature or the separate native trade
-funding patch below. Rebuild Core and restart the JVM to apply them.
+These Java concurrency changes work with the existing v1.2.6 JNI bundle and
+do not alter wallet storage or keys. The current branch also selects the
+patched JNI 0.3.9 bundle described below. Rebuild Core and restart the JVM to
+apply the changes.
 
 Verification includes three offline session regression tests and an opt-in
 test using the checksum-verified shipped Linux JNI library, isolated wallet
@@ -183,8 +221,9 @@ Local Linux x86_64 verification passed 40 wallet-service Qortal tests (including
 the three new regressions), five JNI tests, seven native P2SH tests and 11 Core
 trade/response tests, with no failures or skips. All three new regressions fail
 when the helper is switched back to the original raw-note loader. The patch
-also applies cleanly to the pristine pinned release. Funded settlement and the
-other native platforms remain untested for this patch.
+also applies cleanly to the pristine pinned release. The subsequent JNI 0.3.9
+workflow built and smoke-tested all five native platforms, as recorded below.
+Funded settlement remains a separate acceptance test.
 
 **The existing v1.2.6 QDN publication remains unpatched.** Updating Java alone,
 retrying the trade, changing servers or rescanning does not fix this missing
@@ -221,23 +260,59 @@ LiteWallet JNI implementation. It can test the immutable-QDN selector only.
 Do **not** use it with `pirateChainWalletUnified: true`, and do not treat a
 successful test of this bundle as a test of the current Pirate client.
 
-## Current Unified Wallet candidate
+## Current Unified Wallet candidate: JNI 0.3.9
 
-The staging and publication scripts select the Qortal JNI artifact in Stashi
-Wallet release `v1.2.6`. Pin the content hash as well as the release URL:
+**Qortal JNI 0.3.9 is based on upstream Stashi Wallet v1.2.6, plus the Qortal
+P2SH witness fix.** These are separate version schemes: `0.3.9` identifies our
+JNI adapter/binary artifact, while `v1.2.6` identifies the upstream wallet
+release. The patched artifact is built by the owner fork listed below.
+
+| Component | Version / source |
+| --- | --- |
+| Upstream wallet base | `PirateNetwork/Stashi-Wallet` `v1.2.6`, commit `dedf63381996c5770945d16a4afa63ec7e35a676` |
+| Patched native source | `crowetic/Stashi-Wallet`, commit `deb736549e9b6869f08284acc5a12ebef944120a` |
+| Qortal JNI artifact | `0.3.9` |
+
+The staging and publication scripts pin this exact archive:
 
 ```text
-release:  v1.2.6
-artifact: pirate-unified-wallet-qortal-jni-artifacts-v1.2.6.zip
-sha256:   60c91d1abfba16f97e22bf0f78b4aa846f9bd5b7455ab7d2f7155a3f5f9d1bc5
+artifact: stashi-qortal-jni-0.3.9-deb736549e9b.zip
+sha256:   55bd5979c01d424ce4b26428ac35b51aed2da2131ceb18c29443e0b46c18e018
+size:     333124923 bytes
+build:    https://github.com/crowetic/Stashi-Wallet/actions/runs/41546354523
 ```
 
-Core now defaults to the confirmed v1.2.6 publication recorded below. The
-staging and publication scripts also pin this release's archive checksum.
+That workflow passed 57 Rust and 13 Python tests, all five native builds and
+platform JNI smoke tests, Linux GLIBC checks, and combined-bundle integrity
+checks. Core's loopback two-account test also passed with the exact packaged
+Linux library. These tests do not replace funded trade acceptance. The broader
+inherited upstream CI reported Cargo Audit/Cargo Deny dependency findings;
+review/remediation is still outstanding. This is a testing candidate.
 
-### Confirmed v1.2.6 default publication
+### Confirmed JNI 0.3.9 default publication
 
-The cross-platform release was verified through the Core transaction API:
+The owner published the combined bundle. Its transaction was verified through
+the local Core API on 2 November 2026:
+
+```text
+name:       PirateChainWallet
+identifier: LiteWalletJNI-2026-11-qortal-v0.3.9-test
+signature:  aWGjhZHpPdo1gCpvriFKmAAMubSyoMvkuPxARFXao2y57hVjZw9E11nEj7Bd1P6WikXPsXzqtaqxD5zeWV8u86Y
+block:      2782663
+fee:        0.01000000 QORT
+size:       333125312 bytes (QDN publication; distinct from the source ZIP size)
+bundle:     Cross-platform (all five supported native libraries)
+```
+
+It is an `ARBITRARY_DATA` (service 100) `PUT` publication. This `pirate-changes`
+test build selects the exact transaction when `pirateChainWalletQdnSignature`
+is absent from settings, and enables `pirateChainWalletUnified` by default.
+An explicit old signature override still takes precedence: remove it or replace
+it with the signature above. Restart the JVM after selecting another bundle.
+
+### Historical v1.2.6 default publication
+
+The previous, unpatched cross-platform publication remains available:
 
 ```text
 name:       PirateChainWallet
@@ -249,12 +324,10 @@ size:       333259728 bytes
 bundle:     Cross-platform (all five supported native libraries)
 ```
 
-It is an `ARBITRARY_DATA` (service 100) `PUT` publication. Core selects this
-exact transaction when `pirateChainWalletQdnSignature` is absent from settings,
-and enables `pirateChainWalletUnified` by default. An existing explicit
-signature override still takes precedence; remove it or select the signature
-above when testing this default. Restart the JVM after selecting another
-bundle because a loaded native library cannot be replaced in a running JVM.
+It is an `ARBITRARY_DATA` (service 100) `PUT` publication. Select it explicitly
+only when testing or reverting to the prior native bundle; it retains the
+P2SH witness defect. Preserve the prior JAR/settings and wallet/trade backups.
+Do not delete wallet data when reverting a JAR or bundle selection.
 
 ### Historical v1.1.7 Linux x86_64 test publication
 
@@ -343,14 +416,14 @@ Validation of the combined source:
   that live HTLC discovery is verified. Recheck after daemon/index recovery.
 
 At the start of this review, the default QDN signature selected v1.1.9.
-The confirmed v1.2.6 publication above is now the default. v1.2.6 adds relevant
-sync-interruption, transaction-accounting, recovery-deadline, and transport
+The confirmed v1.2.6 publication above became the default at that review.
+v1.2.6 adds relevant sync-interruption, transaction-accounting, recovery-deadline, and transport
 fixes. Downloading or testing its ZIP alone does not update existing nodes;
 they must run a build selecting the new immutable signature, with any explicit
 old signature override removed or updated.
-Both staging and publication scripts now pin the v1.2.6 archive checksum.
-They reject older archives and manifests; retained v1.1.9 publications and
-wallet data remain available.
+The scripts pinned the v1.2.6 archive checksum at that review; they now pin
+the patched JNI 0.3.9 archive above. Retained publications and wallet data remain
+available.
 
 Before release, complete funded send, HTLC completion/refund, legacy migration,
 and recovery of wallet state that scanned the discarded chain against the
@@ -360,42 +433,40 @@ before those tests. Do not downgrade a node managing local-funding trades in
 state 80; retain its matching JAR, settings, and backups for recovery, as
 described in [local-wallet-signing.md](local-wallet-signing.md).
 
-## Stage the v1.2.6 candidate
+## Stage the JNI 0.3.9 candidate
 
-Download, verify, and extract the upstream v1.2.6 bundle into a new local
-staging directory:
+Download the combined artifact from the [verified fork workflow](https://github.com/crowetic/Stashi-Wallet/actions/runs/41546354523)
+and extract the outer GitHub artifact download to obtain the inner
+`stashi-qortal-jni-0.3.9-deb736549e9b.zip`. Verify it:
 
 ```bash
-curl -fL \
-  https://github.com/PirateNetwork/Stashi-Wallet/releases/download/v1.2.6/pirate-unified-wallet-qortal-jni-artifacts-v1.2.6.zip \
-  -o pirate-unified-wallet-qortal-jni-artifacts-v1.2.6.zip
-echo '60c91d1abfba16f97e22bf0f78b4aa846f9bd5b7455ab7d2f7155a3f5f9d1bc5  pirate-unified-wallet-qortal-jni-artifacts-v1.2.6.zip' | sha256sum --check
-unzip pirate-unified-wallet-qortal-jni-artifacts-v1.2.6.zip -d LiteWalletJNI-2026-10-unified-v1.2.6
+sha256sum --check <<'EOF'
+55bd5979c01d424ce4b26428ac35b51aed2da2131ceb18c29443e0b46c18e018  stashi-qortal-jni-0.3.9-deb736549e9b.zip
+EOF
 ```
 
-The extracted archive contains the five desktop native libraries, the upstream
-Qortal handoff, and its license. The stage script selects either one matching
-library for a test or all five for a final release. Do not add the old
-`coinparams.json`, `saplingoutput_base64`, or `saplingspend_base64` files: the
-Unified Wallet ignores them and Qortal no longer requires them in unified mode.
+The archive contains all five native libraries, Java wrapper, handoff, license,
+and build provenance/checksums. The stage script selects one matching library
+for a host-specific test or all five for a combined publication, and writes a
+QDN manifest recording the archive hash, JNI version, upstream base and commit.
+Do not add the old `coinparams.json`, `saplingoutput_base64`, or
+`saplingspend_base64` files; unified mode does not require them.
 
-For example, an x86_64 Linux test publisher can stage the small, host-specific
-publication reproducibly with:
+For example, stage the Linux x86_64 publication with:
 
 ```bash
 tools/stage-pirate-unified-qdn-bundle.sh \
-  pirate-unified-wallet-qortal-jni-artifacts-v1.2.6.zip \
-  LiteWalletJNI-2026-10-unified-v1.2.6-publish \
+  stashi-qortal-jni-0.3.9-deb736549e9b.zip \
+  LiteWalletJNI-2026-11-qortal-v0.3.9-publish \
   linux-x86_64
 ```
 
-The staging tool refuses an unexpected archive checksum or an existing output
-directory, and writes a manifest into the candidate publication.
+The staging tool refuses an unexpected checksum or an existing output directory.
 
 ## Test mode: publish a host-specific candidate
 
 Publish the staged directory to QDN as `ARBITRARY_DATA`, using a test name and a
-distinct identifier, for example `LiteWalletJNI-2026-10-unified-v1.2.6-test`. It must retain
+distinct identifier, for example `LiteWalletJNI-2026-11-qortal-v0.3.9-test`. It must retain
 the exact native filename for the test host:
 
 - Linux x86_64: `librust-linux-x86_64.so`
@@ -432,16 +503,16 @@ name (the API key is prompted for if it is not exported):
 ```bash
 tools/publish-pirate-unified-qdn.sh validate \
   test \
-  "$PWD/LiteWalletJNI-2026-10-unified-v1.2.6-publish"
+  "$PWD/LiteWalletJNI-2026-11-qortal-v0.3.9-publish"
 
 export QORTAL_API_URL='http://127.0.0.1:12391'
 export QORTAL_API_KEY='<local-node-api-key>'
 export QDN_FEE='1000000' # 0.01 QORT, in atomic units
 
 tools/publish-pirate-unified-qdn.sh prepare \
-  "$PWD/LiteWalletJNI-2026-10-unified-v1.2.6-publish" \
+  "$PWD/LiteWalletJNI-2026-11-qortal-v0.3.9-publish" \
   '<registered-test-name>' \
-  'LiteWalletJNI-2026-10-unified-v1.2.6-test'
+  'LiteWalletJNI-2026-11-qortal-v0.3.9-test'
 ```
 
 This creates `qdn-unified-wallet-to-sign.base58`; it has an explicit fee but
@@ -475,9 +546,9 @@ typing `PUBLISH` immediately before the broadcast:
 
 ```bash
 tools/publish-pirate-unified-qdn.sh publish \
-  "$PWD/LiteWalletJNI-2026-10-unified-v1.2.6-publish" \
+  "$PWD/LiteWalletJNI-2026-11-qortal-v0.3.9-publish" \
   '<registered-test-name>' \
-  'LiteWalletJNI-2026-10-unified-v1.2.6-test'
+  'LiteWalletJNI-2026-11-qortal-v0.3.9-test'
 ```
 
 The convenience command uses a timestamped output-file prefix, so a retry
@@ -488,20 +559,20 @@ or manually managed flow.
 
 ## Release mode: publish one cross-platform bundle
 
-Only use this after the pinned upstream archive and the Qortal integration have
+Only use this after the pinned fork archive and the Qortal integration have
 been reviewed, and after the relevant architecture tests are complete. The
 release bundle contains all five native libraries and therefore one immutable
 QDN signature serves every supported desktop platform. It is not the source
 ZIP, and it contains no legacy parameter files.
 
-Stage it into a new directory. The staging script verifies the upstream archive
+Stage it into a new directory. The staging script verifies the fork archive
 checksum, requires all five native filenames, and refuses to overwrite an
 existing directory:
 
 ```bash
 tools/stage-pirate-unified-qdn-bundle.sh \
-  pirate-unified-wallet-qortal-jni-artifacts-v1.2.6.zip \
-  LiteWalletJNI-2026-10-unified-v1.2.6-release \
+  stashi-qortal-jni-0.3.9-deb736549e9b.zip \
+  LiteWalletJNI-2026-11-qortal-v0.3.9-release \
   all
 ```
 
@@ -521,7 +592,7 @@ Run the offline preflight before involving a Qortal API key or private key:
 ```bash
 tools/publish-pirate-unified-qdn.sh validate \
   release \
-  "$PWD/LiteWalletJNI-2026-10-unified-v1.2.6-release"
+  "$PWD/LiteWalletJNI-2026-11-qortal-v0.3.9-release"
 ```
 
 Choose the registered production QDN name controlled by the release signer and
@@ -534,9 +605,9 @@ export QORTAL_API_URL='http://127.0.0.1:12391'
 export QDN_FEE='1000000' # 0.01 QORT in atomic units
 
 tools/publish-pirate-unified-qdn.sh prepare-release \
-  "$PWD/LiteWalletJNI-2026-10-unified-v1.2.6-release" \
+  "$PWD/LiteWalletJNI-2026-11-qortal-v0.3.9-release" \
   '<registered-production-name>' \
-  'LiteWalletJNI-2026-10-unified-v1.2.6'
+  'LiteWalletJNI-2026-11-qortal-v0.3.9'
 ```
 
 This writes `qdn-unified-wallet-release-to-sign.base58`. Sign it on the trusted
@@ -560,9 +631,9 @@ and requires the exact confirmation `PUBLISH RELEASE` before broadcasting:
 
 ```bash
 tools/publish-pirate-unified-qdn.sh release \
-  "$PWD/LiteWalletJNI-2026-10-unified-v1.2.6-release" \
+  "$PWD/LiteWalletJNI-2026-11-qortal-v0.3.9-release" \
   '<registered-production-name>' \
-  'LiteWalletJNI-2026-10-unified-v1.2.6'
+  'LiteWalletJNI-2026-11-qortal-v0.3.9'
 ```
 
 It writes a fresh timestamped set of unsigned, signed, and signature files on
@@ -581,7 +652,7 @@ request.
 Use a separate Qortal working directory and a separate `settings.json`; if it
 runs alongside a production node, use different API and P2P ports. At minimum,
 give it separate repository, data, temporary-data, and wallet paths. Add the
-confirmed v1.2.6 test transaction signature, replacing the placeholder before
+confirmed JNI 0.3.9 test transaction signature, replacing the placeholder before
 starting the node:
 
 ```json
@@ -594,7 +665,7 @@ starting the node:
   "listenPort": 12492,
   "listenDataPort": 12494,
   "uPnPEnabled": false,
-  "pirateChainWalletQdnSignature": "<confirmed-v1.2.6-test-signature>",
+  "pirateChainWalletQdnSignature": "<confirmed-jni-0.3.9-test-signature>",
   "pirateChainWalletUnified": true,
   "pirateChainWalletDebugLogging": true
 }
