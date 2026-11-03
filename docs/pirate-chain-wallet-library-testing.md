@@ -122,6 +122,43 @@ P2SH-A: …`. The send endpoint also preserves the native error message and
 distinguishes insufficient funds from other errors. These diagnostics do not
 establish the cause of a tester's failure without that tester's status or log.
 
+### Progressive transaction recipient recovery (3 November 2026)
+
+Core returns the locally scanned transaction history promptly. An outgoing row
+can initially contain `[UNKNOWN]` until the native wallet recovers its recipient
+from the full transaction using this wallet's outgoing viewing keys. Incoming
+senders marked `[PRIVATE]` are not revealed by this recipient lookup. Missing
+keys or unavailable raw transactions can leave a recipient unknown indefinitely;
+neither Core nor Q-Wallets substitutes a guessed address.
+
+Each Unified history request permits a background batch of at most four detail
+lookups. A failed lookup releases its claim, enters a cooldown, and allows the
+rest of the batch to proceed. Untried transactions take priority over failed
+transactions whose cooldown has elapsed, so a slow or unrecoverable newest row
+cannot continually starve older rows. Background work claims only the exact
+current wallet, yields immediately when its context is busy, and never selects
+an account that was active when an earlier request was made. Recovering details
+for a stored transaction does not require another live synchronization gate.
+
+Q-Wallets 1.3.10 continues checking incomplete outputs while ARRR is open. The
+first quiet refresh follows after five seconds; unchanged or failed responses
+back off to 15, 30, then at most 60 seconds between reads. A decrease in unknown
+outputs restores the five-second delay. Successful detail recovery is visible
+on the next read. Existing history stays visible after a failed quiet refresh,
+and manual refresh finishes independently of the background loop. Completion,
+leaving ARRR, switching accounts or restarting the wallet session ends that loop.
+Private incoming senders alone do not cause repeated history requests.
+
+This fix requires both the updated Core JAR and Q-Wallets client. It uses the
+existing native `get_transaction_details` action: no new JNI publication,
+database index build, blockchain re-index or wallet rescan is introduced. Stop
+Core, retain the previous JAR, install the testing JAR and restart it; publish
+or load the Q-Wallets testing ZIP through the usual QDN testing workflow. Check
+that recoverable outgoing rows gradually update and that leaving ARRR stops
+client refreshes. Recovery failures log a stage and exception type without
+logging wallet entropy or transaction details. To roll back, restore the previous
+JAR and client version. Publication and live wallet testing remain owner actions.
+
 ### Multiple Hub accounts on one Core (2 November 2026)
 
 Core uses one active JNI wallet context, with a separate encrypted storage

@@ -27,6 +27,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 public class PirateChain extends Bitcoiny {
 
@@ -410,7 +411,9 @@ public class PirateChain extends Bitcoiny {
 				if (cachedTransactions != null) {
 					cachedTransactions = recipientCache.overlay(cachedTransactions);
 					wallet.cacheTransactionHistory(cachedTransactions);
-					this.scheduleRecipientEnrichment(entropy58, myAddress, recipientCache, cachedTransactions);
+					if (wallet.usesPersistentUnifiedStorage()) {
+						this.scheduleRecipientEnrichment(wallet, recipientCache, cachedTransactions);
+					}
 					long completed = System.nanoTime();
 					LOGGER.info(
 							"Pirate wallet transaction history completed (count={}, source=cache, walletReadyMs={}, totalMs={})",
@@ -434,7 +437,7 @@ public class PirateChain extends Bitcoiny {
 				transactions = recipientCache.overlay(transactions);
 				wallet.cacheTransactionHistory(transactions);
 				if (wallet.usesPersistentUnifiedStorage()) {
-					this.scheduleRecipientEnrichment(entropy58, myAddress, recipientCache, transactions);
+					this.scheduleRecipientEnrichment(wallet, recipientCache, transactions);
 				}
 
 				long completed = System.nanoTime();
@@ -490,58 +493,30 @@ public class PirateChain extends Bitcoiny {
 		}
 	}
 
-	private void scheduleRecipientEnrichment(String entropy58, String walletAddress,
+	private void scheduleRecipientEnrichment(PirateWallet wallet,
 			RecipientEnrichmentCache recipientCache, List<SimpleTransaction> transactions) {
-		// The stock Unified JNI serializes all calls process-wide. Keep recovery off
-		// the response path and release the controller lock between a small number of
-		// detail calls so other wallets get a chance to run.
-		this.scheduleRecipientEnrichment(entropy58, walletAddress, recipientCache, transactions,
+		// Each history read permits one small batch. The UI can request another
+		// batch while incomplete rows remain; one failed lookup must not block it.
+		recipientCache.scheduleBatch(this.recipientEnrichmentScheduler, transactions,
+				txId -> this.enrichTransactionRecipient(wallet, txId, recipientCache),
 				RECIPIENT_ENRICHMENT_BATCH_SIZE, 1L, TimeUnit.SECONDS);
 	}
 
-	private void scheduleRecipientEnrichment(String entropy58, String walletAddress,
-			RecipientEnrichmentCache recipientCache, List<SimpleTransaction> transactions,
-			int remaining, long delay, TimeUnit delayUnit) {
-		if (remaining <= 0) {
-			return;
-		}
-		String txId = recipientCache.claimNext(transactions, System.currentTimeMillis());
-		if (txId == null) {
-			return;
-		}
-
-		try {
-			this.recipientEnrichmentScheduler.schedule(
-					() -> {
-						boolean completed = this.enrichTransactionRecipient(
-								entropy58, walletAddress, txId, recipientCache);
-						if (completed) {
-							this.scheduleRecipientEnrichment(entropy58, walletAddress, recipientCache,
-									transactions, remaining - 1, 250L, TimeUnit.MILLISECONDS);
-						}
-					},
-					delay, delayUnit);
-		} catch (RuntimeException e) {
-			recipientCache.failed(txId, 0L);
-			LOGGER.info("Unable to schedule Pirate recipient enrichment ({})", e.getClass().getSimpleName());
-		}
-	}
-
-	private boolean enrichTransactionRecipient(String entropy58, String expectedWalletAddress, String txId,
+	private void enrichTransactionRecipient(PirateWallet expectedWallet, String txId,
 			RecipientEnrichmentCache recipientCache) {
 		PirateChainWalletController walletController = PirateChainWalletController.getInstance();
 		boolean walletUseStarted = false;
+		String stage = "wallet-context";
 		try {
-			walletController.beginWalletUse(entropy58, false, false, true);
+			if (!walletController.tryBeginCurrentWalletUse(expectedWallet)) {
+				throw new ForeignBlockchainException("Pirate wallet context unavailable for background recovery");
+			}
 			walletUseStarted = true;
 			PirateWallet wallet = walletController.getCurrentWallet();
 			String walletAddress = wallet.getWalletAddress();
-			if (!Objects.equals(expectedWalletAddress, walletAddress)) {
-				throw new ForeignBlockchainException("Pirate wallet changed before recipient enrichment");
-			}
-			if (!wallet.isSynchronized()) {
-				throw new ForeignBlockchainException("Pirate wallet is not synchronized for recipient enrichment");
-			}
+			// Recovery reads a stored transaction; checking live chain height here
+			// adds network calls and can defer every row while normal sync catches up.
+			stage = "endpoint-pool";
 
 			JSONObject activeWallet = parseLitewalletResponse(
 					LiteWalletJni.invokeJson("{\"method\":\"get_active_wallet\"}", false),
@@ -552,6 +527,7 @@ public class PirateChain extends Bitcoiny {
 				wallet.setNativeEndpointPoolConfigured();
 			}
 
+			stage = "transaction-details";
 			JSONObject request = new JSONObject()
 					.put("method", "get_transaction_details")
 					.put("wallet_id", walletId)
@@ -559,6 +535,7 @@ public class PirateChain extends Bitcoiny {
 			JSONObject response = parseLitewalletResponse(
 					LiteWalletJni.invokeJson(request.toString(), false), "get_transaction_details");
 			JSONObject details = getUnifiedEnvelopeObject(response, "get_transaction_details");
+			stage = "recipient-decode";
 			PirateTransactionHistory.RecoveredRecipients recovered =
 					PirateTransactionHistory.parseTransactionDetails(
 							details, recipientCache.getInternalAddresses(), walletAddress);
@@ -572,11 +549,10 @@ public class PirateChain extends Bitcoiny {
 				wallet.cacheTransactionHistory(recipientCache.overlay(cachedTransactions));
 			}
 			LOGGER.info("Pirate transaction recipient enrichment completed for one transaction");
-			return true;
 		} catch (ForeignBlockchainException | RuntimeException e) {
 			recipientCache.failed(txId, System.currentTimeMillis() + RECIPIENT_ENRICHMENT_RETRY_MS);
-			LOGGER.info("Pirate transaction recipient enrichment deferred ({})", e.getClass().getSimpleName());
-			return false;
+			LOGGER.info("Pirate transaction recipient enrichment deferred (stage={}, errorType={})",
+					stage, e.getClass().getSimpleName());
 		} finally {
 			if (walletUseStarted) {
 				walletController.endWalletUse();
@@ -715,17 +691,51 @@ public class PirateChain extends Bitcoiny {
 			if (this.inFlightTxId != null || transactions == null) {
 				return null;
 			}
+			String selected = null;
+			long earliestRetry = Long.MAX_VALUE;
 			for (SimpleTransaction transaction : transactions) {
 				String txId = transaction == null ? null : transaction.getTxHash();
-				if (txId == null || this.recovered.containsKey(txId)
-						|| this.retryAfter.getOrDefault(txId, 0L) > now
+				long retryAt = this.retryAfter.getOrDefault(txId, 0L);
+				if (txId == null || this.recovered.containsKey(txId) || retryAt > now
 						|| !PirateTransactionHistory.hasUnresolvedRecipients(Collections.singletonList(transaction))) {
 					continue;
 				}
-				this.inFlightTxId = txId;
-				return txId;
+				// Untried rows win over failed rows, even if a slow native call has
+				// already outlasted its cooldown. Then retry failures oldest first.
+				if (selected == null || retryAt < earliestRetry) {
+					selected = txId;
+					earliestRetry = retryAt;
+				}
 			}
-			return null;
+			this.inFlightTxId = selected;
+			return selected;
+		}
+
+		void scheduleBatch(ScheduledExecutorService scheduler, List<SimpleTransaction> transactions,
+				Consumer<String> enrich, int remaining, long delay, TimeUnit delayUnit) {
+			if (remaining <= 0) {
+				return;
+			}
+			String txId = this.claimNext(transactions, System.currentTimeMillis());
+			if (txId == null) {
+				return;
+			}
+			try {
+				scheduler.schedule(() -> {
+					try {
+						enrich.accept(txId);
+					} catch (RuntimeException e) {
+						this.failed(txId, System.currentTimeMillis() + RECIPIENT_ENRICHMENT_RETRY_MS);
+						LOGGER.info("Pirate recipient enrichment task failed ({})", e.getClass().getSimpleName());
+					} finally {
+						this.scheduleBatch(scheduler, transactions, enrich, remaining - 1,
+								250L, TimeUnit.MILLISECONDS);
+					}
+				}, delay, delayUnit);
+			} catch (RuntimeException e) {
+				this.failed(txId, 0L);
+				LOGGER.info("Unable to schedule Pirate recipient enrichment ({})", e.getClass().getSimpleName());
+			}
 		}
 
 		synchronized void completed(String txId,

@@ -647,6 +647,22 @@ public class PirateChainWalletController extends Thread {
         }
     }
 
+    /**
+     * Claim the current native context for optional background reads only.
+     * Never wait behind an account request, initialize a wallet or select an old
+     * account. A successful caller must release the claim with endWalletUse().
+     */
+    public boolean tryBeginCurrentWalletUse(PirateWallet expectedWallet) {
+        if (expectedWallet == null || this.isSwitching() || !this.acquireWalletLock(0)) {
+            return false;
+        }
+        if (this.isSwitching() || this.currentWallet != expectedWallet) {
+            this.releaseWalletLockIfHeld();
+            return false;
+        }
+        return true;
+    }
+
     public void beginWalletUse(String entropy58, boolean isNullSeedWallet, boolean requireSync,
             boolean requireNotNullSeed)
             throws ForeignBlockchainException {
