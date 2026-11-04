@@ -9,6 +9,7 @@ import org.junit.Test;
 import org.qortal.api.model.crosschain.TradeBotCreateRequest;
 import org.qortal.crosschain.PirateChainAddress;
 import org.qortal.crosschain.PirateChainACCTv3;
+import org.qortal.crosschain.PirateChainRefundState;
 import org.qortal.crosschain.SupportedBlockchain;
 import org.qortal.data.crosschain.TradeBotData;
 import org.qortal.data.crosschain.CrossChainTradeData;
@@ -64,6 +65,22 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 			loadedField.setBoolean(null, previouslyLoaded);
 		if (exportPathField != null)
 			exportPathField.set(Settings.getInstance(), previousExportPath);
+	}
+
+	@Test
+	public void refundCheckpointFitsExistingDatabaseAndBackupField() throws Exception {
+		TradeBotData saved = createAndReload(IRONWOOD);
+		byte[] checkpoint = new PirateChainRefundState(4200000, 1700000000000L, "ab".repeat(32)).encode();
+		try (Repository repository = RepositoryManager.getRepository()) {
+			saved.setLastTransactionSignature(checkpoint);
+			repository.getCrossChainRepository().save(saved);
+			repository.saveChanges();
+		}
+		try (Repository repository = RepositoryManager.getRepository()) {
+			TradeBotData restored = repository.getCrossChainRepository().getTradeBotData(saved.getTradePrivateKey());
+			assertArrayEquals(checkpoint, restored.getLastTransactionSignature());
+			assertArrayEquals(checkpoint, TradeBotData.fromJson(restored.toJson()).getLastTransactionSignature());
+		}
 	}
 
 	@Test

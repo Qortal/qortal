@@ -191,6 +191,13 @@ public class TradeBotData {
 		return this.lastTransactionSignature;
 	}
 
+	@javax.xml.bind.annotation.XmlElement
+	@Schema(description = "For ARRR refund terminals, whether Core verified the foreign-chain confirmation depth")
+	public Boolean getForeignRefundConfirmed() {
+		if (!"PIRATECHAIN".equals(this.foreignBlockchain) || !"ALICE_REFUNDED".equals(this.tradeState)) return null;
+		return org.qortal.crosschain.PirateChainRefundState.isConfirmed(this.lastTransactionSignature);
+	}
+
 	public void setLastTransactionSignature(byte[] lastTransactionSignature) {
 		this.lastTransactionSignature = lastTransactionSignature;
 	}

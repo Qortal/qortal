@@ -20,6 +20,25 @@ import static org.junit.Assert.*;
 public class CrossChainPirateChainResourceTests {
 
 	@Test
+	public void tradeFeeQuoteSerializesAtomicAmountsWithoutAWallet() throws Exception {
+		org.qortal.test.common.Common.useDefaultSettings();
+		Server server = new Server(new InetSocketAddress("127.0.0.1", 0));
+		ServletContextHandler handler = new ServletContextHandler();
+		handler.setContextPath("/");
+		handler.addServlet(new ServletHolder(new ServletContainer(new ResourceConfig(CrossChainPirateChainResource.class))), "/*");
+		server.setHandler(handler);
+		try {
+			server.start();
+			int port = ((ServerConnector) server.getConnectors()[0]).getLocalPort();
+			var response = HttpClient.newHttpClient().send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+port+"/crosschain/arrr/tradefees")).GET().build(), HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, response.statusCode());
+			var json = new org.json.JSONObject(response.body());
+			assertEquals(10000, json.getLong("fundingFee")); assertEquals(10000, json.getLong("refundFee"));
+			assertTrue(response.headers().firstValue("Content-Type").orElse("").startsWith("application/json"));
+		} finally { server.stop(); server.join(); }
+	}
+
+	@Test
 	public void publicValidatorReturnsJsonBooleanLiteralsOverHttp() throws Exception {
 		Server server = new Server(new InetSocketAddress("127.0.0.1", 0));
 		ServletContextHandler handler = new ServletContextHandler();

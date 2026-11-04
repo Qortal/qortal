@@ -48,6 +48,15 @@ import java.util.List;
 @Tag(name = "Cross-Chain (Pirate Chain)")
 public class CrossChainPirateChainResource {
 
+	@GET
+	@Path("/tradefees")
+	@Produces(MediaType.APPLICATION_JSON)
+	@Operation(summary = "Returns ARRR trade funding and HTLC spend fees in atomic units")
+	public org.qortal.api.model.crosschain.PirateChainTradeFees getTradeFees() throws ForeignBlockchainException {
+		return new org.qortal.api.model.crosschain.PirateChainTradeFees(PirateChain.getFundingFee(),
+				PirateChain.getInstance().getP2shFee(null));
+	}
+
 	private static final Logger LOGGER = LogManager.getLogger(CrossChainPirateChainResource.class);
 
 	@Context

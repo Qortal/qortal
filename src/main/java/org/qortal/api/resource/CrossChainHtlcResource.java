@@ -14,6 +14,7 @@ import org.bitcoinj.script.Script;
 import org.qortal.api.*;
 import org.qortal.api.model.CrossChainBitcoinyHTLCStatus;
 import org.qortal.crosschain.*;
+import org.qortal.controller.tradebot.PirateChainACCTv3TradeBot;
 import org.qortal.crypto.Crypto;
 import org.qortal.data.at.ATData;
 import org.qortal.data.crosschain.CrossChainTradeData;
@@ -440,28 +441,21 @@ public class CrossChainHtlcResource {
 		Security.checkApiCallAllowed(request);
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
-			List<TradeBotData> allTradeBotData = repository.getCrossChainRepository().getAllTradeBotData();
-			TradeBotData tradeBotData = allTradeBotData.stream().filter(tradeBotDataItem -> tradeBotDataItem.getAtAddress().equals(atAddress)).findFirst().orElse(null);
-			if (tradeBotData == null)
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
-
-			if (tradeBotData.getForeignKey() == null)
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
-
-			ATData atData = repository.getATRepository().fromATAddress(atAddress);
-			if (atData == null)
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.ADDRESS_UNKNOWN);
-
-			ACCT acct = SupportedBlockchain.getAcctByCodeHash(atData.getCodeHash());
-			if (acct == null)
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
-
-			// Determine foreign blockchain receive address for refund
-			Bitcoiny bitcoiny = (Bitcoiny) acct.getBlockchain();
-			String receiveAddress = bitcoiny.getUnusedReceiveAddress(tradeBotData.getForeignKey());
-
-			return this.doRefundHtlc(atAddress, receiveAddress);
-
+			boolean found = false;
+			boolean broadcast = false;
+			ForeignBlockchainException failure = null;
+			for (TradeBotData trade : repository.getCrossChainRepository().getAllTradeBotData()) {
+				if (!Objects.equals(atAddress, trade.getAtAddress())) continue;
+				found = true;
+				try {
+					broadcast |= doRefundHtlc(repository, trade);
+				} catch (ForeignBlockchainException e) {
+					failure = e; // A bad attempt must not prevent recovery of another wallet's attempt.
+				}
+			}
+			if (!found) throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+			if (!broadcast && failure != null) throw failure;
+			return broadcast;
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		} catch (ForeignBlockchainException e) {
@@ -487,208 +481,51 @@ public class CrossChainHtlcResource {
 	@SecurityRequirement(name = "apiKey")
 	public boolean refundAllHtlc(@HeaderParam(Security.API_KEY_HEADER) String apiKey) {
 		Security.checkApiCallAllowed(request);
-		boolean success = false;
-
+		boolean broadcast = false;
 		try (final Repository repository = RepositoryManager.getRepository()) {
-			List<TradeBotData> allTradeBotData = repository.getCrossChainRepository().getAllTradeBotData();
-
-			for (TradeBotData tradeBotData : allTradeBotData) {
-				String atAddress = tradeBotData.getAtAddress();
-				if (atAddress == null) {
-					LOGGER.info("Missing AT address in tradebot data", atAddress);
-					continue;
-				}
-
-				String tradeState = tradeBotData.getState();
-				if (tradeState == null) {
-					LOGGER.info("Missing trade state for AT {}", atAddress);
-					continue;
-				}
-
-				if (tradeState.startsWith("BOB")) {
-					LOGGER.info("AT {} isn't refundable because it is a sell order", atAddress);
-					continue;
-				}
-
-				ATData atData = repository.getATRepository().fromATAddress(atAddress);
-				if (atData == null) {
-					LOGGER.info("Couldn't find AT with address {}", atAddress);
-					continue;
-				}
-
-				ACCT acct = SupportedBlockchain.getAcctByCodeHash(atData.getCodeHash());
-				if (acct == null) {
-					continue;
-				}
-
-				CrossChainTradeData crossChainTradeData = acct.populateTradeData(repository, atData);
-				if (crossChainTradeData == null) {
-					LOGGER.info("Couldn't find crosschain trade data for AT {}", atAddress);
-					continue;
-				}
-
-				if (tradeBotData.getForeignKey() == null) {
-					LOGGER.info("Couldn't find foreign key for AT {}", atAddress);
-					continue;
-				}
-
+			for (TradeBotData trade : repository.getCrossChainRepository().getAllTradeBotData()) {
 				try {
-					// Determine foreign blockchain receive address for refund
-					Bitcoiny bitcoiny = (Bitcoiny) acct.getBlockchain();
-					String receivingAddress = bitcoiny.getUnusedReceiveAddress(tradeBotData.getForeignKey());
-
-					LOGGER.info("Attempting to refund P2SH balance associated with AT {}...", atAddress);
-					boolean refunded = this.doRefundHtlc(atAddress, receivingAddress);
-					if (refunded) {
-						LOGGER.info("Refunded P2SH balance associated with AT {}", atAddress);
-						success = true;
-					}
-					else {
-						LOGGER.info("Couldn't refund P2SH balance associated with AT {}. Already redeemed?", atAddress);
-					}
-				} catch (ApiException | ForeignBlockchainException e) {
-					LOGGER.info("Couldn't refund P2SH balance associated with AT {}. Missing data?", atAddress);
+					broadcast |= doRefundHtlc(repository, trade);
+				} catch (ForeignBlockchainException | ApiException e) {
+					LOGGER.info("Unable to refund an HTLC attempt; continuing other attempts");
 				}
 			}
-
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}
-
-		return success;
+		return broadcast;
 	}
 
-
-	private boolean doRefundHtlc(String atAddress, String receiveAddress) {
-		try (final Repository repository = RepositoryManager.getRepository()) {
-
-			ATData atData = repository.getATRepository().fromATAddress(atAddress);
-			if (atData == null)
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.ADDRESS_UNKNOWN);
-
-			ACCT acct = SupportedBlockchain.getAcctByCodeHash(atData.getCodeHash());
-			if (acct == null)
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
-
-			CrossChainTradeData crossChainTradeData = acct.populateTradeData(repository, atData);
-			if (crossChainTradeData == null)
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
-
-			// If the AT is "finished" then it will have a zero balance
-			// In these cases we should avoid HTLC refunds if tbe QORT haven't been returned to the seller
-			if (atData.getIsFinished() && crossChainTradeData.mode != AcctMode.REFUNDED && crossChainTradeData.mode != AcctMode.CANCELLED) {
-				LOGGER.info(String.format("Skipping AT %s because the QORT has already been redeemed by the buyer", atAddress));
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
-			}
-
-			List<TradeBotData> allTradeBotData = repository.getCrossChainRepository().getAllTradeBotData();
-			List<TradeBotData> tradeBotDataList = allTradeBotData.stream().filter(tradeBotDataItem -> tradeBotDataItem.getAtAddress().equals(atAddress)).collect(Collectors.toList());
-			if (tradeBotDataList == null || tradeBotDataList.isEmpty())
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
-
-			// Loop through all matching entries for this AT address, as there might be more than one
-			for (TradeBotData tradeBotData : tradeBotDataList) {
-
-				if (tradeBotData == null)
-					throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
-
-				Bitcoiny bitcoiny = (Bitcoiny) acct.getBlockchain();
-				int lockTime = tradeBotData.getLockTimeA();
-
-				// We can't refund P2SH-A until lockTime-A has passed
-				if (NTP.getTime() <= lockTime * 1000L)
-					continue;
-
-				// We can't refund P2SH-A until median block time has passed lockTime-A (see BIP113)
-				int medianBlockTime = bitcoiny.getMedianBlockTime();
-				if (medianBlockTime <= lockTime)
-					continue;
-
-				// Fee for redeem/refund is subtracted from P2SH-A balance.
-				long feeTimestamp = calcFeeTimestamp(lockTime, crossChainTradeData.tradeTimeout);
-				long p2shFee = bitcoiny.getP2shFee(feeTimestamp);
-				long minimumAmountA = crossChainTradeData.expectedForeignAmount + p2shFee;
-
-				// Create redeem script based on destination chain
-				byte[] redeemScriptA;
-				String p2shAddressA;
-				BitcoinyHTLC.Status htlcStatusA;
-				if (Objects.equals(bitcoiny.getCurrencyCode(), "ARRR")) {
-					redeemScriptA = PirateChainHTLC.buildScript(tradeBotData.getTradeForeignPublicKey(), lockTime, crossChainTradeData.creatorForeignPKH, tradeBotData.getHashOfSecret());
-					p2shAddressA = PirateChain.getInstance().deriveP2shAddressBPrefix(redeemScriptA);
-					htlcStatusA = PirateChainHTLC.determineHtlcStatus(bitcoiny.getBlockchainProvider(), p2shAddressA, minimumAmountA);
-				} else {
-					redeemScriptA = BitcoinyHTLC.buildScript(tradeBotData.getTradeForeignPublicKeyHash(), lockTime, crossChainTradeData.creatorForeignPKH, tradeBotData.getHashOfSecret());
-					p2shAddressA = bitcoiny.deriveP2shAddress(redeemScriptA);
-					htlcStatusA = BitcoinyHTLC.determineHtlcStatus(bitcoiny.getBlockchainProvider(), p2shAddressA, minimumAmountA);
-				}
-				LOGGER.info(String.format("Refunding P2SH address: %s", p2shAddressA));
-
-				switch (htlcStatusA) {
-					case UNFUNDED:
-					case FUNDING_IN_PROGRESS:
-						// Still waiting for P2SH-A to be funded...
-						continue;
-
-					case REDEEM_IN_PROGRESS:
-					case REDEEMED:
-					case REFUND_IN_PROGRESS:
-					case REFUNDED:
-						// Too late!
-						continue;
-
-					case FUNDED: {
-						Coin refundAmount = Coin.valueOf(crossChainTradeData.expectedForeignAmount);
-
-						if (Objects.equals(bitcoiny.getCurrencyCode(), "ARRR")) {
-							// Pirate Chain custom integration
-
-							PirateChain pirateChain = PirateChain.getInstance();
-							String p2shAddressT3 = pirateChain.deriveP2shAddress(redeemScriptA);
-
-							// Get funding txid
-							String fundingTxidHex = PirateChainHTLC.getUnspentFundingTxid(pirateChain.getBlockchainProvider(), p2shAddressA, minimumAmountA);
-							if (fundingTxidHex == null) {
-								throw new ForeignBlockchainException("Missing funding txid when refunding P2SH");
-							}
-							String fundingTxid58 = Base58.encode(HashCode.fromString(fundingTxidHex).asBytes());
-
-							byte[] privateKey = tradeBotData.getTradePrivateKey();
-							String privateKey58 = Base58.encode(privateKey);
-							String redeemScript58 = Base58.encode(redeemScriptA);
-
-							String txid = PirateChain.getInstance().refundP2sh(p2shAddressT3,
-									receiveAddress, refundAmount.value, redeemScript58, fundingTxid58, lockTime, privateKey58);
-							LOGGER.info("Refund txid: {}", txid);
-						} else {
-							// ElectrumX coins
-
-							ECKey refundKey = ECKey.fromPrivate(tradeBotData.getTradePrivateKey());
-							List<TransactionOutput> fundingOutputs = bitcoiny.getUnspentOutputs(p2shAddressA, false);
-
-							// Validate the destination foreign blockchain address
-							Address receiving = Address.fromString(bitcoiny.getNetworkParameters(), receiveAddress);
-							if (receiving.getOutputScriptType() != Script.ScriptType.P2PKH)
-								throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
-
-							Transaction p2shRefundTransaction = BitcoinyHTLC.buildRefundTransaction(bitcoiny.getNetworkParameters(), refundAmount, refundKey,
-									fundingOutputs, redeemScriptA, lockTime, receiving.getHash());
-
-							bitcoiny.broadcastTransaction(p2shRefundTransaction);
-						}
-
-						return true;
-					}
-				}
-			}
-
-		} catch (DataException e) {
-			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
-		} catch (ForeignBlockchainException e) {
-			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_BALANCE_ISSUE, e);
-		}
-
-		return false;
+	private boolean doRefundHtlc(Repository repository, TradeBotData trade) throws DataException, ForeignBlockchainException {
+		if (trade.getAtAddress() == null || trade.getForeignKey() == null || trade.getLockTimeA() == null
+				|| trade.getState() == null || !trade.getState().startsWith("ALICE_")) return false;
+		ATData at = repository.getATRepository().fromATAddress(trade.getAtAddress());
+		if (at == null) return false;
+		ACCT acct = SupportedBlockchain.getAcctByCodeHash(at.getCodeHash());
+		if (acct == null) return false;
+		CrossChainTradeData data = acct.populateTradeData(repository, at);
+		if (data == null || !PirateChainACCTv3TradeBot.isRefundEligible(trade, at, data)) return false;
+		Bitcoiny bitcoiny = (Bitcoiny) acct.getBlockchain();
+		if (Objects.equals(bitcoiny.getCurrencyCode(), "ARRR"))
+			return PirateChainACCTv3TradeBot.getInstance().refund(repository, trade, at, data);
+		int lockTime = trade.getLockTimeA();
+		Long now = NTP.getTime();
+		if (now == null || now <= lockTime * 1000L || bitcoiny.getMedianBlockTime() <= lockTime) return false;
+		long minimum = data.expectedForeignAmount + bitcoiny.getP2shFee(calcFeeTimestamp(lockTime, data.tradeTimeout));
+		byte[] script = BitcoinyHTLC.buildScript(trade.getTradeForeignPublicKeyHash(), lockTime,
+				data.creatorForeignPKH, trade.getHashOfSecret());
+		String address = bitcoiny.deriveP2shAddress(script);
+		if (BitcoinyHTLC.determineHtlcStatus(bitcoiny.getBlockchainProvider(), address, minimum) != BitcoinyHTLC.Status.FUNDED)
+			return false;
+		// Destination and signing key must belong to the very same buyer record.
+		String destination = bitcoiny.getUnusedReceiveAddress(trade.getForeignKey());
+		Address receiving = Address.fromString(bitcoiny.getNetworkParameters(), destination);
+		if (receiving.getOutputScriptType() != Script.ScriptType.P2PKH)
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+		Transaction refund = BitcoinyHTLC.buildRefundTransaction(bitcoiny.getNetworkParameters(), Coin.valueOf(data.expectedForeignAmount),
+				ECKey.fromPrivate(trade.getTradePrivateKey()), bitcoiny.getUnspentOutputs(address, false), script, lockTime, receiving.getHash());
+		bitcoiny.broadcastTransaction(refund);
+		return true;
 	}
 
 	private long calcFeeTimestamp(int lockTimeA, int tradeTimeout) {

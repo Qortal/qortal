@@ -1,5 +1,47 @@
 # Publishing and testing a Pirate Unified Wallet QDN bundle
 
+## Trade refund test build
+
+The refund fixes on `pirate-changes` keep ARRR trades in `ALICE_REFUNDING_A` after
+broadcast and require three confirmations of the foreign-chain spend before
+marking `ALICE_REFUNDED`. The API exposes `foreignRefundConfirmed` so the client
+does not trust an unaudited legacy terminal state. Manual recovery uses the exact buyer record's wallet,
+allows a losing buyer to recover its independent funding after another buyer
+redeems the QORT offer, and continues other attempts when one wallet fails.
+
+A versioned 64-byte checkpoint uses the existing `lastTransactionSignature`
+field in ARRR refund states. It is committed before native broadcasting and
+survives database and trade-backup round trips. **No Core schema migration,
+index build or re-index is required.** Keep this field intact when restoring
+trade backups. Refunding entries cannot be deleted through tradebot cleanup.
+
+Known broadcasts are checked for expiry before replacement. An unknown response
+is quarantined for at least 30 ARRR blocks and ten minutes before a fresh status
+and UTXO check permits another attempt. A missing or shallow spend remains pending.
+Older broadcast-only `ALICE_REFUNDED` records are audited gradually, at most one
+per minute; still-funded entries return to recovery after the same quarantine.
+Unavailable legacy checks retry later. This avoids immediate rebroadcast on upgrade.
+
+The reader now handles CompactSize transparent fields and Overwinter/Sapling/
+V5/current Ironwood V6 prefixes. The public `/crosschain/arrr/tradefees` endpoint
+returns atomic `fundingFee` and `refundFee` values without initializing a wallet.
+Use the matching Q-Trade `0.0.3-test.1` test build to consume that quote and the
+corrected pending/refund states. The existing pinned JNI bundle is unchanged.
+
+Offline regression coverage includes maturity gates, three-confirmation settlement,
+lost acknowledgements and restarts, native txid byte order, expiry and UTXO checks,
+per-wallet manual recovery, losing bids, legacy-state auditing and batch isolation.
+Use an isolated checkout for Maven so an IDE compiler cannot replace packaged classes.
+
+For owner testing, retain the previous JAR and wallet/trade backups, stop Core,
+replace its JAR with the new refund test JAR, and restart. Verify the fee endpoint,
+normal ARRR trading and an expired/aborted buy's refund through confirmation. Restart
+while a refund is pending and verify it remains pending without immediate resubmission.
+Use normal Core-created funding: the current JNI still expects transparent funding
+output zero; nonstandard manually funded outputs need separate native support.
+No funded acceptance test is performed by the offline suite. To roll back, stop
+Core, restore the previous JAR and restart; retain wallet data and both app packages.
+
 Qortal selects the Pirate Chain LiteWallet JNI bundle with the
 `pirateChainWalletQdnSignature` setting. The value is an exact QDN transaction
 signature, rather than a mutable resource name, so a node always retrieves the
