@@ -1,5 +1,4 @@
 FROM maven:3.9-eclipse-temurin-17 AS builder
-FROM maven:3.9-eclipse-temurin-17 AS builder
 
 WORKDIR /work
 COPY ./ /work/
@@ -7,14 +6,11 @@ RUN mvn clean package
 
 ###
 FROM eclipse-temurin:17-jre
-FROM eclipse-temurin:17-jre
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /usr/local/qortal /qortal && \
-    chown -R 1000:100 /usr/local/qortal /qortal
 RUN mkdir -p /usr/local/qortal /qortal && \
     chown -R 1000:100 /usr/local/qortal /qortal
 
