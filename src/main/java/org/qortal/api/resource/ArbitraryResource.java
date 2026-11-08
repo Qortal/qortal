@@ -1159,6 +1159,129 @@ public class ArbitraryResource {
 	}
 
 
+	// Edit metadata of an existing resource without re-uploading its data
+
+	@POST
+	@Path("/{service}/{name}/metadata")
+	@Operation(
+			summary = "Build raw, unsigned, ARBITRARY transaction that updates the metadata of an existing APP or WEBSITE",
+			description = "Rebuilds the latest version of the resource from data held on this node and republishes it " +
+					"with the supplied metadata. Fields that are not supplied keep their existing values.",
+			responses = {
+					@ApiResponse(
+							description = "raw, unsigned, ARBITRARY transaction encoded in Base58",
+							content = @Content(
+									mediaType = MediaType.TEXT_PLAIN,
+									schema = @Schema(
+											type = "string"
+									)
+							)
+					)
+			}
+	)
+	@SecurityRequirement(name = "apiKey")
+	public String postMetadata(@HeaderParam(Security.API_KEY_HEADER) String apiKey,
+							   @PathParam("service") String serviceString,
+							   @PathParam("name") String name,
+							   @QueryParam("title") String title,
+							   @QueryParam("description") String description,
+							   @QueryParam("tags") List<String> tags,
+							   @QueryParam("category") Category category,
+							   @QueryParam("fee") Long fee) {
+		Security.checkApiCallAllowed(request);
+
+		return this.editMetadata(serviceString, name, null, title, description, tags, category, fee);
+	}
+
+	@POST
+	@Path("/{service}/{name}/{identifier}/metadata")
+	@Operation(
+			summary = "Build raw, unsigned, ARBITRARY transaction that updates the metadata of an existing APP or WEBSITE",
+			description = "Rebuilds the latest version of the resource from data held on this node and republishes it " +
+					"with the supplied metadata. Fields that are not supplied keep their existing values.",
+			responses = {
+					@ApiResponse(
+							description = "raw, unsigned, ARBITRARY transaction encoded in Base58",
+							content = @Content(
+									mediaType = MediaType.TEXT_PLAIN,
+									schema = @Schema(
+											type = "string"
+									)
+							)
+					)
+			}
+	)
+	@SecurityRequirement(name = "apiKey")
+	public String postMetadata(@HeaderParam(Security.API_KEY_HEADER) String apiKey,
+							   @PathParam("service") String serviceString,
+							   @PathParam("name") String name,
+							   @PathParam("identifier") String identifier,
+							   @QueryParam("title") String title,
+							   @QueryParam("description") String description,
+							   @QueryParam("tags") List<String> tags,
+							   @QueryParam("category") Category category,
+							   @QueryParam("fee") Long fee) {
+		Security.checkApiCallAllowed(request);
+
+		return this.editMetadata(serviceString, name, identifier, title, description, tags, category, fee);
+	}
+
+	private String editMetadata(String serviceString, String name, String identifier,
+								String title, String description, List<String> tags, Category category, Long fee) {
+		Service service;
+		try {
+			service = Service.valueOf(serviceString);
+		} catch (IllegalArgumentException e) {
+			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.INVALID_CRITERIA, "Invalid service");
+		}
+		if (service != Service.APP && service != Service.WEBSITE) {
+			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.INVALID_CRITERIA,
+					"Metadata editing is only supported for APP and WEBSITE resources");
+		}
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			NameData nameData = repository.getNameRepository().fromName(name);
+			if (nameData == null) {
+				String error = String.format("Name not registered: %s", name);
+				throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.INVALID_CRITERIA, error);
+			}
+
+			final Long now = NTP.getTime();
+			if (now == null) {
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.NO_TIME_SYNC);
+			}
+			final Long minLatestBlockTimestamp = now - (60 * 60 * 1000L);
+			if (!Controller.getInstance().isUpToDate(minLatestBlockTimestamp)) {
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.BLOCKCHAIN_NEEDS_SYNC);
+			}
+
+			AccountData accountData = repository.getAccountRepository().getAccount(nameData.getOwner());
+			if (accountData == null) {
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.ADDRESS_UNKNOWN);
+			}
+			String publicKey58 = Base58.encode(accountData.getPublicKey());
+
+			try {
+				ArbitraryDataMetadataEditor editor = new ArbitraryDataMetadataEditor(repository, publicKey58,
+						fee != null ? fee : 0L, nameData.getName(), service, identifier,
+						title, description, tags, category);
+				editor.build();
+
+				// Don't compute nonce - this is done by the client (or via POST /arbitrary/compute)
+				ArbitraryTransactionData transactionData = editor.getArbitraryTransactionData();
+				return Base58.encode(ArbitraryTransactionTransformer.toBytes(transactionData));
+
+			} catch (DataException | TransformationException | IllegalStateException e) {
+				LOGGER.info("Unable to edit metadata: {}", e.getMessage());
+				throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.INVALID_DATA, e.getMessage());
+			}
+
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+
 	@GET
 	@Path("/check/tmp")
 	@Produces(MediaType.TEXT_PLAIN)
