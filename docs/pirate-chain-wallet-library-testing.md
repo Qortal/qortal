@@ -11,9 +11,12 @@ redeems the QORT offer, and continues other attempts when one wallet fails.
 
 A versioned 64-byte checkpoint uses the existing `lastTransactionSignature`
 field in ARRR refund states. It is committed before native broadcasting and
-survives database and trade-backup round trips. **No Core schema migration,
-index build or re-index is required.** Keep this field intact when restoring
+survives database and trade-backup round trips. Keep this field intact when restoring
 trade backups. Refunding entries cannot be deleted through tradebot cleanup.
+Known native validation rejections clear the checkpoint and log the cause at ERROR;
+timeouts, lost responses and uncertain broadcast failures keep the quarantine.
+Bulk refund failures log the AT, attempt address and full exception at ERROR while
+preserving the endpoint's boolean response.
 
 Known broadcasts are checked for expiry before replacement. An unknown response
 is quarantined for at least 30 ARRR blocks and ten minutes before a fresh status
@@ -26,21 +29,47 @@ The reader now handles CompactSize transparent fields and Overwinter/Sapling/
 V5/current Ironwood V6 prefixes. The public `/crosschain/arrr/tradefees` endpoint
 returns atomic `fundingFee` and `refundFee` values without initializing a wallet.
 Use the matching Q-Trade `0.0.3-test.1` test build to consume that quote and the
-corrected pending/refund states. The existing pinned JNI bundle is unchanged.
+corrected pending/refund states.
+
+Funding now snapshots the actual redeem/refund reserve in `TradeBotData.fundingFee`
+and captures `fundingOutputIndex`. HSQLDB automatically upgrades schema 53 to 54
+with a nullable fee and output index default 0; no re-index is required. Database
+and JSON backups preserve both fields. The funding transaction fee is separate
+from the reserve inside the HTLC. Later changes to `feeRequired` do not change the
+stored reserve. Sellers and legacy buyers recover the reserve and index from the
+actual unspent funding output; where the original fee remains unavailable Core
+falls back to 10000 with a warning. Preserve these fields during backup restore.
+
+Output zero works with the existing JNI. Nonzero outputs require the companion
+Stashi native patch: `funding_output_index` is used for selection, signing and
+serialization. Core uses `redeemp2sh_indexed` for these outputs so older libraries
+reject explicitly instead of silently spending output zero. The default QDN pin
+has not changed; this source fix does not publish or select a new native bundle.
 
 Offline regression coverage includes maturity gates, three-confirmation settlement,
 lost acknowledgements and restarts, native txid byte order, expiry and UTXO checks,
 per-wallet manual recovery, losing bids, legacy-state auditing and batch isolation.
 Use an isolated checkout for Maven so an IDE compiler cannot replace packaged classes.
 
-For owner testing, retain the previous JAR and wallet/trade backups, stop Core,
-replace its JAR with the new refund test JAR, and restart. Verify the fee endpoint,
+For owner testing, build Core with `mvn -o -Dmaven.gitcommitid.nativegit=true -DskipJUnitTests=true package`.
+Before a rollout, stop Core and take a consistent copy of the complete configured
+repository directory, wallet directory, settings and trade backups; retain the previous
+JAR and native bundle signature. In the Stashi checkout, build for a Linux x86_64
+test host with `QORTAL_JNI_TARGET=x86_64-unknown-linux-gnu scripts/build-qortal-jni.sh`
+(or use its combined JNI workflow for all five platforms), then use the existing
+reviewed staging/publication procedure below to obtain and select a new immutable `pirateChainWalletQdnSignature` before
+testing nonzero outputs. The staging pins require a separate reviewed update for
+that new artifact; the existing helper still accepts only the previously reviewed
+bundle. Replace the JAR and restart using the owner's existing lifecycle. Verify the fee endpoint,
 normal ARRR trading and an expired/aborted buy's refund through confirmation. Restart
 while a refund is pending and verify it remains pending without immediate resubmission.
-Use normal Core-created funding: the current JNI still expects transparent funding
-output zero; nonstandard manually funded outputs need separate native support.
-No funded acceptance test is performed by the offline suite. To roll back, stop
-Core, restore the previous JAR and restart; retain wallet data and both app packages.
+Check a reserve of 20000 and a nonzero funding output through refund and redemption
+with the patched native bundle, and verify checkpoint clearing for a known native
+rejection. No funded acceptance test is performed by the offline suite. To roll
+back, stop Core and restore the previous JAR, native signature and consistent
+pre-upgrade repository copy together (schema 54 contains new trade metadata).
+Retain the post-upgrade database and wallet data for reconciliation; never discard
+wallet state or roll back independently of transactions broadcast during testing.
 
 Qortal selects the Pirate Chain LiteWallet JNI bundle with the
 `pirateChainWalletQdnSignature` setting. The value is an exact QDN transaction

@@ -236,6 +236,12 @@ public class PirateChainHTLC {
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	public static String getUnspentFundingTxid(BitcoinyBlockchainProvider blockchain, String p2shAddress, long minimumAmount) throws ForeignBlockchainException {
+		UnspentOutput funding = getUnspentFundingOutput(blockchain, p2shAddress, minimumAmount);
+		return funding == null ? null : HashCode.fromBytes(funding.hash).toString();
+	}
+
+	/** Return the complete outpoint and value, retaining the funding output index. */
+	public static UnspentOutput getUnspentFundingOutput(BitcoinyBlockchainProvider blockchain, String p2shAddress, long minimumAmount) throws ForeignBlockchainException {
 		byte[] ourScriptPubKey = addressToScriptPubKey(p2shAddress);
 
 		// Note: we can't include unconfirmed transactions here because the Pirate light wallet server requires a block range
@@ -252,12 +258,32 @@ public class PirateChainHTLC {
 				continue;
 			}
 
-			return HashCode.fromBytes(unspentOutput.hash).toString();
+			return unspentOutput;
 		}
 
 
 		// No valid unspent outputs, so must be already spent
 		return null;
+	}
+
+	/** Locate the HTLC output immediately after funding, including nonzero vout. */
+	public static UnspentOutput getFundingOutput(BitcoinyBlockchainProvider blockchain, String txid, String address, long minimumAmount) throws ForeignBlockchainException {
+		// Funding ACKs use display-order txids; lightwalletd expects internal byte order.
+		byte[] hash = HashCode.fromString(txid).asBytes();
+		com.google.common.primitives.Bytes.reverse(hash);
+		BitcoinyTransaction transaction;
+		try {
+			transaction = PirateChainTransaction.read(blockchain.getRawTransaction(hash)).transaction;
+		} catch (org.qortal.transform.TransformationException e) {
+			throw new ForeignBlockchainException("Unable to parse ARRR funding transaction: " + e.getMessage());
+		}
+		String script = HashCode.fromBytes(addressToScriptPubKey(address)).toString();
+		for (int index = 0; index < transaction.outputs.size(); ++index) {
+			BitcoinyTransaction.Output output = transaction.outputs.get(index);
+			if (script.equals(output.scriptPubKey) && output.value >= minimumAmount)
+				return new UnspentOutput(hash, index, 0, output.value);
+		}
+		throw new ForeignBlockchainException("Funding transaction has no matching ARRR HTLC output");
 	}
 
 	/**
@@ -389,7 +415,8 @@ public class PirateChainHTLC {
 		byte[] scriptPubKey = new byte[1 + 1 + 20 + 1];
 		scriptPubKey[0x00] = (byte) 0xa9; /* OP_HASH160 */
 		scriptPubKey[0x01] = (byte) 0x14; /* PUSH 0x14 bytes */
-		System.arraycopy(p2shAddressBytes, 1, scriptPubKey, 2, 0x14);
+		// Both the one-byte b prefix and two-byte t3 prefix precede the same hash.
+		System.arraycopy(p2shAddressBytes, p2shAddressBytes.length - 24, scriptPubKey, 2, 0x14);
 		scriptPubKey[0x16] = (byte) 0x87; /* OP_EQUAL */
 
 		return scriptPubKey;
@@ -399,7 +426,7 @@ public class PirateChainHTLC {
 		// We want the HASH160 part of the P2SH address
 		byte[] p2shAddressBytes = Base58.decode(p2shAddress);
 
-		return Arrays.copyOfRange(p2shAddressBytes, 1, 1 + 20);
+		return Arrays.copyOfRange(p2shAddressBytes, p2shAddressBytes.length - 24, p2shAddressBytes.length - 4);
 	}
 
 }

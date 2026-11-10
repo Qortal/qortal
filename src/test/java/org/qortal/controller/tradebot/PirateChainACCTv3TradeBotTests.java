@@ -27,6 +27,13 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.Assert.*;
+import static org.mockito.Mockito.*;
+import org.mockito.MockedStatic;
+import org.qortal.crosschain.PirateChain;
+import org.qortal.crosschain.PirateChainHTLC;
+import org.qortal.crosschain.UnspentOutput;
+import org.qortal.repository.MessageRepository;
+import org.qortal.utils.NTP;
 
 /** Offline trade creation plus real HSQLDB and backup round trips. No native spending. */
 public class PirateChainACCTv3TradeBotTests extends Common {
@@ -80,6 +87,78 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 			TradeBotData restored = repository.getCrossChainRepository().getTradeBotData(saved.getTradePrivateKey());
 			assertArrayEquals(checkpoint, restored.getLastTransactionSignature());
 			assertArrayEquals(checkpoint, TradeBotData.fromJson(restored.toJson()).getLastTransactionSignature());
+		}
+	}
+
+	@Test
+	public void fundingCapturesActualReserveAndOutputIndex() throws Exception {
+		PirateChain pirate = mock(PirateChain.class);
+		when(pirate.getP2shFee(any())).thenReturn(20000L);
+		when(pirate.deriveP2shAddress(any())).thenReturn("funding-address");
+		when(pirate.fundP2SH(anyString(), anyString(), anyLong(), anyString())).thenReturn("11".repeat(32));
+		try (Repository repository = RepositoryManager.getRepository();
+			 MockedStatic<PirateChain> pirates = mockStatic(PirateChain.class);
+			 MockedStatic<PirateChainHTLC> htlc = mockStatic(PirateChainHTLC.class, CALLS_REAL_METHODS);
+			 MockedStatic<NTP> clock = mockStatic(NTP.class)) {
+			pirates.when(PirateChain::getInstance).thenReturn(pirate);
+			clock.when(NTP::getTime).thenReturn(1000000L);
+			htlc.when(() -> PirateChainHTLC.getFundingOutput(any(), anyString(), anyString(), anyLong()))
+					.thenReturn(new UnspentOutput(new byte[32], 2, 0, 100020000L));
+			Repository spy = spy(repository);
+			MessageRepository messages = mock(MessageRepository.class);
+			doReturn(messages).when(spy).getMessageRepository();
+			when(messages.exists(any(), any(), any())).thenReturn(true); // No PoW worker is needed for this fixture.
+			CrossChainTradeData data = new CrossChainTradeData();
+			data.qortalAtAddress = Common.getTestAccount(repository, "bob").getAddress();
+			data.creatorForeignPKH = new byte[33]; data.tradeTimeout = 60;
+			data.qortAmount = 100000000L; data.expectedForeignAmount = 100000000L;
+			assertEquals(AcctTradeBot.ResponseResult.OK, PirateChainACCTv3TradeBot.getInstance().startResponse(spy, null,
+					PirateChainACCTv3.getInstance(), data, Base58.encode(new byte[32]), Common.getTestAccount(repository, "alice").getAddress()));
+			TradeBotData saved = repository.getCrossChainRepository().getAllTradeBotData().get(0);
+			assertEquals(Long.valueOf(20000L), saved.getFundingFee()); assertEquals(2, saved.getFundingOutputIndex());
+			verify(pirate).fundP2SH(anyString(), anyString(), eq(100020000L), anyString());
+			JSONObject backup = new JSONObject(Files.readString(backupDirectory.resolve("TradeBotStates.json")));
+			assertEquals(20000L, backup.getJSONArray("data").getJSONObject(0).getLong("fundingFee"));
+		}
+	}
+
+	@Test
+	public void fundingMetadataSurvivesRepositoryAndBackupRoundTrips() throws Exception {
+		TradeBotData saved = createAndReload(SAPLING);
+		assertNull(saved.getFundingFee());
+		assertEquals(0, saved.getFundingOutputIndex());
+		JSONObject legacy = saved.toJson(); legacy.remove("fundingFee"); legacy.remove("fundingOutputIndex");
+		TradeBotData legacyRestored = TradeBotData.fromJson(legacy);
+		assertNull(legacyRestored.getFundingFee());
+		assertEquals(0, legacyRestored.getFundingOutputIndex());
+		saved.setFundingFee(20000L); saved.setFundingOutputIndex(2);
+		try (Repository repository = RepositoryManager.getRepository()) {
+			repository.getCrossChainRepository().save(saved); repository.saveChanges();
+		}
+		try (Repository repository = RepositoryManager.getRepository()) {
+			TradeBotData restored = repository.getCrossChainRepository().getTradeBotData(saved.getTradePrivateKey());
+			assertEquals(Long.valueOf(20000), restored.getFundingFee());
+			assertEquals(2, restored.getFundingOutputIndex());
+			assertEquals(2, repository.getCrossChainRepository().getAllTradeBotData().get(0).getFundingOutputIndex());
+			TradeBotData backup = TradeBotData.fromJson(restored.toJson());
+			assertEquals(Long.valueOf(20000), backup.getFundingFee()); assertEquals(2, backup.getFundingOutputIndex());
+		}
+	}
+
+	@Test
+	public void migrationPreservesExistingRowsWithUnknownFeeAndOutputZero() throws Exception {
+		try (java.sql.Connection connection = java.sql.DriverManager.getConnection("jdbc:hsqldb:mem:arrr-migration-" + System.nanoTime(), "SA", "")) {
+			try (java.sql.Statement statement = connection.createStatement()) {
+				statement.execute("CREATE TABLE DatabaseInfo (version INT)"); statement.execute("INSERT INTO DatabaseInfo VALUES (53)");
+				statement.execute("CREATE TABLE TradeBotStates (trade_private_key VARBINARY(32))");
+				statement.execute("INSERT INTO TradeBotStates VALUES (X'01')");
+				org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.updateDatabase(connection);
+				try (java.sql.ResultSet row = statement.executeQuery("SELECT funding_fee, funding_output_index FROM TradeBotStates")) {
+					assertTrue(row.next()); assertNull(row.getObject(1)); assertEquals(0, row.getInt(2));
+				}
+				assertEquals(54, org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection));
+				statement.execute("SHUTDOWN");
+			}
 		}
 	}
 

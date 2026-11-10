@@ -59,6 +59,10 @@ public class TradeBotData {
 	private byte[] lastTransactionSignature;
 	private Integer lockTimeA;
 
+	// Null means the original reserve is unknown (legacy trades).
+	private Long fundingFee;
+	private int fundingOutputIndex = 0;
+
 	// Could be Bitcoin or Qortal...
 	private byte[] receivingAccountInfo;
 
@@ -210,6 +214,24 @@ public class TradeBotData {
 		this.lockTimeA = lockTimeA;
 	}
 
+	public Long getFundingFee() {
+		return this.fundingFee;
+	}
+
+	public void setFundingFee(Long fundingFee) {
+		if (fundingFee != null && fundingFee < 0) throw new IllegalArgumentException("Negative funding fee");
+		this.fundingFee = fundingFee;
+	}
+
+	public int getFundingOutputIndex() {
+		return this.fundingOutputIndex;
+	}
+
+	public void setFundingOutputIndex(int fundingOutputIndex) {
+		if (fundingOutputIndex < 0) throw new IllegalArgumentException("Negative funding output index");
+		this.fundingOutputIndex = fundingOutputIndex;
+	}
+
 	public byte[] getReceivingAccountInfo() {
 		return this.receivingAccountInfo;
 	}
@@ -237,11 +259,13 @@ public class TradeBotData {
 		if (this.getLastTransactionSignature() != null) jsonObject.put("lastTransactionSignature", Base58.encode(this.getLastTransactionSignature()));
         jsonObject.put("lockTimeA", this.getLockTimeA());
 		if (this.getReceivingAccountInfo() != null) jsonObject.put("receivingAccountInfo", Base58.encode(this.getReceivingAccountInfo()));
+		jsonObject.put("fundingFee", this.fundingFee);
+		jsonObject.put("fundingOutputIndex", this.fundingOutputIndex);
 		return jsonObject;
 	}
 
 	public static TradeBotData fromJson(JSONObject json) {
-		return new TradeBotData(
+		TradeBotData trade = new TradeBotData(
 				json.isNull("tradePrivateKey") ? null : Base58.decode(json.getString("tradePrivateKey")),
 				json.isNull("acctName") ? null : json.getString("acctName"),
 				json.isNull("tradeState") ? null : json.getString("tradeState"),
@@ -264,6 +288,9 @@ public class TradeBotData {
 				json.isNull("lockTimeA") ? null : json.getInt("lockTimeA"),
 				json.isNull("receivingAccountInfo") ? null : Base58.decode(json.getString("receivingAccountInfo"))
 		);
+		trade.setFundingFee(json.isNull("fundingFee") ? null : json.getLong("fundingFee"));
+		trade.setFundingOutputIndex(json.optInt("fundingOutputIndex", 0));
+		return trade;
 	}
 
 	// Mostly for debugging

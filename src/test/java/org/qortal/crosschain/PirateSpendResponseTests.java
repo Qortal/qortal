@@ -95,6 +95,35 @@ public class PirateSpendResponseTests extends Common {
 		}
 	}
 
+	@Test
+	public void p2shValidationRejectionsAreDistinctFromUncertainBroadcasts() throws Exception {
+		for (String message : new String[] {
+				"Transaction build error: Funding output value exceeds outputs plus fee; refusing to burn the remainder",
+				"Insufficient funds: Funding output value is less than outputs plus fee",
+				"Invalid signature", "Funding transaction output 2 does not match the P2SH input address",
+				"Unsupported Qortal wallet command: redeemp2sh_indexed" })
+			assertTrue(failure(new JSONObject().put("error", message).toString(), "redeemp2sh")
+					instanceof ForeignBlockchainException.TransactionRejectedException);
+		for (String message : new String[] {"timeout", "Broadcast failed: server unavailable", "unknown error"})
+			assertFalse(failure(new JSONObject().put("error", message).toString(), "redeemp2sh")
+					instanceof ForeignBlockchainException.TransactionRejectedException);
+		assertFalse(failure("{}", "redeemp2sh") instanceof ForeignBlockchainException.TransactionRejectedException);
+	}
+
+	@Test
+	public void refundAndRedeemJniRequestsUseOriginalFeeAndOutputIndex() {
+		for (int locktime : new int[] {0, 123}) {
+			String secret = locktime == 0 ? "secret" : "";
+			JSONObject request = PirateChain.buildP2shSpend("input", "recipient", 100000000L,
+					"script", "txid", locktime, secret, "key", 20000L, 2);
+			assertEquals(20000L, request.getLong("fee"));
+			assertEquals(2, request.getInt("funding_output_index"));
+			assertEquals(100000000L, request.getJSONArray("output").getJSONObject(0).getLong("amount"));
+			assertEquals(locktime, request.getInt("locktime"));
+			assertEquals(secret, request.getString("secret"));
+		}
+	}
+
 	private static ForeignBlockchainException failure(String response, String command) throws Exception {
 		try {
 			PirateChain.parseSpendResponse(response, command);

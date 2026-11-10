@@ -891,6 +891,8 @@ public class PirateChain extends Bitcoiny {
 			String message = (String) error;
 			// The JNI compatibility commands return plain strings rather than typed errors.
 			// Only the native insufficient-funds result establishes a balance issue.
+			if (command.startsWith("redeemp2sh") && isDeterministicP2shRejection(message))
+				throw new ForeignBlockchainException.TransactionRejectedException(message);
 			if (message.startsWith("Insufficient funds:"))
 				throw new ForeignBlockchainException.InsufficientFundsException(message);
 			throw new ForeignBlockchainException(message);
@@ -901,8 +903,33 @@ public class PirateChain extends Bitcoiny {
 		throw new ForeignBlockchainException("Pirate " + command + " returned an invalid spend result");
 	}
 
+	private static boolean isDeterministicP2shRejection(String message) {
+		// Native errors are strings. Only known validation failures prove that nothing was sent.
+		// Unknown errors, transport errors and broadcast failures retain the retry quarantine.
+		return message.startsWith("Transaction build error:")
+				|| message.startsWith("Transaction signing error:")
+				|| message.startsWith("Invalid amount:")
+				|| message.contains("Funding output value is less than outputs plus fee")
+				|| message.contains("Funding output value exceeds outputs plus fee")
+				|| message.startsWith("Funding transaction is missing transparent output ")
+				|| message.startsWith("Funding transaction output ")
+				|| message.startsWith("Redeem script does not match the P2SH input address")
+				|| message.startsWith("Invalid signature")
+				|| message.startsWith("Invalid privkey")
+				|| message.startsWith("Invalid redeemp2sh JSON:")
+				|| message.startsWith("Unsupported Qortal wallet command: redeemp2sh_indexed");
+	}
+
 	public String redeemP2sh(String p2shAddress, String receivingAddress, long amount, String redeemScript58,
 			String fundingTxid58, String secret58, String privateKey58) throws ForeignBlockchainException {
+		LOGGER.warn("ARRR redeemP2sh without funding metadata; falling back to fee 10000 and output 0");
+		return redeemP2sh(p2shAddress, receivingAddress, amount, redeemScript58, fundingTxid58, secret58, privateKey58, MAINNET_FEE, 0);
+	}
+
+	public String redeemP2sh(String p2shAddress, String receivingAddress, long amount, String redeemScript58,
+			String fundingTxid58, String secret58, String privateKey58, long fundingFee, int fundingOutputIndex) throws ForeignBlockchainException {
+		if (fundingFee < 0 || fundingOutputIndex < 0)
+			throw new ForeignBlockchainException.TransactionRejectedException("Invalid ARRR funding fee or output index");
 
 		// Use null seed wallet since we may not have the entropy bytes for a real
 		// wallet's seed
@@ -911,32 +938,16 @@ public class PirateChain extends Bitcoiny {
 		try {
 			walletController.getCurrentWallet().unlock();
 
-			// Build spend
-			JSONObject txn = new JSONObject();
-			txn.put("input", p2shAddress);
-			txn.put("fee", MAINNET_FEE);
-
-			JSONObject output = new JSONObject();
-			output.put("address", receivingAddress);
-			output.put("amount", amount);
-			// output.put("memo", ""); // Maybe useful in future to include trade details?
-
-			JSONArray outputs = new JSONArray();
-			outputs.put(output);
-			txn.put("output", outputs);
-
-			txn.put("script", redeemScript58);
-			txn.put("txid", fundingTxid58);
-			txn.put("locktime", 0); // Must be 0 when redeeming
-			txn.put("secret", secret58);
-			txn.put("privkey", privateKey58);
-
-			String txnString = txn.toString();
+			String txnString = buildP2shSpend(p2shAddress, receivingAddress, amount, redeemScript58,
+					fundingTxid58, 0, secret58, privateKey58, fundingFee, fundingOutputIndex).toString();
 
 			// Redeem the P2SH
 			walletController.getCurrentWallet().clearTransactionHistoryCache();
-			String response = LiteWalletJni.execute("redeemp2sh", txnString);
-			return parseSpendResponse(response, "redeemp2sh");
+			// Older JNI ignores unknown JSON fields. Use a distinct command for nonzero
+			// indices so it cannot silently sign a spend of output zero.
+			String command = fundingOutputIndex == 0 ? "redeemp2sh" : "redeemp2sh_indexed";
+			String response = LiteWalletJni.execute(command, txnString);
+			return parseSpendResponse(response, command);
 		} finally {
 			walletController.endWalletUse();
 		}
@@ -944,6 +955,14 @@ public class PirateChain extends Bitcoiny {
 
 	public String refundP2sh(String p2shAddress, String receivingAddress, long amount, String redeemScript58,
 			String fundingTxid58, int lockTime, String privateKey58) throws ForeignBlockchainException {
+		LOGGER.warn("ARRR refundP2sh without funding metadata; falling back to fee 10000 and output 0");
+		return refundP2sh(p2shAddress, receivingAddress, amount, redeemScript58, fundingTxid58, lockTime, privateKey58, MAINNET_FEE, 0);
+	}
+
+	public String refundP2sh(String p2shAddress, String receivingAddress, long amount, String redeemScript58,
+			String fundingTxid58, int lockTime, String privateKey58, long fundingFee, int fundingOutputIndex) throws ForeignBlockchainException {
+		if (fundingFee < 0 || fundingOutputIndex < 0)
+			throw new ForeignBlockchainException.TransactionRejectedException("Invalid ARRR funding fee or output index");
 
 		// Use null seed wallet since we may not have the entropy bytes for a real
 		// wallet's seed
@@ -952,35 +971,29 @@ public class PirateChain extends Bitcoiny {
 		try {
 			walletController.getCurrentWallet().unlock();
 
-			// Build spend
-			JSONObject txn = new JSONObject();
-			txn.put("input", p2shAddress);
-			txn.put("fee", MAINNET_FEE);
-
-			JSONObject output = new JSONObject();
-			output.put("address", receivingAddress);
-			output.put("amount", amount);
-			// output.put("memo", ""); // Maybe useful in future to include trade details?
-
-			JSONArray outputs = new JSONArray();
-			outputs.put(output);
-			txn.put("output", outputs);
-
-			txn.put("script", redeemScript58);
-			txn.put("txid", fundingTxid58);
-			txn.put("locktime", lockTime);
-			txn.put("secret", ""); // Must be blank when refunding
-			txn.put("privkey", privateKey58);
-
-			String txnString = txn.toString();
+			String txnString = buildP2shSpend(p2shAddress, receivingAddress, amount, redeemScript58,
+					fundingTxid58, lockTime, "", privateKey58, fundingFee, fundingOutputIndex).toString();
 
 			// Redeem the P2SH
 			walletController.getCurrentWallet().clearTransactionHistoryCache();
-			String response = LiteWalletJni.execute("redeemp2sh", txnString);
-			return parseSpendResponse(response, "redeemp2sh");
+			// Older JNI ignores unknown JSON fields. Use a distinct command for nonzero
+			// indices so it cannot silently sign a spend of output zero.
+			String command = fundingOutputIndex == 0 ? "redeemp2sh" : "redeemp2sh_indexed";
+			String response = LiteWalletJni.execute(command, txnString);
+			return parseSpendResponse(response, command);
 		} finally {
 			walletController.endWalletUse();
 		}
+	}
+
+	/** Shared JNI request contract for redeem and refund; values are in atomic ARRR units. */
+	static JSONObject buildP2shSpend(String input, String recipient, long amount, String script,
+			String txid, int locktime, String secret, String privateKey, long fundingFee, int fundingOutputIndex) {
+		return new JSONObject().put("input", input).put("fee", fundingFee)
+				.put("funding_output_index", fundingOutputIndex)
+				.put("output", new JSONArray().put(new JSONObject().put("address", recipient).put("amount", amount)))
+				.put("script", script).put("txid", txid).put("locktime", locktime)
+				.put("secret", secret).put("privkey", privateKey);
 	}
 
 	private static JSONObject parseLitewalletResponse(String response, String command) throws ForeignBlockchainException {

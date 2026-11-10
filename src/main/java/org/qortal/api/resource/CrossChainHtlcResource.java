@@ -487,7 +487,8 @@ public class CrossChainHtlcResource {
 				try {
 					broadcast |= doRefundHtlc(repository, trade);
 				} catch (ForeignBlockchainException | ApiException e) {
-					LOGGER.info("Unable to refund an HTLC attempt; continuing other attempts");
+					LOGGER.error("Unable to refund HTLC attempt for AT {} (trade {}); continuing other attempts",
+							trade.getAtAddress(), trade.getTradeNativeAddress(), e);
 				}
 			}
 		} catch (DataException e) {

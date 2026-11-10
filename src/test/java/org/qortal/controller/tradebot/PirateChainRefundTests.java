@@ -49,7 +49,7 @@ public class PirateChainRefundTests extends Common {
         when(pirate.getWalletAddress(anyString())).thenAnswer(i -> "address-" + i.getArgument(0));
         when(pirate.deriveP2shAddressBPrefix(any())).thenAnswer(i -> "b-" + ((byte[]) i.getArgument(0))[0]);
         when(pirate.deriveP2shAddress(any())).thenAnswer(i -> "t3-" + ((byte[]) i.getArgument(0))[0]);
-        when(pirate.refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString())).thenReturn(TXID);
+        when(pirate.refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString(), anyLong(), anyInt())).thenReturn(TXID);
         data = new CrossChainTradeData();
         data.mode = AcctMode.REFUNDED; data.expectedForeignAmount = 100000000L;
         data.tradeTimeout = 60; data.creatorForeignPKH = new byte[33];
@@ -58,7 +58,7 @@ public class PirateChainRefundTests extends Common {
         htlc = mockStatic(PirateChainHTLC.class); statics.add(htlc);
         htlc.when(() -> PirateChainHTLC.buildScript(any(), anyInt(), any(), any())).thenAnswer(i -> new byte[]{ ((byte[])i.getArgument(0))[0] });
         status(BitcoinyHTLC.Status.FUNDED);
-        htlc.when(() -> PirateChainHTLC.getUnspentFundingTxid(any(), anyString(), anyLong())).thenReturn("22".repeat(32));
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(funding(0, 10000L));
         clock = mockStatic(NTP.class); statics.add(clock);
         clock.when(NTP::getTime).thenReturn(1_000_000L);
     }
@@ -74,7 +74,7 @@ public class PirateChainRefundTests extends Common {
                 new byte[20], 100000000L, "wallet-"+id, null, 1, new byte[25]);
     }
     private void noBroadcast() throws Exception {
-        verify(pirate, never()).refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString());
+        verify(pirate, never()).refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString(), anyLong(), anyInt());
     }
     @Test public void acknowledgementStaysPendingAndCheckpointSurvivesBackup() throws Exception {
         TradeBotData trade = trade(1);
@@ -93,11 +93,79 @@ public class PirateChainRefundTests extends Common {
             assertNotNull(PirateChainRefundState.decode(trade.getLastTransactionSignature()));
             verify(repository).saveChanges();
             throw new ForeignBlockchainException("lost acknowledgement");
-        }).when(pirate).refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString());
+        }).when(pirate).refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString(), anyLong(), anyInt());
         try { bot.refund(repository, trade, at, data); fail(); } catch (ForeignBlockchainException expected) { }
         assertEquals("ALICE_REFUNDING_A", trade.getState());
         clearInvocations(pirate);
         assertFalse(bot.refund(repository, TradeBotData.fromJson(trade.toJson()), at, data)); noBroadcast();
+    }
+    private UnspentOutput funding(int index, long fee) {
+        byte[] hash = new byte[32]; Arrays.fill(hash, (byte)0x22);
+        return new UnspentOutput(hash, index, 90, data.expectedForeignAmount + fee);
+    }
+    @Test public void originalFundingFeeAndNonzeroOutputSurviveFeeDrift() throws Exception {
+        TradeBotData trade = trade(1); trade.setFundingFee(20000L);
+        when(pirate.getP2shFee(any())).thenReturn(50000L);
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), eq(100020000L)))
+                .thenReturn(funding(2, 20000L));
+        assertTrue(bot.refund(repository, trade, at, data));
+        verify(pirate).refundP2sh(anyString(), anyString(), eq(100000000L), anyString(), anyString(), anyInt(), anyString(), eq(20000L), eq(2));
+        htlc.verify(() -> PirateChainHTLC.determineHtlcStatus(chain, "b-1", 100020000L, 3));
+        assertEquals(2, trade.getFundingOutputIndex());
+    }
+    @Test public void legacyReserveIsRecoveredFromTheFundingOutput() throws Exception {
+        TradeBotData trade = trade(1);
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong()))
+                .thenReturn(funding(2, 20000L));
+        assertTrue(bot.refund(repository, trade, at, data));
+        assertEquals(Long.valueOf(20000), trade.getFundingFee());
+        verify(pirate).refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString(), eq(20000L), eq(2));
+    }
+    @Test public void legacyReserveBelowDefaultIsRecoveredBeforeStatusCheck() throws Exception {
+        TradeBotData trade = trade(1);
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(funding(0, 5000L));
+        assertTrue(bot.refund(repository, trade, at, data));
+        htlc.verify(() -> PirateChainHTLC.determineHtlcStatus(chain, "b-1", 100005000L, 3));
+        verify(pirate).refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString(), eq(5000L), eq(0));
+    }
+    @Test public void deterministicRejectionClearsPersistedCheckpointAndAllowsImmediateRetry() throws Exception {
+        TradeBotData trade = trade(1);
+        when(pirate.refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString(), anyLong(), anyInt()))
+                .thenThrow(new ForeignBlockchainException.TransactionRejectedException("Funding output value exceeds outputs plus fee"))
+                .thenReturn(TXID);
+        try { bot.refund(repository, trade, at, data); fail(); }
+        catch (ForeignBlockchainException.TransactionRejectedException expected) { }
+        assertNull(trade.getLastTransactionSignature());
+        verify(cross, atLeastOnce()).save(trade);
+        verify(repository, times(2)).saveChanges();
+        assertTrue(bot.refund(repository, TradeBotData.fromJson(trade.toJson()), at, data));
+    }
+    @Test public void transientNetworkFailureKeepsCheckpoint() throws Exception {
+        TradeBotData trade = trade(1);
+        when(pirate.refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString(), anyLong(), anyInt()))
+                .thenThrow(new ForeignBlockchainException.NetworkException("timeout"));
+        try { bot.refund(repository, trade, at, data); fail(); } catch (ForeignBlockchainException.NetworkException expected) { }
+        assertNotNull(PirateChainRefundState.decode(trade.getLastTransactionSignature()));
+        clearInvocations(pirate);
+        assertFalse(bot.refund(repository, trade, at, data)); noBroadcast();
+    }
+    @Test public void sellerRecoversOriginalReserveAndOutputIndexBeforeRedeeming() throws Exception {
+        TradeBotData seller = trade(1); seller.setState("BOB_WAITING_FOR_AT_REDEEM"); seller.setStateValue(25);
+        data.mode = AcctMode.REDEEMED; data.lockTimeA = 1; data.partnerForeignPKH = new byte[33]; data.hashOfSecretA = new byte[20];
+        htlc.when(() -> PirateChainHTLC.determineHtlcStatus(any(), anyString(), anyLong())).thenReturn(BitcoinyHTLC.Status.FUNDED);
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(funding(2, 20000L));
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.findSecretA(repository, data)).thenReturn(new byte[32]);
+        when(acct.populateTradeData(repository, at)).thenReturn(data);
+        byte[] receiving = PirateChainAddress.toReceivingAccountInfo("zs1mj80tkyjqjhc84aquetymwgrasxjdkkft0qcn5xtp2p9r42vs5ernyv4nzgufmz6xzuqvw20w9z");
+        java.lang.reflect.Field field = TradeBotData.class.getDeclaredField("receivingAccountInfo"); field.setAccessible(true); field.set(seller, receiving);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            bot.progress(repository, seller);
+        }
+        verify(pirate).redeemP2sh(anyString(), anyString(), eq(100000000L), anyString(), anyString(), anyString(), anyString(), eq(20000L), eq(2));
+        assertEquals(Long.valueOf(20000), seller.getFundingFee());
+        assertEquals(2, seller.getFundingOutputIndex());
     }
     @Test public void confirmedRefundIsTerminal() throws Exception {
         TradeBotData trade = trade(1); status(BitcoinyHTLC.Status.REFUNDED);
@@ -142,9 +210,9 @@ public class PirateChainRefundTests extends Common {
     }
     @Test public void unknownAckCanRetryAfterQuarantineButMissingUtxoCannot() throws Exception {
         TradeBotData trade = trade(1); trade.setLastTransactionSignature(new PirateChainRefundState(70, 0L, null).encode());
-        htlc.when(() -> PirateChainHTLC.getUnspentFundingTxid(any(), anyString(), anyLong())).thenReturn(null);
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(null);
         assertFalse(bot.refund(repository, trade, at, data)); noBroadcast();
-        htlc.when(() -> PirateChainHTLC.getUnspentFundingTxid(any(), anyString(), anyLong())).thenReturn("22".repeat(32));
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(funding(0, 10000L));
         assertTrue(bot.refund(repository, trade, at, data));
     }
     @Test public void manualRecoveryKeepsDestinationsSeparateAndAllowsLosingBuyer() throws Exception {
@@ -160,7 +228,7 @@ public class PirateChainRefundTests extends Common {
             chains.when(() -> SupportedBlockchain.getAcctByCodeHash(any())).thenReturn(acct);
             data.mode = AcctMode.REDEEMED; data.qortalPartnerAddress = "other-winner";
             assertTrue(new CrossChainHtlcResource().refundHtlc("dummy", "AT"));
-            verify(pirate).refundP2sh(eq("t3-2"), eq("address-wallet-2"), anyLong(), anyString(), anyString(), anyInt(), anyString());
+            verify(pirate).refundP2sh(eq("t3-2"), eq("address-wallet-2"), anyLong(), anyString(), anyString(), anyInt(), anyString(), anyLong(), anyInt());
             verify(pirate, never()).getWalletAddress("wallet-1");
         }
     }
@@ -247,7 +315,31 @@ public class PirateChainRefundTests extends Common {
             repos.when(RepositoryManager::getRepository).thenReturn(repository);
             chains.when(() -> SupportedBlockchain.getAcctByCodeHash(any())).thenReturn(acct);
             assertTrue(new CrossChainHtlcResource().refundAllHtlc("dummy"));
-            verify(pirate).refundP2sh(eq("t3-2"), eq("address-wallet-2"), anyLong(), anyString(), anyString(), anyInt(), anyString());
+            verify(pirate).refundP2sh(eq("t3-2"), eq("address-wallet-2"), anyLong(), anyString(), anyString(), anyInt(), anyString(), anyLong(), anyInt());
         }
     }
+    @Test public void refundAllLogsFullFailuresAtErrorAndPreservesBooleanResponse() throws Exception {
+        when(cross.getAllTradeBotData()).thenReturn(List.of(trade(1)));
+        ForeignBlockchainException failure = new ForeignBlockchainException("wallet unavailable");
+        when(pirate.getWalletAddress("wallet-1")).thenThrow(failure);
+        ACCT acct = mock(ACCT.class);
+        when(acct.getBlockchain()).thenReturn(pirate); when(acct.populateTradeData(repository, at)).thenReturn(data);
+        var logger = (org.apache.logging.log4j.core.Logger) org.apache.logging.log4j.LogManager.getLogger(CrossChainHtlcResource.class);
+        var level = logger.getLevel();
+        List<org.apache.logging.log4j.core.LogEvent> events = new ArrayList<>();
+        var appender = new org.apache.logging.log4j.core.appender.AbstractAppender("arrr-refund-test", null, null, false, null) {
+            @Override public void append(org.apache.logging.log4j.core.LogEvent event) { events.add(event.toImmutable()); }
+        };
+        appender.start(); logger.addAppender(appender); logger.setLevel(org.apache.logging.log4j.Level.ERROR);
+        try (MockedStatic<RepositoryManager> repos = mockStatic(RepositoryManager.class);
+             MockedStatic<SupportedBlockchain> chains = mockStatic(SupportedBlockchain.class);
+             MockedStatic<Security> security = mockStatic(Security.class)) {
+            repos.when(RepositoryManager::getRepository).thenReturn(repository);
+            chains.when(() -> SupportedBlockchain.getAcctByCodeHash(any())).thenReturn(acct);
+            assertFalse(new CrossChainHtlcResource().refundAllHtlc("dummy"));
+            assertTrue(events.stream().anyMatch(event -> event.getLevel() == org.apache.logging.log4j.Level.ERROR
+                    && event.getThrown() == failure && event.getMessage().getFormattedMessage().contains("AT AT (trade native-1)")));
+        } finally { logger.removeAppender(appender); logger.setLevel(level); appender.stop(); }
+    }
+
 }

@@ -1080,6 +1080,12 @@ public class HSQLDBDatabaseUpdates {
 
 					break;
 
+				case 53:
+					// Preserve the ARRR HTLC reserve across fee changes and its exact outpoint.
+					stmt.execute("ALTER TABLE TradeBotStates ADD funding_fee BIGINT DEFAULT NULL");
+					stmt.execute("ALTER TABLE TradeBotStates ADD funding_output_index INT DEFAULT 0 NOT NULL");
+					break;
+
 				default:
 					// nothing to do
 					return false;

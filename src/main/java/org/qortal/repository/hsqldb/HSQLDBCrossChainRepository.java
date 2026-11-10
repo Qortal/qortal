@@ -26,7 +26,7 @@ public class HSQLDBCrossChainRepository implements CrossChainRepository {
 				+ "trade_native_public_key, trade_native_public_key_hash, "
 				+ "trade_native_address, secret, hash_of_secret, "
 				+ "foreign_blockchain, trade_foreign_public_key, trade_foreign_public_key_hash, "
-				+ "foreign_amount, foreign_key, last_transaction_signature, locktime_a, receiving_account_info "
+				+ "foreign_amount, foreign_key, last_transaction_signature, locktime_a, receiving_account_info, funding_fee, funding_output_index "
 				+ "FROM TradeBotStates "
 				+ "WHERE trade_private_key = ?";
 
@@ -57,13 +57,17 @@ public class HSQLDBCrossChainRepository implements CrossChainRepository {
 				lockTimeA = null;
 			byte[] receivingAccountInfo = resultSet.getBytes(20);
 
-			return new TradeBotData(tradePrivateKey, acctName,
+			TradeBotData tradeBotData = new TradeBotData(tradePrivateKey, acctName,
 					tradeState, tradeStateValue,
 					creatorAddress, atAddress, timestamp, qortAmount,
 					tradeNativePublicKey, tradeNativePublicKeyHash, tradeNativeAddress,
 					secret, hashOfSecret,
 					foreignBlockchain, tradeForeignPublicKey, tradeForeignPublicKeyHash,
 					foreignAmount, foreignKey, lastTransactionSignature, lockTimeA, receivingAccountInfo);
+			long fundingFee = resultSet.getLong(21);
+			tradeBotData.setFundingFee(resultSet.wasNull() ? null : fundingFee);
+			tradeBotData.setFundingOutputIndex(resultSet.getInt(22));
+			return tradeBotData;
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch trade-bot trading state from repository", e);
 		}
@@ -107,7 +111,7 @@ public class HSQLDBCrossChainRepository implements CrossChainRepository {
 				+ "trade_native_public_key, trade_native_public_key_hash, "
 				+ "trade_native_address, secret, hash_of_secret, "
 				+ "foreign_blockchain, trade_foreign_public_key, trade_foreign_public_key_hash, "
-				+ "foreign_amount, foreign_key, last_transaction_signature, locktime_a, receiving_account_info "
+				+ "foreign_amount, foreign_key, last_transaction_signature, locktime_a, receiving_account_info, funding_fee, funding_output_index "
 				+ "FROM TradeBotStates";
 
 		List<TradeBotData> allTradeBotData = new ArrayList<>();
@@ -148,6 +152,9 @@ public class HSQLDBCrossChainRepository implements CrossChainRepository {
 						secret, hashOfSecret,
 						foreignBlockchain, tradeForeignPublicKey, tradeForeignPublicKeyHash,
 						foreignAmount, foreignKey, lastTransactionSignature, lockTimeA, receivingAccountInfo);
+				long fundingFee = resultSet.getLong(22);
+				tradeBotData.setFundingFee(resultSet.wasNull() ? null : fundingFee);
+				tradeBotData.setFundingOutputIndex(resultSet.getInt(23));
 				allTradeBotData.add(tradeBotData);
 			} while (resultSet.next());
 
@@ -181,7 +188,9 @@ public class HSQLDBCrossChainRepository implements CrossChainRepository {
 				.bind("foreign_key", tradeBotData.getForeignKey())
 				.bind("last_transaction_signature", tradeBotData.getLastTransactionSignature())
 				.bind("locktime_a", tradeBotData.getLockTimeA())
-				.bind("receiving_account_info", tradeBotData.getReceivingAccountInfo());
+				.bind("receiving_account_info", tradeBotData.getReceivingAccountInfo())
+				.bind("funding_fee", tradeBotData.getFundingFee())
+				.bind("funding_output_index", tradeBotData.getFundingOutputIndex());
 
 		try {
 			saveHelper.execute(this.repository);
