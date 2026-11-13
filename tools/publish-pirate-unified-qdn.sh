@@ -8,8 +8,8 @@ set -euo pipefail
 # it locally or offline, then submit the signed transaction. The source ZIP is
 # never published.
 
-readonly EXPECTED_ARTIFACT_SHA256='059781c5a2cdeb8c5d60f1130c4bf3a217822d39438e560bc11633993df0e1e9'
-readonly DEFAULT_IDENTIFIER='LiteWalletJNI-2026-08-unified-v1.1.9-test'
+readonly EXPECTED_ARTIFACT_SHA256='55bd5979c01d424ce4b26428ac35b51aed2da2131ceb18c29443e0b46c18e018'
+readonly DEFAULT_IDENTIFIER='LiteWalletJNI-2026-11-qortal-v0.3.9-test'
 
 usage() {
 	cat <<'EOF'
@@ -140,6 +140,8 @@ validate_bundle() {
 		|| die "Invalid expected bundle kind: $expected_bundle_kind"
 	[[ -d $bundle_directory ]] || die "Bundle directory does not exist: $bundle_directory"
 	bundle_directory=$(cd "$bundle_directory" && pwd -P)
+	[[ -z $(find "$bundle_directory" -mindepth 1 ! -type f -print -quit) ]] \
+		|| die 'Bundle must not contain subdirectories, symlinks, or special files.'
 
 	local required_file
 	for required_file in MANIFEST.txt LICENSE-qortal-jni.txt qortal-handoff.md; do
@@ -147,7 +149,7 @@ validate_bundle() {
 	done
 
 	grep -Fqx "artifact-sha256: $EXPECTED_ARTIFACT_SHA256" "$bundle_directory/MANIFEST.txt" \
-		|| die 'Bundle manifest does not identify the pinned Pirate v1.1.9 artifact.'
+		|| die 'Bundle manifest does not identify the pinned Qortal JNI 0.3.9 artifact (Stashi v1.2.6 base).'
 	grep -Fqx "bundle-kind: $expected_bundle_kind" "$bundle_directory/MANIFEST.txt" \
 		|| die "Bundle is not a $expected_bundle_kind bundle."
 

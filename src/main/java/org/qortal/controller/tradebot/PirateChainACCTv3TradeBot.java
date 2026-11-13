@@ -1,10 +1,8 @@
 package org.qortal.controller.tradebot;
 
-import com.google.common.hash.HashCode;
 import com.rust.litewalletjni.LiteWalletJni;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.bitcoinj.core.Bech32;
 import org.bitcoinj.core.Coin;
 import org.qortal.account.PrivateKeyAccount;
 import org.qortal.account.PublicKeyAccount;
@@ -55,6 +53,10 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 	private static final long MAX_AT_CONFIRMATION_PERIOD = 24 * 60 * 60 * 1000L; // ms
 
 	private static PirateChainACCTv3TradeBot instance;
+
+	// Audit old ACK-only terminal records gradually, without scanning every wallet on every block.
+	private final java.util.Map<String, Long> auditedLegacyRefunds = new java.util.HashMap<>();
+	private long nextLegacyRefundAudit;
 
 	private final List<String> endStates = Arrays.asList(State.BOB_DONE, State.BOB_REFUNDED, State.ALICE_DONE, State.ALICE_REFUNDING_A, State.ALICE_REFUNDED).stream()
 			.map(State::name)
@@ -120,12 +122,11 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			throw new DataException("Pirate wallet not found. Check wallets screen for details.");
 		}
 
-		if (!PirateChain.getInstance().isValidAddress(tradeBotCreateRequest.receivingAddress)) {
+		if (!PirateChainAddress.isValid(tradeBotCreateRequest.receivingAddress)) {
 			throw new DataException("Unsupported Pirate Chain receiving address: " + tradeBotCreateRequest.receivingAddress);
 		}
 
-		Bech32.Bech32Data decodedReceivingAddress = Bech32.decode(tradeBotCreateRequest.receivingAddress);
-		byte[] pirateChainReceivingAccountInfo = decodedReceivingAddress.data;
+		byte[] pirateChainReceivingAccountInfo = PirateChainAddress.toReceivingAccountInfo(tradeBotCreateRequest.receivingAddress);
 
 		PublicKeyAccount creator = new PublicKeyAccount(repository, tradeBotCreateRequest.creatorPublicKey);
 
@@ -179,25 +180,16 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 	 * Creates a trade-bot entry from the 'Alice' viewpoint, i.e. matching ARRR to an existing offer.
 	 * <p>
 	 * Requires a chosen trade offer from Bob, passed by <tt>crossChainTradeData</tt>
-	 * and access to a PirateChain wallet via <tt>xprv58</tt>.
+	 * and access to a PirateChain wallet via <tt>entropy58</tt>.
 	 * <p>
 	 * The <tt>crossChainTradeData</tt> contains the current trade offer state
 	 * as extracted from the AT's data segment.
 	 * <p>
-	 * Access to a funded wallet is via a PirateChain BIP32 hierarchical deterministic key,
-	 * passed via <tt>xprv58</tt>.
-	 * <b>This key will be stored in your node's database</b>
-	 * to allow trade-bot to create/fund the necessary P2SH transactions!
-	 * However, due to the nature of BIP32 keys, it is possible to give the trade-bot
-	 * only a subset of wallet access (see BIP32 for more details).
-	 * <p>
-	 * As an example, the xprv58 can be extract from a <i>legacy, password-less</i>
-	 * Electrum wallet by going to the console tab and entering:<br>
-	 * <tt>wallet.keystore.xprv</tt><br>
-	 * which should result in a base58 string starting with either 'xprv' (for PirateChain main-net)
-	 * or 'tprv' for (PirateChain test-net).
-	 * <p>
-	 * It is envisaged that the value in <tt>xprv58</tt> will actually come from a Qortal-UI-managed wallet.
+	 * Access to a funded wallet is via 32 bytes of wallet entropy, Base58 encoded.
+	 * Core derives the deterministic mnemonic from this entropy and the native
+	 * wallet derives the shielded spending keys. The entropy is a wallet secret:
+	 * it is stored as foreignKey in the trade-bot database and recovery backups
+	 * so the wallet can be reopened for a refund.
 	 * <p>
 	 * If sufficient funds are available, <b>this method will actually fund the P2SH-A</b>
 	 * with the PirateChain amount expected by 'Bob'.
@@ -209,11 +201,11 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 	 * <p>
 	 * @param repository
 	 * @param crossChainTradeData chosen trade OFFER that Alice wants to match
-	 * @param seed58 funded wallet xprv in base58
+	 * @param entropy58 funded wallet's 32-byte entropy, Base58 encoded
 	 * @return true if P2SH-A funding transaction successfully broadcast to PirateChain network, false otherwise
 	 * @throws DataException
 	 */
-	public ResponseResult startResponse(Repository repository, ATData atData, ACCT acct, CrossChainTradeData crossChainTradeData, String seed58, String receivingAddress) throws DataException {
+	public ResponseResult startResponse(Repository repository, ATData atData, ACCT acct, CrossChainTradeData crossChainTradeData, String entropy58, String receivingAddress) throws DataException {
 		byte[] tradePrivateKey = TradeBot.generateTradePrivateKey();
 		byte[] secretA = TradeBot.generateSecret();
 		byte[] hashOfSecretA = Crypto.hash160(secretA);
@@ -226,10 +218,6 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		byte[] tradeForeignPublicKeyHash = Crypto.hash160(tradeForeignPublicKey);
 		byte[] receivingPublicKeyHash = Base58.decode(receivingAddress); // Actually the whole address, not just PKH
 
-		String tradePrivateKey58 = Base58.encode(tradePrivateKey);
-        String tradeForeignPublicKey58 = Base58.encode(tradeForeignPublicKey);
-		String secret58 = Base58.encode(secretA);
-
 		// We need to generate lockTime-A: add tradeTimeout to now
 		long now = NTP.getTime();
 		int lockTimeA = crossChainTradeData.tradeTimeout * 60 + (int) (now / 1000L);
@@ -241,13 +229,9 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 				secretA, hashOfSecretA,
 				SupportedBlockchain.PIRATECHAIN.name(),
 				tradeForeignPublicKey, tradeForeignPublicKeyHash,
-				crossChainTradeData.expectedForeignAmount, seed58, null, lockTimeA, receivingPublicKeyHash);
+				crossChainTradeData.expectedForeignAmount, entropy58, null, lockTimeA, receivingPublicKeyHash);
 
-		// Attempt to backup the trade bot data
-		// Include tradeBotData as an additional parameter, since it's not in the repository yet
-		TradeBot.backupTradeBotData(repository, Arrays.asList(tradeBotData));
-
-		// Check we have enough funds via xprv58 to fund P2SH to cover expectedForeignAmount
+		// Check the entropy-backed wallet can fund P2SH to cover expectedForeignAmount.
 		long p2shFee;
 		try {
 			p2shFee = PirateChain.getInstance().getP2shFee(now);
@@ -255,6 +239,10 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			LOGGER.debug("Couldn't estimate PirateChain fees?");
 			return ResponseResult.NETWORK_ISSUE;
 		}
+
+		tradeBotData.setFundingFee(p2shFee);
+		// Back up the original reserve before funding, including the not-yet-persisted attempt.
+		TradeBot.backupTradeBotData(repository, Arrays.asList(tradeBotData));
 
 		// Fee for redeem/refund is subtracted from P2SH-A balance.
 		// Do not include fee for funding transaction as this is covered by buildSpend()
@@ -268,12 +256,25 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 
 		// Send to P2SH address
 		try {
-			String txid = PirateChain.getInstance().fundP2SH(seed58, p2shAddressT3, amountA, redeemScriptWithPrefix58);
-			LOGGER.info("fundingTxidHex: {}", txid);
+			String txid = PirateChain.getInstance().fundP2SH(entropy58, p2shAddressT3, amountA, redeemScriptWithPrefix58);
+			LOGGER.info("fundingTxidHex: {} (redeem/refund reserve {})", txid, p2shFee);
+			try {
+				UnspentOutput funding = PirateChainHTLC.getFundingOutput(PirateChain.getInstance().getBlockchainProvider(),
+						txid, p2shAddressT3, amountA);
+				tradeBotData.setFundingOutputIndex(funding.index);
+			} catch (ForeignBlockchainException | io.grpc.StatusRuntimeException e) {
+				// A successful broadcast can precede lightwalletd visibility. Recovery re-reads the UTXO.
+				LOGGER.warn("ARRR funding {} not yet available to capture output index; will recover from UTXO", txid, e);
+			}
+			repository.getCrossChainRepository().save(tradeBotData);
+			repository.saveChanges();
 
-		} catch (ForeignBlockchainException e) {
-			LOGGER.debug("Unable to build and send P2SH-A funding transaction - lack of funds?");
+		} catch (ForeignBlockchainException.InsufficientFundsException e) {
+			LOGGER.warn("Unable to fund PirateChain P2SH-A: {}", e.getMessage());
 			return ResponseResult.BALANCE_ISSUE;
+		} catch (ForeignBlockchainException e) {
+			LOGGER.warn("Unable to fund PirateChain P2SH-A: {}", e.getMessage());
+			return ResponseResult.NETWORK_ISSUE;
 		}
 
 		// Attempt to send MESSAGE to Bob's Qortal trade address
@@ -335,6 +336,9 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		if (tradeBotState == null)
 			return true;
 
+		if (tradeBotState == State.ALICE_REFUNDING_A || (tradeBotState == State.ALICE_REFUNDED
+				&& !PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature()))) return false;
+
 		// If the AT doesn't exist then we might as well let the user tidy up
 		if (!repository.getATRepository().exists(tradeBotData.getAtAddress()))
 			return true;
@@ -345,7 +349,6 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			case BOB_DONE:
 			case ALICE_REFUNDED:
 			case BOB_REFUNDED:
-			case ALICE_REFUNDING_A:
 				return true;
 
 			default:
@@ -361,10 +364,20 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			return;
 		}
 
+		boolean legacyRefund = tradeBotState == State.ALICE_REFUNDED
+				&& !PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature());
+		if (legacyRefund) {
+			Long now = NTP.getTime();
+			synchronized (this) {
+				if (now == null || now < nextLegacyRefundAudit || now < auditedLegacyRefunds.getOrDefault(tradeBotData.getTradeNativeAddress(), 0L)) return;
+				auditedLegacyRefunds.put(tradeBotData.getTradeNativeAddress(), now + 5 * 60_000L);
+				nextLegacyRefundAudit = now + 60_000L;
+			}
+		}
 		ATData atData = null;
 		CrossChainTradeData tradeData = null;
 
-		if (tradeBotState.requiresAtData) {
+		if (tradeBotState.requiresAtData || legacyRefund) {
 			// Attempt to fetch AT data
 			atData = repository.getATRepository().fromATAddress(tradeBotData.getAtAddress());
 			if (atData == null) {
@@ -372,7 +385,7 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 				return;
 			}
 
-			if (tradeBotState.requiresTradeData) {
+			if (tradeBotState.requiresTradeData || legacyRefund) {
 				tradeData = PirateChainACCTv3.getInstance().populateTradeData(repository, atData);
 				if (tradeData == null) {
 					LOGGER.warn(() -> String.format("Unable to fetch ACCT trade data for AT %s from repository", tradeBotData.getAtAddress()));
@@ -411,6 +424,18 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 				break;
 
 			case ALICE_REFUNDED:
+				if (legacyRefund) {
+					refund(repository, tradeBotData, atData, tradeData);
+					synchronized (this) {
+						if (PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature()) || !State.ALICE_REFUNDED.name().equals(tradeBotData.getState()))
+							auditedLegacyRefunds.remove(tradeBotData.getTradeNativeAddress());
+						else {
+							Long checkedAt = NTP.getTime();
+							auditedLegacyRefunds.put(tradeBotData.getTradeNativeAddress(), (checkedAt == null ? System.currentTimeMillis() : checkedAt) + 6 * 60 * 60_000L);
+						}
+					}
+				}
+				break;
 			case BOB_REFUNDED:
 				break;
 		}
@@ -497,9 +522,8 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			byte[] redeemScriptA = PirateChainHTLC.buildScript(aliceForeignPublicKey, lockTimeA, tradeBotData.getTradeForeignPublicKey(), hashOfSecretA);
 			String p2shAddress = pirateChain.deriveP2shAddressBPrefix(redeemScriptA); // Use 'b' prefix when checking status
 
-			long feeTimestamp = calcFeeTimestamp(lockTimeA, crossChainTradeData.tradeTimeout);
-			long p2shFee = PirateChain.getInstance().getP2shFee(feeTimestamp);
-			final long minimumAmountA = tradeBotData.getForeignAmount() + p2shFee;
+			// The buyer's reserve belongs to this output, not this seller's current fee setting.
+			final long minimumAmountA = tradeBotData.getForeignAmount();
 
 			BitcoinyHTLC.Status htlcStatusA = PirateChainHTLC.determineHtlcStatus(pirateChain.getBlockchainProvider(), p2shAddress, minimumAmountA);
 
@@ -597,8 +621,7 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			byte[] redeemScriptA = PirateChainHTLC.buildScript(tradeBotData.getTradeForeignPublicKey(), lockTimeA, crossChainTradeData.creatorForeignPKH, tradeBotData.getHashOfSecret());
 			String p2shAddress = pirateChain.deriveP2shAddressBPrefix(redeemScriptA); // Use 'b' prefix when checking status
 
-			long feeTimestamp = calcFeeTimestamp(lockTimeA, crossChainTradeData.tradeTimeout);
-			long p2shFee = PirateChain.getInstance().getP2shFee(feeTimestamp);
+			long p2shFee = fundingFeeOrDefault(tradeBotData);
 			long minimumAmountA = crossChainTradeData.expectedForeignAmount + p2shFee;
 
 			BitcoinyHTLC.Status htlcStatusA = PirateChainHTLC.determineHtlcStatus(pirateChain.getBlockchainProvider(), p2shAddress, minimumAmountA);
@@ -618,8 +641,8 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 
 				case REFUND_IN_PROGRESS:
 				case REFUNDED:
-					TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_REFUNDED,
-							() -> String.format("P2SH-A %s already refunded. Trade aborted", p2shAddress));
+					TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_REFUNDING_A,
+							() -> String.format("Checking confirmation of P2SH-A %s refund", p2shAddress));
 					return;
 
 			}
@@ -744,10 +767,14 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		String p2shAddressT3 = pirateChain.deriveP2shAddress(redeemScriptA); // Use 't3' prefix when refunding
 
 		// Fee for redeem/refund is subtracted from P2SH-A balance.
-		long feeTimestamp = calcFeeTimestamp(lockTimeA, crossChainTradeData.tradeTimeout);
-		long p2shFee = PirateChain.getInstance().getP2shFee(feeTimestamp);
-		long minimumAmountA = crossChainTradeData.expectedForeignAmount + p2shFee;
-		String receivingAddress = Bech32.encode("zs", receivingAccountInfo);
+		// Bob learns the buyer's reserve from the selected funding output below.
+		long minimumAmountA = crossChainTradeData.expectedForeignAmount;
+		String receivingAddress;
+		try {
+			receivingAddress = PirateChainAddress.fromReceivingAccountInfo(receivingAccountInfo);
+		} catch (IllegalArgumentException e) {
+			throw new DataException("Invalid stored Pirate Chain receiving address", e);
+		}
 
 		BitcoinyHTLC.Status htlcStatusA = PirateChainHTLC.determineHtlcStatus(pirateChain.getBlockchainProvider(), p2shAddress, minimumAmountA);
 
@@ -769,11 +796,14 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 
 			case FUNDED: {
 				// Get funding txid
-				String fundingTxidHex = PirateChainHTLC.getUnspentFundingTxid(pirateChain.getBlockchainProvider(), p2shAddress, minimumAmountA);
-				if (fundingTxidHex == null) {
+				UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirateChain.getBlockchainProvider(), p2shAddress, minimumAmountA);
+				if (funding == null) {
 					throw new ForeignBlockchainException("Missing funding txid when redeeming P2SH");
 				}
-				String fundingTxid58 = Base58.encode(HashCode.fromString(fundingTxidHex).asBytes());
+				recordFundingDetails(tradeBotData, funding, crossChainTradeData.expectedForeignAmount);
+				repository.getCrossChainRepository().save(tradeBotData);
+				repository.saveChanges();
+				String fundingTxid58 = Base58.encode(funding.hash);
 
 				// Redeem P2SH
 				Coin redeemAmount = Coin.valueOf(crossChainTradeData.expectedForeignAmount);
@@ -783,7 +813,8 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 				String redeemScript58 = Base58.encode(redeemScriptA);
 
 				String txid = PirateChain.getInstance().redeemP2sh(p2shAddressT3, receivingAddress, redeemAmount.value,
-						redeemScript58, fundingTxid58, secret58, privateKey58);
+						redeemScript58, fundingTxid58, secret58, privateKey58,
+						fundingFeeOrDefault(tradeBotData), tradeBotData.getFundingOutputIndex());
 				LOGGER.info("Redeem txid: {}", txid);
 				break;
 			}
@@ -798,70 +829,123 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 	 * @throws ForeignBlockchainException
 	 */
 	private void handleAliceRefundingP2shA(Repository repository, TradeBotData tradeBotData,
-			ATData atData, CrossChainTradeData crossChainTradeData) throws DataException, ForeignBlockchainException {
-		int lockTimeA = tradeBotData.getLockTimeA();
+			ATData atData, CrossChainTradeData tradeData) throws DataException, ForeignBlockchainException {
+		refund(repository, tradeBotData, atData, tradeData);
+	}
 
-		// We can't refund P2SH-A until lockTime-A has passed
-		if (NTP.getTime() <= lockTimeA * 1000L)
-			return;
+	/** Shared by the scheduler and manual recovery. An ACK is pending, never settlement. */
+	public synchronized boolean refund(Repository repository, TradeBotData tradeBotData,
+			ATData atData, CrossChainTradeData tradeData) throws DataException, ForeignBlockchainException {
+		// API and scheduler can have loaded the same record before either acquires this lock.
+		TradeBotData latest = repository.getCrossChainRepository().getTradeBotData(tradeBotData.getTradePrivateKey());
+		if (latest != null) {
+			tradeBotData.setLastTransactionSignature(latest.getLastTransactionSignature());
+			tradeBotData.setFundingFee(latest.getFundingFee());
+			tradeBotData.setFundingOutputIndex(latest.getFundingOutputIndex());
+		}
+		if (atData.getIsFinished() && tradeData.mode == AcctMode.REDEEMED
+				&& tradeData.qortalPartnerAddress != null && tradeData.qortalPartnerAddress.equals(tradeBotData.getTradeNativeAddress())
+				&& tradeBotData.getState() != null && tradeBotData.getState().startsWith("ALICE_")) {
+			TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_DONE, () -> "QORT already redeemed by this buyer");
+			return false;
+		}
+		if (!isRefundEligible(tradeBotData, atData, tradeData)) return false;
+		Long now = NTP.getTime();
+		int lockTime = tradeBotData.getLockTimeA();
+		if (now == null || now <= lockTime * 1000L) return false;
+		PirateChain pirate = PirateChain.getInstance();
+		if (pirate.getMedianBlockTime() <= lockTime) return false;
+		byte[] script = PirateChainHTLC.buildScript(tradeBotData.getTradeForeignPublicKey(), lockTime,
+				tradeData.creatorForeignPKH, tradeBotData.getHashOfSecret());
+		String address = pirate.deriveP2shAddressBPrefix(script);
+		if (tradeBotData.getFundingFee() == null) {
+			// Recover legacy reserves before applying a minimum, including reserves below 10000.
+			UnspentOutput legacyFunding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address, tradeData.expectedForeignAmount);
+			if (legacyFunding != null) recordFundingDetails(tradeBotData, legacyFunding, tradeData.expectedForeignAmount);
+		}
+		long minimum = tradeData.expectedForeignAmount + fundingFeeOrDefault(tradeBotData);
+		BitcoinyHTLC.Status status = PirateChainHTLC.determineHtlcStatus(pirate.getBlockchainProvider(), address, minimum, 3);
+		if (status == BitcoinyHTLC.Status.REFUNDED) {
+			PirateChainRefundState previous = PirateChainRefundState.decode(tradeBotData.getLastTransactionSignature());
+			tradeBotData.setLastTransactionSignature(new PirateChainRefundState(0, now, previous == null ? null : previous.txid, true).encode());
+			TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_REFUNDED, () -> "ARRR refund confirmed");
+			return false;
+		}
+		if (status == BitcoinyHTLC.Status.REDEEMED) {
+			TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_DONE, () -> "ARRR HTLC redeemed by seller");
+			return false;
+		}
+		if (status == BitcoinyHTLC.Status.REFUND_IN_PROGRESS || status == BitcoinyHTLC.Status.REDEEM_IN_PROGRESS) {
+			if (State.ALICE_REFUNDED.name().equals(tradeBotData.getState()))
+				TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_REFUNDING_A, () -> "Rechecking an unconfirmed legacy ARRR spend");
+			return false;
+		}
+		if (status != BitcoinyHTLC.Status.FUNDED) return false;
 
-		PirateChain pirateChain = PirateChain.getInstance();
-
-		// We can't refund P2SH-A until median block time has passed lockTime-A (see BIP113)
-		int medianBlockTime = pirateChain.getMedianBlockTime();
-		if (medianBlockTime <= lockTimeA)
-			return;
-
-		byte[] redeemScriptA = PirateChainHTLC.buildScript(tradeBotData.getTradeForeignPublicKey(), lockTimeA, crossChainTradeData.creatorForeignPKH, tradeBotData.getHashOfSecret());
-		String p2shAddress = pirateChain.deriveP2shAddressBPrefix(redeemScriptA); // Use 'b' prefix when checking status
-		String p2shAddressT3 = pirateChain.deriveP2shAddress(redeemScriptA); // Use 't3' prefix when refunding
-
-		// Fee for redeem/refund is subtracted from P2SH-A balance.
-		long feeTimestamp = calcFeeTimestamp(lockTimeA, crossChainTradeData.tradeTimeout);
-		long p2shFee = PirateChain.getInstance().getP2shFee(feeTimestamp);
-		long minimumAmountA = crossChainTradeData.expectedForeignAmount + p2shFee;
-		BitcoinyHTLC.Status htlcStatusA = PirateChainHTLC.determineHtlcStatus(pirateChain.getBlockchainProvider(), p2shAddress, minimumAmountA);
-
-		switch (htlcStatusA) {
-			case UNFUNDED:
-			case FUNDING_IN_PROGRESS:
-				// Still waiting for P2SH-A to be funded...
-				return;
-
-			case REDEEM_IN_PROGRESS:
-			case REDEEMED:
-				// Too late!
-				TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_DONE,
-						() -> String.format("P2SH-A %s already spent!", p2shAddress));
-				return;
-
-			case REFUND_IN_PROGRESS:
-			case REFUNDED:
-				break;
-
-			case FUNDED:{
-				// Get funding txid
-				String fundingTxidHex = PirateChainHTLC.getUnspentFundingTxid(pirateChain.getBlockchainProvider(), p2shAddress, minimumAmountA);
-				if (fundingTxidHex == null) {
-					throw new ForeignBlockchainException("Missing funding txid when refunding P2SH");
+		int height = pirate.getBlockchainProvider().getCurrentHeight();
+		PirateChainRefundState checkpoint = PirateChainRefundState.decode(tradeBotData.getLastTransactionSignature());
+		if ((checkpoint == null || !checkpoint.confirmed) && State.ALICE_REFUNDED.name().equals(tradeBotData.getState())) {
+			tradeBotData.setLastTransactionSignature(new PirateChainRefundState(height + 30, now, checkpoint == null ? null : checkpoint.txid).encode());
+			TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_REFUNDING_A, () -> "Legacy ARRR refund still funded; checking before retry");
+			return false;
+		}
+		if (checkpoint != null) {
+			if (!checkpoint.mayRetry(height, now)) return false;
+			if (checkpoint.txid != null) {
+				try {
+					int expiry = PirateChainTransaction.read(pirate.getBlockchainProvider().getRawTransaction(checkpoint.transactionHash())).expiryHeight;
+					// A non-expiring or still-live transaction must not be replaced.
+					if (expiry == 0 || height <= expiry + 2) return false;
+				} catch (org.qortal.transform.TransformationException e) {
+					throw new ForeignBlockchainException("Unable to verify ARRR refund expiry");
+				} catch (ForeignBlockchainException.NotFoundException e) {
+					// The checkpoint's block/time quarantine has elapsed; reconcile the UTXO below.
 				}
-				String fundingTxid58 = Base58.encode(HashCode.fromString(fundingTxidHex).asBytes());
-
-				Coin refundAmount = Coin.valueOf(crossChainTradeData.expectedForeignAmount);
-				byte[] privateKey = tradeBotData.getTradePrivateKey();
-				String privateKey58 = Base58.encode(privateKey);
-				String redeemScript58 = Base58.encode(redeemScriptA);
-				String receivingAddress = pirateChain.getWalletAddress(tradeBotData.getForeignKey());
-
-				String txid = PirateChain.getInstance().refundP2sh(p2shAddressT3,
-						receivingAddress, refundAmount.value, redeemScript58, fundingTxid58, lockTimeA, privateKey58);
-				LOGGER.info("Refund txid: {}", txid);
-				break;
 			}
 		}
+		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address, minimum);
+		if (funding == null) return false; // Missing/unconfirmed spend: wait for a definitive chain result.
+		recordFundingDetails(tradeBotData, funding, tradeData.expectedForeignAmount);
+		String destination = pirate.getWalletAddress(tradeBotData.getForeignKey());
+		// Commit before JNI so a crash or lost response cannot cause an immediate duplicate attempt.
+		checkpoint = new PirateChainRefundState(height + 30, now, null);
+		tradeBotData.setLastTransactionSignature(checkpoint.encode());
+		TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_REFUNDING_A, () -> "Broadcasting ARRR refund; awaiting confirmation");
+		String txid;
+		try {
+			txid = pirate.refundP2sh(pirate.deriveP2shAddress(script), destination, tradeData.expectedForeignAmount,
+					Base58.encode(script), Base58.encode(funding.hash), lockTime,
+					Base58.encode(tradeBotData.getTradePrivateKey()), fundingFeeOrDefault(tradeBotData), tradeBotData.getFundingOutputIndex());
+		} catch (ForeignBlockchainException.TransactionRejectedException e) {
+			// The native validator did not broadcast; an uncertain-send quarantine does not apply.
+			tradeBotData.setLastTransactionSignature(null);
+			repository.getCrossChainRepository().save(tradeBotData);
+			repository.saveChanges();
+			LOGGER.error("Cleared ARRR refund checkpoint after deterministic rejection for AT {} (trade {})",
+					tradeBotData.getAtAddress(), tradeBotData.getTradeNativeAddress(), e);
+			throw e;
+		}
+		try {
+			tradeBotData.setLastTransactionSignature(new PirateChainRefundState(height + 30, now, txid).encode());
+		} catch (IllegalArgumentException e) {
+			throw new ForeignBlockchainException("Invalid ARRR refund transaction ID");
+		}
+		repository.getCrossChainRepository().save(tradeBotData);
+		repository.saveChanges();
+		LOGGER.info("ARRR refund broadcast: {} (awaiting confirmations)", txid);
+		return true;
+	}
 
-		TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_REFUNDED,
-				() -> String.format("LockTime-A reached. Refunded P2SH-A %s. Trade aborted", p2shAddress));
+	/** Finished offers can contain other buyers' independent refundable P2SH outputs. */
+	public static boolean isRefundEligible(TradeBotData trade, ATData at, CrossChainTradeData data) {
+		if (trade.getState() == null || !trade.getState().startsWith("ALICE_")
+				|| trade.getForeignKey() == null || trade.getForeignKey().isEmpty() || trade.getLockTimeA() == null
+				|| trade.getLockTimeA() <= 0 || trade.getTradePrivateKey() == null || trade.getTradePrivateKey().length != 32
+				|| trade.getHashOfSecret() == null || trade.getHashOfSecret().length != 20) return false;
+		if (!at.getIsFinished()) return true;
+		if (data.mode == AcctMode.REFUNDED || data.mode == AcctMode.CANCELLED) return true;
+		return data.mode == AcctMode.REDEEMED && data.qortalPartnerAddress != null
+				&& !data.qortalPartnerAddress.equals(trade.getTradeNativeAddress());
 	}
 
 	/**
@@ -904,8 +988,20 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		return true;
 	}
 
-	private long calcFeeTimestamp(int lockTimeA, int tradeTimeout) {
-		return (lockTimeA - tradeTimeout * 60) * 1000L;
+	private static long fundingFeeOrDefault(TradeBotData trade) {
+		if (trade.getFundingFee() != null) return trade.getFundingFee();
+		LOGGER.warn("ARRR funding fee unavailable for AT {} (trade {}); falling back to 10000",
+				trade.getAtAddress(), trade.getTradeNativeAddress());
+		return 10000L;
+	}
+
+	private static void recordFundingDetails(TradeBotData trade, UnspentOutput funding, long expectedAmount) {
+		if (trade.getFundingFee() == null) {
+			trade.setFundingFee(funding.value - expectedAmount);
+			LOGGER.info("Recovered ARRR funding fee {} from output {} for AT {} (trade {})",
+					trade.getFundingFee(), funding.index, trade.getAtAddress(), trade.getTradeNativeAddress());
+		}
+		trade.setFundingOutputIndex(funding.index);
 	}
 
 }

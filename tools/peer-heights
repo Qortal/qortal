@@ -2,10 +2,10 @@
 
 # Requires: 'qort' script in PATH, and 'jq' utility installed
 
-set -e
+set -eo pipefail
 
 # Any extra args passed to us are also passed to 'qort', just prior to '-p peers'
-qort $@ -p peers | \
+qort "$@" -p peers | \
 	jq -r 'def lpad($len):
 			tostring | ($len - length) as $l | (" " * $l)[:$l] + .;
 		.[] |

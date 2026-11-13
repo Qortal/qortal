@@ -11,6 +11,13 @@ public class ForeignBlockchainException extends Exception {
 		super(message);
 	}
 
+	/** A definitive native validation rejection: no transaction was broadcast. */
+	public static class TransactionRejectedException extends ForeignBlockchainException {
+		public TransactionRejectedException(String message) {
+			super(message);
+		}
+	}
+
 	public static class NetworkException extends ForeignBlockchainException {
 		private final Integer daemonErrorCode;
 		private final transient Object server;

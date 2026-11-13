@@ -1,97 +1,140 @@
 #!/usr/bin/env bash
 
-# default output post-processor
-postproc=cat
-
-# Qortal defaults
+# Arrays keep omitted options out of curl's arguments and preserve quoted data.
+set -o pipefail
+name=${0##*/}
 port=12391
-example_host=node10.qortal.org
+pretty=false
+method=
+curl_args=(--silent --show-error --globoff --connect-timeout 5)
+postproc=(cat)
 
-# called-as name
-name="${0##*/}"
+usage() {
+	cat <<USAGE
+usage: $name [-l] [-p] [-t] [-j] [-k] [GET|POST|PUT|PATCH|DELETE] <url> [<post-data>]
+-l: use localhost as source address
+-p: pretty-print JSON (requires jq or json_pp)
+-t: use testnet port (62391 instead of 12391)
+-j: send Content-Type: application/json
+-k: allow HTTPS with an unverified certificate
+-h, --help: show this help
+--: end option parsing
+Supply one quoted body; @file or @- reads data from a file or standard input.
+example: $name -p blocks/last
+example: BASE_URL=node10.qortal.org $name -p blocks/last
+example: BASE_URL=https://node.example:443/api $name -p blocks/last
+example: $name -j POST peers '{"address":"node.example"}'
+example: $name -l DELETE peers/known
+USAGE
+}
 
-script_dir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+die() {
+	printf '%s: %s\n' "$name" "$*" >&2
+	exit 2
+}
 
-while [ -n "$*" ]; do
+while (( $# )); do
 	case $1 in
-		-p)
-			shift
-			postproc="json_pp -f json -t json -json_opt utf8,pretty"
+		-p) pretty=true ;;
+		-l) curl_args+=(--interface localhost) ;;
+		-t) port=62391 ;;
+		-j) curl_args+=(--header 'Content-Type: application/json') ;;
+		-k) curl_args+=(--insecure) ;;
+		-h|--help) usage; exit 0 ;;
+		[Gg][Ee][Tt]|[Pp][Oo][Ss][Tt]|[Pp][Uu][Tt]|[Pp][Aa][Tt][Cc][Hh]|[Dd][Ee][Ll][Ee][Tt][Ee])
+			[[ -z ${method:-} ]] || die 'specify only one HTTP method'
+			# tr also works with older Bash installations on macOS.
+			method=$(printf '%s' "$1" | LC_ALL=C tr '[:lower:]' '[:upper:]')
+			curl_args+=(--request "$method")
 			;;
-
-		[Dd][Ee][Ll][Ee][Tt][Ee])
-			shift
-			method="-X DELETE"
-			;;
-
-		-l)
-			shift
-			src="--interface localhost"
-			;;
-
-		-t)
-			shift
-			testnet=true
-			;;
-
-		-j)
-			shift
-			content_type="Content-Type: application/json"
-			;;
-
-		*)
-			break
-			;;
+		--) shift; break ;;
+		-*) die "unknown option: $1 (see --help)" ;;
+		*) break ;;
 	esac
+	shift
 done
-	
-if [ "${name}" = "qort" ]; then
-	port=${testnet:+62391}
-	port=${port:-12391}
-	example_host=node10.qortal.org
-fi
 
-if [ -z "$*" ]; then
-	echo "usage: $name [-l] [-p] [-t] [DELETE] <url> [<post-data>]"
-	echo "-l: use localhost as source address"
-	echo "-p: pretty-print JSON output"
-	echo "-t: use testnet port"
-	echo "example (using localhost:${port}): $name -p blocks/last"
-	echo "example: $name -p http://${example_host}:${port}/blocks/last"
-	echo "example: BASE_URL=http://${example_host}:${port} $name -p blocks/last"
-	echo "example: BASE_URL=${example_host} $name -p blocks/last"
-	echo "example: $name -l DELETE peers/known"
-	exit
+if (( $# == 0 )); then
+	usage
+	exit 2
 fi
-
+(( $# <= 2 )) || die 'expected a URL and at most one quoted request body'
+[[ -n $1 ]] || die 'URL must not be empty'
 url=$1
 shift
 
-if [ -f "apikey.txt" ]; then
-  apikey=$(cat "apikey.txt")
-elif [ -f "${script_dir}/../apikey.txt" ]; then
-  apikey=$(cat "${script_dir}/../apikey.txt")
-elif [ -f "${HOME}/qortal/apikey.txt" ]; then
-  apikey=$(cat "${HOME}/qortal/apikey.txt")
-fi
-
-if [ "${url:0:4}" != "http" ]; then
-	base_url=${BASE_URL-localhost:${port}}
-
-	if [ "${base_url:0:4}" != "http" ]; then
-	        base_url="http://${base_url}"
+command -v curl >/dev/null 2>&1 || die 'curl is required'
+if "$pretty"; then
+	if command -v jq >/dev/null 2>&1; then
+		postproc=(jq .)
+	elif command -v json_pp >/dev/null 2>&1; then
+		postproc=(json_pp -f json -t json -json_opt utf8,pretty)
+	else
+		die 'pretty-printing requires jq or json_pp; install one or omit -p'
 	fi
+fi
 
-	if [ -n "${base_url/#*:[0-9[0-9]*}" ]; then
-	        base_url="${base_url%%/}:${port}"
+# Preserve API error bodies on newer curl, with a fallback for older versions.
+if [[ $(curl --help all 2>/dev/null) == *--fail-with-body* ]]; then
+	curl_args+=(--fail-with-body)
+else
+	curl_args+=(--fail)
+fi
+
+case $url in
+	[Hh][Tt][Tt][Pp]://*|[Hh][Tt][Tt][Pp][Ss]://*) ;;
+	*://*) die 'URL must use http:// or https://' ;;
+	*)
+		base_url=${BASE_URL:-localhost:$port}
+		case $base_url in
+			[Hh][Tt][Tt][Pp]://*|[Hh][Tt][Tt][Pp][Ss]://*) ;;
+			*://*) die 'BASE_URL must use http:// or https://' ;;
+			*) base_url="http://$base_url" ;;
+		esac
+		[[ $base_url != *\?* && $base_url != *\#* ]] || die 'BASE_URL must not contain a query or fragment'
+		scheme=${base_url%%://*}
+		remainder=${base_url#*://}
+		authority=${remainder%%/*}
+		path=${remainder#"$authority"}
+		[[ -n $authority ]] || die 'BASE_URL must include a host'
+		host_port=${authority##*@}
+		case $host_port in
+			\[*\]) authority="$authority:$port" ;;
+			\[*\]:*)
+				[[ $host_port =~ ^\[[^]]+\]:[0-9]+$ ]] || die 'invalid IPv6 host or port in BASE_URL'
+				;;
+			*:* )
+				[[ $host_port =~ ^[^:]+:[0-9]+$ ]] || die 'invalid BASE_URL port; IPv6 addresses must be bracketed'
+				;;
+			*) authority="$authority:$port" ;;
+		esac
+		while [[ $path == */ ]]; do path=${path%/}; done
+		url="$scheme://$authority$path/${url#/}"
+		;;
+esac
+
+# Keep the existing key-file lookup order. Do not send an empty auth header.
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || die 'cannot locate script directory'
+for key_file in apikey.txt "$script_dir/../apikey.txt" "${HOME:-}/qortal/apikey.txt"; do
+	if [[ -f $key_file ]]; then
+		[[ -r $key_file ]] || die "cannot read API key file: $key_file"
+		apikey=$(cat -- "$key_file") || die "cannot read API key file: $key_file"
+		apikey=${apikey%$'\r'} # Accept a single CRLF-terminated key.
+		[[ $apikey != *$'\n'* && $apikey != *$'\r'* ]] || die 'API key must contain a single line'
+		[[ -z $apikey ]] || curl_args+=(--header "X-API-KEY: $apikey")
+		break
 	fi
+done
 
-	url="${base_url%%/}/${url#/}"
+curl_args+=(--url "$url")
+if (( $# )); then
+	# Preserve newlines in @file/@- inputs as well as JSON bodies.
+	curl_args+=(--data-binary "$1")
 fi
 
-if [ "$#" != 0 ]; then
-	data="--data"
-fi
-
-curl --silent --insecure --connect-timeout 5 -H "X-API-KEY: ${apikey}" ${content_type:+--header} "${content_type}" ${method} ${src} --url ${url} ${data} "$@" | ${postproc}
-echo
+curl "${curl_args[@]}" | "${postproc[@]}"
+statuses=("${PIPESTATUS[@]}")
+printf '\n'
+# Prefer a request failure over a secondary JSON parse error on its body.
+(( statuses[0] == 0 )) || exit "${statuses[0]}"
+exit "${statuses[1]}"

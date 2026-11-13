@@ -1087,9 +1087,17 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 		StringBuilder sql = new StringBuilder(512);
 		List<Object> bindParams = new ArrayList<>();
 
-		sql.append("SELECT name, service, identifier, size, status, created_when, updated_when, " +
-				"title, description, category, tag1, tag2, tag3, tag4, tag5, latest_signature " +
-				"FROM ArbitraryResourcesCache");
+		boolean returnMetadata = Boolean.TRUE.equals(includeMetadata);
+		// Metadata is only needed for output or filters that actually search it. In particular,
+		// default-resource queries search names only, so they can avoid a lookup per candidate.
+		boolean searchMetadata = (query != null && !defaultResource) || title != null || description != null
+				|| (keywords != null && !keywords.isEmpty());
+
+		sql.append("SELECT name, service, identifier, size, status, created_when, updated_when, latest_signature");
+		if (returnMetadata) {
+			sql.append(", title, description, category, tag1, tag2, tag3, tag4, tag5");
+		}
+		sql.append(" FROM ArbitraryResourcesCache");
 
 		// Default to "latest" mode
 		if (mode == null) {
@@ -1114,7 +1122,10 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 			sql.append(" JOIN Names USING (name) JOIN Accounts ON Accounts.account=Names.owner");
 		}
 
-		sql.append(" LEFT JOIN ArbitraryMetadataCache USING (service, name, identifier) WHERE name IS NOT NULL");
+		if (returnMetadata || searchMetadata) {
+			sql.append(" LEFT JOIN ArbitraryMetadataCache USING (service, name, identifier)");
+		}
+		sql.append(" WHERE name IS NOT NULL");
 
 		if (minLevel != null) {
 			// Add level filter
@@ -1283,17 +1294,7 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 				Long created = resultSet.getLong(6);
 				Long updated = resultSet.getLong(7);
 
-				// Optional metadata fields
-				String titleResult = resultSet.getString(8);
-				String descriptionResult = resultSet.getString(9);
-				String category = resultSet.getString(10);
-				String tag1 = resultSet.getString(11);
-				String tag2 = resultSet.getString(12);
-				String tag3 = resultSet.getString(13);
-				String tag4 = resultSet.getString(14);
-				String tag5 = resultSet.getString(15);
-
-				byte[] latestSignatureResult = resultSet.getBytes(16);
+				byte[] latestSignatureResult = resultSet.getBytes(8);
 
 				if (Objects.equals(identifierResult, "default")) {
 					// Map "default" back to null. This is optional but probably less confusing than returning "default".
@@ -1313,8 +1314,15 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 					arbitraryResourceData.setStatus(ArbitraryResourceStatus.Status.valueOf(status));
 				}
 
-				if (includeMetadata != null && includeMetadata) {
-					// TODO: we could avoid the join altogether
+				if (returnMetadata) {
+					String titleResult = resultSet.getString(9);
+					String descriptionResult = resultSet.getString(10);
+					String category = resultSet.getString(11);
+					String tag1 = resultSet.getString(12);
+					String tag2 = resultSet.getString(13);
+					String tag3 = resultSet.getString(14);
+					String tag4 = resultSet.getString(15);
+					String tag5 = resultSet.getString(16);
 					ArbitraryResourceMetadata metadata = new ArbitraryResourceMetadata();
 					metadata.setTitle(titleResult);
 					metadata.setDescription(descriptionResult);

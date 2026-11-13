@@ -459,14 +459,14 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	 */
 	@Override
 	public byte[] getRawTransaction(byte[] txHash) throws ForeignBlockchainException {
-		ByteString byteString = ByteString.copyFrom(txHash);
-		TxFilter txFilter = TxFilter.newBuilder().setHash(byteString).build();
-		RawTransaction rawTransaction = this.getCompactTxStreamerStub().getTransaction(txFilter);
-
-		if (!(rawTransaction instanceof RawTransaction))
-			throw new ForeignBlockchainException.NetworkException("Unexpected output from Pirate Chain getTransaction gRPC");
-
-		return rawTransaction.getData().toByteArray();
+		try {
+			TxFilter filter = TxFilter.newBuilder().setHash(ByteString.copyFrom(txHash)).build();
+			return this.getCompactTxStreamerStub().withDeadlineAfter(30, TimeUnit.SECONDS).getTransaction(filter).getData().toByteArray();
+		} catch (io.grpc.StatusRuntimeException e) {
+			if (e.getStatus().getCode() == io.grpc.Status.Code.NOT_FOUND)
+				throw new ForeignBlockchainException.NotFoundException("Pirate transaction not found");
+			throw new ForeignBlockchainException.NetworkException("Unable to fetch Pirate transaction: " + e.getStatus().getCode());
+		}
 	}
 
 	/**

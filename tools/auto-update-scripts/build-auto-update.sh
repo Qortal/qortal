@@ -31,7 +31,7 @@ function increment_version() {
   local version=$1
   local major minor patch
   IFS='.' read -r major minor patch <<< "$version"
-  ((patch++))
+  patch=$((10#$patch + 1))
   echo "$major.$minor.$patch"
 }
 
@@ -165,10 +165,6 @@ done
 run_git add pom.xml
 run_git commit -m "Bump version to ${new_version}"
 run_git tag "v${new_version}"
-confirm_or_exit "About to push version tag 'v${new_version}' to origin."
-run_git push origin "v${new_version}"
-confirm_or_exit "Also push the ${current_branch} branch to origin?"
-run_git push origin "${current_branch}"
 
 # === Extract Info ===
 short_hash=$(git rev-parse --short HEAD)
@@ -179,14 +175,18 @@ echo "Using commit hash: ${short_hash}"
 # === Build JAR ===
 echo "Building JAR for ${project}..."
 if ! $DRY_RUN; then
-  mvn clean package > /dev/null 2>&1 || {
-    echo "Build failed. Check logs in ${LOG_FILE}" >&2
+  mvn clean package > "${LOG_FILE}.maven" 2>&1 || {
+    echo "Build failed. Check logs in ${LOG_FILE}.maven" >&2
     abort "Maven build failed."
   }
 fi
 
-jar_file=$(ls target/${project}*.jar | head -n1)
-[[ ! -f "${jar_file}" ]] && abort "Built JAR file not found."
+if ! $DRY_RUN; then
+  shopt -s nullglob
+  jars=(target/"$project"*.jar)
+  (( ${#jars[@]} == 1 )) || abort 'Expected exactly one packaged JAR.'
+  jar_file=${jars[0]}
+fi
 
 # === XOR Obfuscation ===
 echo "Creating ${project}.update..."
@@ -196,23 +196,27 @@ $DRY_RUN || java -cp "${jar_file}" org.qortal.XorUpdate "${jar_file}" "${project
 update_branch="auto-update-${short_hash}"
 
 echo "Creating update branch: ${update_branch}"
-if git show-ref --verify --quiet refs/heads/${update_branch}; then
-  run_git branch -D "${update_branch}"
+if ! $DRY_RUN; then
+  bash tools/create-auto-update-branch.sh "${project}.update" "${update_branch}" \
+    "XORed auto-update JAR for commit ${short_hash}"
+else
+  echo "Would create ${update_branch} containing only ${project}.update; source checkout unchanged."
 fi
 
-run_git checkout --orphan "${update_branch}"
-$DRY_RUN || git rm -rf . > /dev/null 2>&1 || true
-
-run_git add "${project}.update"
-run_git commit -m "XORed auto-update JAR for commit ${short_hash}"
-
+# Publish refs only after the JAR and update commit have been built successfully.
+confirm_or_exit "About to push version tag 'v${new_version}' to origin."
+run_git push origin "v${new_version}"
+confirm_or_exit "Also push the ${current_branch} branch to origin?"
+run_git push origin "${current_branch}"
 confirm_or_exit "About to push auto-update branch '${update_branch}' to origin."
 run_git push --set-upstream origin "${update_branch}"
 
-# === Return to Original Branch ===
-echo "Switching back to original branch: ${current_branch}"
-run_git checkout --force "${current_branch}"
-echo "Done. ${project}.update is committed to ${update_branch}."
+# The update commit uses a temporary index; the source branch stays checked out.
+if $DRY_RUN; then
+  echo 'Dry run complete; no version, tag, update branch, or push was created.'
+else
+  echo "Done. ${project}.update is committed to ${update_branch}."
+fi
 
 # === Summary Output ===
 echo
@@ -225,7 +229,8 @@ echo "Tag:               v${new_version}"
 echo "Commit Hash:       ${short_hash}"
 echo "Auto-Update Branch: auto-update-${short_hash}"
 echo
-echo "Pushed to:         ${git_origin}"
+if $DRY_RUN; then echo "Would push to:     ${git_origin}"
+else echo "Pushed to:         ${git_origin}"; fi
 echo "Logs saved to:     ${LOG_FILE}"
 echo "======================================"
 echo
@@ -246,19 +251,15 @@ fi
 if $RUN_PUBLISH; then
   echo "Running Python publish_auto_update script..."
   if [[ -f "${PUBLISH_SCRIPT}" ]]; then
-    read -rsp "Enter your Base58 private key: " PRIVATE_KEY
-    echo
-
-    if [[ "${PUBLISH_DRY_FLAG}" == "--dry-run" ]]; then
-      echo "Dry-run mode active for Python script."
-      python3 "${PUBLISH_SCRIPT}" "${PRIVATE_KEY}" "${short_hash}" --dry-run
+    if $DRY_RUN; then
+      echo 'Dry run: publisher skipped because the proposed update was not built or pushed.'
+    elif [[ "${PUBLISH_DRY_FLAG}" == "--dry-run" ]]; then
+      python3 "${PUBLISH_SCRIPT}" "${short_hash}" --dry-run
     else
       echo "Publishing auto-update for real..."
-      python3 "${PUBLISH_SCRIPT}" "${PRIVATE_KEY}" "${short_hash}"
+      python3 "${PUBLISH_SCRIPT}" "${short_hash}"
     fi
   else
     echo "WARNING: Python script not found at ${PUBLISH_SCRIPT}. Skipping."
   fi
 fi
-
-

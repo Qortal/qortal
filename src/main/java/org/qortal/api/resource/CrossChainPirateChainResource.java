@@ -17,11 +17,13 @@ import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.Security;
 import org.qortal.api.model.crosschain.PirateChainBalance;
 import org.qortal.api.model.crosschain.PirateChainSendRequest;
+import org.qortal.api.model.crosschain.PirateChainSpendability;
 import org.qortal.api.model.crosschain.ForeignCoinStatus;
 import org.qortal.controller.PirateChainWalletController;
 import org.qortal.crosschain.ChainableServer;
 import org.qortal.crosschain.ForeignBlockchainException;
 import org.qortal.crosschain.PirateChain;
+import org.qortal.crosschain.PirateChainAddress;
 import org.qortal.crosschain.PirateLightClient;
 import org.qortal.crosschain.ServerConnectionInfo;
 import org.qortal.crosschain.ServerInfo;
@@ -46,12 +48,33 @@ import java.util.List;
 @Tag(name = "Cross-Chain (Pirate Chain)")
 public class CrossChainPirateChainResource {
 
+	@GET
+	@Path("/tradefees")
+	@Produces(MediaType.APPLICATION_JSON)
+	@Operation(summary = "Returns ARRR trade funding and HTLC spend fees in atomic units")
+	public org.qortal.api.model.crosschain.PirateChainTradeFees getTradeFees() throws ForeignBlockchainException {
+		return new org.qortal.api.model.crosschain.PirateChainTradeFees(PirateChain.getFundingFee(),
+				PirateChain.getInstance().getP2shFee(null));
+	}
+
 	private static final Logger LOGGER = LogManager.getLogger(CrossChainPirateChainResource.class);
 
 	@Context
 	HttpServletRequest request;
 	@Context
 	HttpHeaders headers;
+
+	@GET
+	@Path("/validateaddress")
+	@Produces(MediaType.APPLICATION_JSON)
+	@Operation(summary = "Validates an ARRR payment address",
+			description = "Checks the mainnet shielded address format, network and checksum using the same validator as Core. Supports Sapling and Ironwood. Does not require a wallet or API key, or check whether the address has funds.",
+			responses = @ApiResponse(content = @Content(schema = @Schema(type = "boolean"))))
+	public String validateAddress(@Parameter(description = "Complete recipient address") @QueryParam("address") String address) {
+		// Jersey's JSON writer does not serialize a bare Boolean. Emit the JSON
+		// boolean literal through its String writer, as with other scalar APIs.
+		return Boolean.toString(PirateChainAddress.isValid(address));
+	}
 
 	@GET
 	@Path("/status")
@@ -168,7 +191,7 @@ public class CrossChainPirateChainResource {
 
 	@POST
 	@Path("/send")
-	@Operation(summary = "Sends ARRR from wallet", description = "Currently supports 'legacy' P2PKH PirateChain addresses and Native SegWit (P2WPKH) addresses. Supply BIP32 'm' private key in base58, starting with 'xprv' for mainnet, 'tprv' for testnet", requestBody = @RequestBody(required = true, content = @Content(mediaType = MediaType.TEXT_PLAIN, schema = @Schema(type = "string", description = "32 bytes of entropy, Base58 encoded", example = "5oSXF53qENtdUyKhqSxYzP57m6RhVFP9BJKRr9E5kRGV"))), responses = {
+	@Operation(summary = "Sends ARRR from wallet", description = "Sends to a mainnet Sapling (zs) or Ironwood (pirate) shielded address. Supply the wallet's 32 bytes of entropy, Base58 encoded, and an amount in ARRR.", requestBody = @RequestBody(required = true, content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = PirateChainSendRequest.class))), responses = {
 			@ApiResponse(content = @Content(mediaType = MediaType.TEXT_PLAIN, schema = @Schema(type = "string", description = "transaction hash")))
 	})
 	@ApiErrors({ ApiError.INVALID_PRIVATE_KEY, ApiError.INVALID_CRITERIA, ApiError.INVALID_ADDRESS,
@@ -185,6 +208,9 @@ public class CrossChainPirateChainResource {
 		if (pirateChainSendRequest.feePerByte != null && pirateChainSendRequest.feePerByte <= 0)
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
 
+		if (!PirateChainAddress.isValid(pirateChainSendRequest.receivingAddress))
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
+
 		PirateChain pirateChain = PirateChain.getInstance();
 
 		try {
@@ -192,9 +218,37 @@ public class CrossChainPirateChainResource {
 			this.logResponse("send", response, true);
 			return response;
 
-		} catch (ForeignBlockchainException e) {
-			// TODO
+		} catch (ForeignBlockchainException.InsufficientFundsException e) {
 			this.logError("send", e);
+			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FOREIGN_BLOCKCHAIN_BALANCE_ISSUE,
+					e.getMessage());
+		} catch (ForeignBlockchainException e) {
+			this.logError("send", e);
+			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE,
+					e.getMessage());
+		}
+	}
+
+	@POST
+	@Path("/spendability")
+	@Produces(MediaType.APPLICATION_JSON)
+	@Operation(summary = "Returns native ARRR wallet spend readiness",
+			description = "Supply 32 bytes of entropy, Base58 encoded. Readiness is separate from wallet balance and sync height. This query does not send funds or start a rescan. Requires the Unified Wallet library.",
+			requestBody = @RequestBody(required = true, content = @Content(mediaType = MediaType.TEXT_PLAIN,
+					schema = @Schema(type = "string", description = "32 bytes of entropy, Base58 encoded"))),
+			responses = @ApiResponse(content = @Content(schema = @Schema(implementation = PirateChainSpendability.class))))
+	@ApiErrors({ ApiError.INVALID_PRIVATE_KEY, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE })
+	@SecurityRequirement(name = "apiKey")
+	public PirateChainSpendability getPirateChainSpendability(@HeaderParam(Security.API_KEY_HEADER) String apiKey,
+			String entropy58) {
+		Security.checkApiCallAllowed(request);
+		try {
+			PirateChain pirateChain = PirateChain.getInstance();
+			if (pirateChain == null)
+				throw new ForeignBlockchainException("Pirate wallet is disabled");
+			return pirateChain.getWalletSpendability(entropy58);
+		} catch (ForeignBlockchainException e) {
+			this.logError("spendability", e);
 			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE,
 					e.getMessage());
 		}

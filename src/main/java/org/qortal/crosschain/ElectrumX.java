@@ -40,7 +40,9 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 	// See: https://electrumx.readthedocs.io/en/latest/protocol-changes.html
 	private static final double MIN_PROTOCOL_VERSION = 1.2;
-	private static final double MAX_PROTOCOL_VERSION = 2.0; // Higher than current latest, for hopeful future-proofing
+	// Advertise only implemented semantics: 1.6 changes header responses and 1.7
+	// removes the blockchain.scripthash methods used for wallet discovery/spending.
+	private static final double MAX_PROTOCOL_VERSION = 1.4;
 	private static final int MIN_TARGET_CONNECTIONS = 2;
 	private static final int DEFAULT_TARGET_CONNECTIONS = 3;
 	private static final double TARGET_CONNECTIONS_FRACTION = 0.75d;
@@ -52,6 +54,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 	// "message": "daemon error: DaemonError({'code': -5, 'message': 'No such mempool or blockchain transaction. Use gettransaction for wallet transactions.'})"
 	private static final Pattern DAEMON_ERROR_REGEX = Pattern.compile("DaemonError\\(\\{.*'code': ?(-?[0-9]+).*\\}\\)\\z"); // Capture 'code' inside curly-brace content
+	private static final long JSON_RPC_METHOD_NOT_FOUND = -32601L;
 
 	/** Error message sent by some ElectrumX servers when they don't support returning verbose transactions. */
 	private static final String VERBOSE_TRANSACTIONS_UNSUPPORTED_MESSAGE = "verbose transactions are currently unsupported";
@@ -998,7 +1001,23 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 			while(response == null) {
 
-				response = connectedRpc(electrumServer, method, params);
+				try {
+					response = connectedRpc(electrumServer, method, params);
+				} catch (UnsupportedRpcMethodException e) {
+					ChainableServer unsupportedServer = electrumServer.getServer();
+					recordFailure(unsupportedServer);
+					this.connections.remove(electrumServer);
+					electrumServer.closeServer(this.getClass().getSimpleName(),
+							String.format("ElectrumX server does not support RPC method %s", method));
+					LOGGER.warn("{} ElectrumX server {} does not support {}; trying another server",
+							this.blockchain.getCurrencyCode(), unsupportedServer, method);
+					electrumServer = acquireServer();
+					continue;
+				} catch (ForeignBlockchainException e) {
+					// The server returned a valid error response, so keep the connection available.
+					releaseServer(electrumServer);
+					throw e;
+				}
 
 				// If we have more servers and this one replied slowly, try another
 				if (!this.availableConnections.isEmpty()) {
@@ -1350,6 +1369,9 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 			String message = (String) messageObj;
 
+			if (isUnsupportedRpcMethodError(errorJson.get("code"), message))
+				throw new UnsupportedRpcMethodException(message, server.getServer());
+
 			// Some error 'messages' are actually wrapped upstream bitcoind errors:
 			// "message": "daemon error: DaemonError({'code': -5, 'message': 'No such mempool or blockchain transaction. Use gettransaction for wallet transactions.'})"
 			// We want to detect these and extract the upstream error code for caller's use
@@ -1366,6 +1388,23 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		}
 
 		return responseJson.get("result");
+	}
+
+	static boolean isUnsupportedRpcMethodError(Object code, String message) {
+		if (code instanceof Number && ((Number) code).longValue() == JSON_RPC_METHOD_NOT_FOUND)
+			return true;
+
+		if (message == null)
+			return false;
+
+		String normalizedMessage = message.toLowerCase(Locale.ROOT);
+		return normalizedMessage.contains("unknown method") || normalizedMessage.contains("method not found");
+	}
+
+	private static class UnsupportedRpcMethodException extends ForeignBlockchainException.NetworkException {
+		private UnsupportedRpcMethodException(String message, Object server) {
+			super(message, server);
+		}
 	}
 
 	@Override
