@@ -1,14 +1,19 @@
 package org.qortal.crosschain;
 
 import com.google.common.hash.HashCode;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.bitcoinj.core.*;
 import org.bitcoinj.crypto.*;
 import org.bitcoinj.script.ScriptBuilder;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 
 /** Network data for client-side signing. No private-key or transaction-signing API. */
 public final class LocalWalletSupport {
     private LocalWalletSupport() {}
+    private static final Logger LOGGER = LogManager.getLogger(LocalWalletSupport.class);
     private static final Map<String, String> CHAINS = Map.of(
         "BTC", "000000000019d6689c085ae165831e93",
         "LTC", "12a765e31ffd4059bada1e25190f6e98",
@@ -50,52 +55,87 @@ public final class LocalWalletSupport {
 
     public static Map<String, Object> spendContext(Bitcoiny coin, String xpub, String expected)
             throws ForeignBlockchainException {
+        return spendContext(coin, xpub, expected, System::nanoTime);
+    }
+
+    static Map<String, Object> spendContext(Bitcoiny coin, String xpub, String expected, LongSupplier clock)
+            throws ForeignBlockchainException {
+        PreparationTrace trace = new PreparationTrace(clock);
+        try {
+            return discoverSpendContext(coin, xpub, expected, trace);
+        } catch (ForeignBlockchainException | RuntimeException e) {
+            trace.failed(coin, e);
+            throw e;
+        }
+    }
+
+    private static Map<String, Object> discoverSpendContext(Bitcoiny coin, String xpub, String expected, PreparationTrace trace)
+            throws ForeignBlockchainException {
         DeterministicKey root = checkPublicKey(coin, xpub, expected);
         List<Map<String, Object>> outputs = new ArrayList<>();
         Map<String, String> previous = new LinkedHashMap<>();
         Map<String, Transaction> parsed = new HashMap<>();
         int bytes = 0;
         Integer tipHeight = null;
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60);
+        long deadline = trace.clock.getAsLong() + TimeUnit.SECONDS.toNanos(60);
         // Match bitcoinj's non-hardened receive/change branches, including used change addresses.
         for (int branch = 0; branch < 2; branch++) {
             DeterministicKey parent = HDKeyDerivation.deriveChildKey(root, new ChildNumber(branch, false));
             int unused = 0;
             for (int index = 0; unused < 20; index++) {
-                if (index >= 2000 || System.nanoTime() > deadline)
-                    throw new ForeignBlockchainException("Wallet discovery limit reached");
+                trace.stage = "ADDRESS_DISCOVERY";
+                if (index >= 2000)
+                    throw trace.reject("DISCOVERY_KEY_LIMIT", "Wallet discovery limit reached");
+                if (trace.clock.getAsLong() > deadline)
+                    throw trace.reject("DISCOVERY_TIME_LIMIT", "Wallet discovery limit reached");
                 DeterministicKey key = HDKeyDerivation.deriveChildKey(parent, new ChildNumber(index, false));
                 String address = LegacyAddress.fromKey(coin.params, key).toString();
                 byte[] script = ScriptBuilder.createOutputScript(LegacyAddress.fromKey(coin.params, key)).getProgram();
                 // Include mempool history so an unconfirmed used address cannot terminate discovery.
+                trace.stage = "ADDRESS_HISTORY";
+                trace.addresses++;
                 boolean used = !coin.blockchainProvider.getAddressTransactions(script, true).isEmpty();
                 unused = used ? 0 : unused + 1;
                 // History includes mempool transactions. An unused address has no
                 // spendable outputs: avoid a second network round trip for every gap key.
                 if (!used) continue;
+                trace.stage = "UNSPENT_OUTPUTS";
                 for (UnspentOutput utxo : coin.blockchainProvider.getUnspentOutputs(script, false)) {
                     if (utxo.height <= 0) continue;
-                    if (outputs.size() >= 1000) throw new ForeignBlockchainException("Too many wallet outputs");
+                    if (outputs.size() >= 1000) throw trace.reject("OUTPUT_LIMIT", "Too many wallet outputs");
                     String hash = HashCode.fromBytes(utxo.hash).toString();
                     Transaction tx = parsed.get(hash);
                     if (tx == null) {
+                        trace.stage = "PREVIOUS_TRANSACTION";
                         byte[] raw = coin.blockchainProvider.getRawTransaction(utxo.hash);
                         bytes = Math.addExact(bytes, raw.length);
+                        trace.responseBytes = bytes;
                         if (raw.length > 1000000 || bytes > 8000000)
-                            throw new ForeignBlockchainException("Wallet response too large");
-                        tx = new Transaction(coin.params, raw);
+                            throw trace.reject("PREVIOUS_TRANSACTION_SIZE_LIMIT", "Wallet response too large");
+                        trace.stage = "PREVIOUS_TRANSACTION_VALIDATION";
+                        // Funding can contain witness inputs even when this wallet
+                        // spends only P2PKH outputs. Some altcoin defaults predate
+                        // witness parsing; use a separate serializer for raw bytes.
+                        MessageSerializer serializer = coin.params.getSerializer(false).withProtocolVersion(
+                                Math.max(coin.params.getDefaultSerializer().getProtocolVersion(),
+                                        NetworkParameters.ProtocolVersion.WITNESS_VERSION.getBitcoinProtocolVersion()));
+                        tx = serializer.makeTransaction(raw);
                         if (!tx.getTxId().toString().equals(hash))
-                            throw new ForeignBlockchainException("Previous transaction hash mismatch");
+                            throw trace.reject("PREVIOUS_TRANSACTION_HASH_MISMATCH", "Previous transaction hash mismatch");
                         parsed.put(hash, tx);
                         previous.put(hash, HashCode.fromBytes(raw).toString());
                     }
+                    trace.stage = "PREVIOUS_OUTPUT_VALIDATION";
                     if (utxo.index < 0 || utxo.index >= tx.getOutputs().size())
-                        throw new ForeignBlockchainException("Invalid previous output");
+                        throw trace.reject("PREVIOUS_OUTPUT_INDEX_INVALID", "Invalid previous output");
                     TransactionOutput out = tx.getOutput(utxo.index);
-                    if (out.getValue().value != utxo.value || !Arrays.equals(script, out.getScriptBytes()))
-                        throw new ForeignBlockchainException("Previous output mismatch");
+                    if (out.getValue().value != utxo.value)
+                        throw trace.reject("PREVIOUS_OUTPUT_VALUE_MISMATCH", "Previous output mismatch");
+                    if (!Arrays.equals(script, out.getScriptBytes()))
+                        throw trace.reject("PREVIOUS_OUTPUT_SCRIPT_MISMATCH", "Previous output mismatch");
                     // Newly mined outputs must mature before spending.
                     if (tx.isCoinBase()) {
+                        trace.stage = "CHAIN_HEIGHT";
                         if (tipHeight == null) tipHeight = coin.getBlockchainHeight();
                         if (tipHeight - utxo.height + 1 < coin.params.getSpendableCoinbaseDepth())
                             continue;
@@ -103,6 +143,7 @@ public final class LocalWalletSupport {
                     outputs.add(Map.of("address", address, "height", utxo.height,
                         "path", List.of(branch, index), "pathAsString", "M/" + branch + "/" + index, "scriptPubKeyHex", HashCode.fromBytes(script).toString(),
                         "txHash", hash, "outputIndex", utxo.index, "value", Long.toString(utxo.value)));
+                    trace.outputs = outputs.size();
                 }
             }
         }
@@ -112,7 +153,9 @@ public final class LocalWalletSupport {
         result.put("currencyCode", coin.currencyCode);
         result.put("activeNetwork", "MAIN");
         result.put("chainId", expected);
+        trace.stage = "CHAIN_HEIGHT";
         result.put("tipHeight", tipHeight != null ? tipHeight : coin.getBlockchainHeight());
+        trace.stage = "BUILD_CONTEXT";
         result.put("confirmedOnly", true);
         result.put("transactionFormat", "LEGACY");
         result.put("transactionVersion", 1);
@@ -127,6 +170,43 @@ public final class LocalWalletSupport {
         result.put("previousTransactions", previous);
         result.put("utxos", outputs);
         return result;
+    }
+
+    /** Fixed diagnostic fields only: never log the request, provider message or throwable. */
+    private static final class PreparationTrace {
+        private final LongSupplier clock;
+        private final long started;
+        private String stage = "VALIDATE_WALLET";
+        private String reason;
+        private int addresses;
+        private int outputs;
+        private int responseBytes;
+
+        private PreparationTrace(LongSupplier clock) {
+            this.clock = clock;
+            this.started = clock.getAsLong();
+        }
+
+        private ForeignBlockchainException reject(String reason, String message) {
+            this.reason = reason;
+            return new ForeignBlockchainException(message);
+        }
+
+        private void failed(Bitcoiny coin, Exception failure) {
+            Integer daemonCode = null;
+            if (reason == null) {
+                if (failure instanceof ForeignBlockchainException.NetworkException) reason = "ELECTRUM_NETWORK";
+                else if (failure instanceof ForeignBlockchainException.NotFoundException) reason = "PREVIOUS_TRANSACTION_NOT_FOUND";
+                else if (failure instanceof ForeignBlockchainException) reason = "PROVIDER_RESPONSE_REJECTED";
+                else reason = stage.equals("VALIDATE_WALLET") ? "INVALID_REQUEST" : "INVALID_RESPONSE";
+            }
+            if (failure instanceof ForeignBlockchainException.NetworkException)
+                daemonCode = ((ForeignBlockchainException.NetworkException) failure).getDaemonErrorCode();
+            String currency = coin != null && CHAINS.containsKey(coin.currencyCode) ? coin.currencyCode : "UNKNOWN";
+            LOGGER.warn("[local-wallet-prepare] coin={} stage={} reason={} addresses={} outputs={} responseBytes={} elapsedMs={} cause={} daemonCode={}",
+                    currency, stage, reason, addresses, outputs, responseBytes,
+                    TimeUnit.NANOSECONDS.toMillis(Math.max(0, clock.getAsLong() - started)), failure.getClass().getSimpleName(), daemonCode);
+        }
     }
 
     public static String broadcast(Bitcoiny coin, String hex, String expected) throws ForeignBlockchainException {

@@ -64,3 +64,25 @@ appears; cancel it if only testing preparation. If error 1201 persists, it still
 requires investigation: this error also covers discovery limits and rejected
 transaction data. This fix does not establish that every preparation failure has
 the same cause. No wallet rescan or database change is needed for this correction.
+
+A legacy wallet output can be funded by a transaction containing SegWit inputs.
+The Litecoin network parameters in the current altcoinj dependency default to
+protocol 70003, which disables witness parsing. Parsing those raw funding bytes
+with that default can stop early and compute the wrong transaction ID. Public
+wallet discovery now uses a separate serializer with witness parsing enabled
+(at least protocol 70012), retaining the complete previous transaction and the
+existing transaction-ID, output-value and script checks. This does not change
+the shared network parameters or enable witness inputs in Hub's spending plan.
+
+Failed public wallet preparation logs one `[local-wallet-prepare]` warning with
+the coin, failing stage, controlled reason, address/output counts, response size,
+elapsed time, exception class and optional daemon error code. The warning omits
+wallet keys, addresses, transaction IDs and bytes, provider messages and the
+original throwable. It distinguishes discovery time/key limits, provider reads
+and previous-transaction validation failures while preserving the existing API
+error response. These diagnostics apply to all five public-wallet endpoints.
+
+Run `LocalWalletPreparationTests` with the offline suite above. It covers
+synthetic witness funding, preserved transaction IDs and bytes, unchanged network
+defaults, rejected mismatched hashes, deterministic timeout handling, provider
+failures and diagnostic redaction. No user wallet data is included in fixtures.
