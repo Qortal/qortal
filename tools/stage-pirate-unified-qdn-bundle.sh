@@ -6,20 +6,31 @@ set -euo pipefail
 # library and is the only shape accepted by the guarded release workflow.
 # This script deliberately does not publish or sign anything.
 
-readonly EXPECTED_SHA256='55bd5979c01d424ce4b26428ac35b51aed2da2131ceb18c29443e0b46c18e018'
-readonly RELEASE_URL='https://github.com/crowetic/Stashi-Wallet/actions/runs/41546354523'
+script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+DEFAULT_BUNDLE_DIR="$script_directory/arrr-jni-bundle"
+
+readonly EXPECTED_SHA256='b7e0557790f6eebce1571186feb681619afdce962c0e0d4db7825dfd79272aa0'
+readonly RELEASE_URL='https://github.com/crowetic/Stashi-Wallet/actions/runs/43309390477'
 
 usage() {
 	cat <<'EOF'
-Usage: tools/stage-pirate-unified-qdn-bundle.sh <artifact.zip> <output-directory> [platform|all]
+Usage: tools/stage-pirate-unified-qdn-bundle.sh [<artifact.zip> <output-directory> [platform|all]]
+
+With no arguments, stages all five libraries from the newest
+stashi-qortal-jni-*.zip (by modification time) in tools/arrr-jni-bundle/
+into tools/arrr-jni-bundle/staged/. Both paths are resolved from the
+repository regardless of the current directory. Drop the downloaded
+combined build into tools/arrr-jni-bundle/ first.
+Pass an empty artifact argument ("") to use the default ZIP with a custom
+output directory. An explicit ZIP overrides the default.
 
 Platforms: linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64, windows-x86_64
 
 Use "all" to stage the five-library cross-platform production bundle.
-When omitted, platform defaults to the publishing host.
+With explicit arguments, an omitted platform defaults to the publishing host.
 
 The artifact must be the Qortal JNI 0.3.9 combined archive from
-crowetic/Stashi-Wallet deb736549e9b (based on upstream Stashi v1.2.6),
+crowetic/Stashi-Wallet bd9b620194d1 (based on upstream Stashi v1.2.6),
 with the SHA-256 pinned in this script. The output directory must not exist.
 EOF
 }
@@ -56,14 +67,30 @@ library_for_platform() {
 	esac
 }
 
-if (( $# < 2 || $# > 3 )); then
+if (( $# == 1 || $# > 3 )); then
 	usage >&2
 	exit 2
 fi
 
-artifact=$1
-output_directory=$2
+artifact=${1:-}
+output_directory=${2-$DEFAULT_BUNDLE_DIR/staged}
 platform=${3:-}
+if (( $# == 0 )); then
+	platform=all
+fi
+
+if [[ -z $artifact ]]; then
+	for candidate in "$DEFAULT_BUNDLE_DIR"/stashi-qortal-jni-*.zip; do
+		[[ -f $candidate ]] || continue
+		if [[ -z $artifact || $candidate -nt $artifact ]]; then
+			artifact=$candidate
+		fi
+	done
+	if [[ -z $artifact ]]; then
+		echo "No combined JNI ZIP found. Drop the built stashi-qortal-jni-<version>-<commit>.zip into $DEFAULT_BUNDLE_DIR/ first." >&2
+		exit 1
+	fi
+fi
 
 if [[ ! -f $artifact ]]; then
 	echo "Artifact does not exist: $artifact" >&2
@@ -131,7 +158,7 @@ done
 	printf '%s\n' "artifact-sha256: $EXPECTED_SHA256"
 	printf '%s\n' 'jni-version: 0.3.9'
 	printf '%s\n' 'upstream-release: v1.2.6'
-	printf '%s\n' 'source-commit: deb736549e9b6869f08284acc5a12ebef944120a'
+	printf '%s\n' 'source-commit: bd9b620194d126cb712d8a828f7586ddaa1ab167'
 	printf '%s\n' "platform: $platform"
 	for library in "${libraries[@]}"; do
 		printf '%s\n' "native-library: $library"

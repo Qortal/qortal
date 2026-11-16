@@ -4,12 +4,23 @@ set -euo pipefail
 # Running this command prepares, signs, and broadcasts a new ARRR JNI bundle.
 # Artifact validation and transaction handling stay in the existing helpers.
 
+script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+DEFAULT_BUNDLE_DIR="$script_directory/arrr-jni-bundle"
+
 usage() {
 	cat <<'EOF'
 Usage: tools/prep-and-publish-arrr-wallet.sh [combined-build.zip|build-directory]
 
-Prompts for the combined Stashi Qortal JNI ZIP (or a directory containing
-exactly one ZIP), registered QDN name, and new identifier. Stages all five
+For the repo-staged bundle, run from the repository root:
+  ./tools/prep-and-publish-arrr-wallet.sh
+
+With no argument, uses the newest stashi-qortal-jni-*.zip (by modification
+time) in tools/arrr-jni-bundle/, resolved from the repository regardless of
+the current directory. Drop the downloaded combined build there first.
+An explicit ZIP or directory overrides this default.
+
+An explicit directory must contain exactly one ZIP. Prompts for the
+registered QDN name and new identifier. Stages all five
 native libraries, prepares ARBITRARY_DATA, then signs and submits it.
 The existing signing helper prompts privately for the QDN name owner's key.
 
@@ -37,18 +48,20 @@ if (( $# == 1 )) && [[ $1 == --help || $1 == -h ]]; then
 fi
 (( $# <= 1 )) || { usage >&2; exit 2; }
 
-script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 stager="$script_directory/stage-pirate-unified-qdn-bundle.sh"
 publisher="$script_directory/publish-pirate-unified-qdn.sh"
-for command in curl jq unzip; do
-	command -v "$command" >/dev/null 2>&1 || die "Required command not found: $command"
-done
 
 artifact=${1:-}
 if [[ -z $artifact ]]; then
-	read -r -p 'Stashi combined JNI build ZIP (or directory containing it): ' artifact
+	for candidate in "$DEFAULT_BUNDLE_DIR"/stashi-qortal-jni-*.zip; do
+		[[ -f $candidate ]] || continue
+		if [[ -z $artifact || $candidate -nt $artifact ]]; then
+			artifact=$candidate
+		fi
+	done
+	[[ -n $artifact ]] || die "No combined JNI ZIP found. Drop the built stashi-qortal-jni-<version>-<commit>.zip into $DEFAULT_BUNDLE_DIR/ first."
 fi
-# A literal ~/ pasted at a prompt does not undergo shell tilde expansion.
+# A literal ~/ in a quoted argument does not undergo shell tilde expansion.
 case $artifact in
 	'~') artifact=$HOME ;;
 	'~/'*) artifact="$HOME/${artifact:2}" ;;
@@ -62,6 +75,10 @@ if [[ -d $artifact ]]; then
 fi
 [[ -f $artifact ]] || die "Combined build ZIP does not exist: $artifact"
 artifact=$(cd -- "$(dirname -- "$artifact")" && printf '%s/%s' "$PWD" "$(basename -- "$artifact")")
+
+for command in curl jq unzip; do
+	command -v "$command" >/dev/null 2>&1 || die "Required command not found: $command"
+done
 
 output_parent=${QDN_OUTPUT_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/qortal/arrr-publications}
 mkdir -p -- "$output_parent"

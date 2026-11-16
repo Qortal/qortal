@@ -28,7 +28,7 @@ Unavailable legacy checks retry later. This avoids immediate rebroadcast on upgr
 The reader now handles CompactSize transparent fields and Overwinter/Sapling/
 V5/current Ironwood V6 prefixes. The public `/crosschain/arrr/tradefees` endpoint
 returns atomic `fundingFee` and `refundFee` values without initializing a wallet.
-Use the matching Q-Trade `0.0.3-test.1` test build to consume that quote and the
+Use the matching Q-Trade `0.0.3-test.4` test build to consume that quote and the
 corrected pending/refund states.
 
 Funding now snapshots the actual redeem/refund reserve in `TradeBotData.fundingFee`
@@ -39,6 +39,21 @@ from the reserve inside the HTLC. Later changes to `feeRequired` do not change t
 stored reserve. Sellers and legacy buyers recover the reserve and index from the
 actual unspent funding output; where the original fee remains unavailable Core
 falls back to 10000 with a warning. Preserve these fields during backup restore.
+
+The database-query test branch also used schema version 54, for a QDN index
+instead of these trade columns. A node previously running that build can report
+`object not found: FUNDING_FEE` during trade reads and sell-order creation despite
+already reporting schema 54. Core now checks the actual trade table at startup
+and adds only missing funding columns, preserving existing values, rows, QDN
+indexes and the database version. It also resumes a partially applied funding
+migration without adding an existing column twice. No re-index or manual schema
+version reset is needed. Stop Core and back up the complete configured repository,
+wallets, settings and trade backups before installing the corrected JAR; on the
+first startup, look for `Adding missing TradeBotStates.funding_fee column` and/or
+`Adding missing TradeBotStates.funding_output_index column`. Trade reads and sell
+creation should then succeed without the missing-column errors. Restart again to
+check that existing funding metadata is retained. This repair does not change
+the native bundle selection or require a Hub update.
 
 Output zero works with the existing JNI. Nonzero outputs require the companion
 Stashi native patch: `funding_output_index` is used for selection, signing and

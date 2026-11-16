@@ -163,6 +163,70 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 	}
 
 	@Test
+	public void schemaVersion54FromQdnIndexBuildRepairsMissingFundingColumns() throws Exception {
+		try (java.sql.Connection connection = java.sql.DriverManager.getConnection("jdbc:hsqldb:mem:arrr-schema-collision-" + System.nanoTime(), "SA", "");
+			 java.sql.Statement statement = connection.createStatement()) {
+			statement.execute("CREATE TABLE DatabaseInfo (version INT)");
+			statement.execute("INSERT INTO DatabaseInfo VALUES (54)");
+			statement.execute("CREATE TABLE ArbitraryResourcesCache (service SMALLINT, created_when BIGINT)");
+			statement.execute("CREATE INDEX ArbitraryResourcesServiceCreatedIndex ON ArbitraryResourcesCache (service, created_when)");
+			statement.execute("CREATE TABLE TradeBotStates (trade_private_key VARBINARY(32))");
+			statement.execute("INSERT INTO TradeBotStates VALUES (X'01')");
+
+			org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.updateDatabase(connection);
+			assertEquals(54, org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection));
+			try (java.sql.ResultSet row = statement.executeQuery("SELECT trade_private_key, funding_fee, funding_output_index FROM TradeBotStates")) {
+				assertTrue(row.next()); assertArrayEquals(new byte[] { 1 }, row.getBytes(1));
+				assertNull(row.getObject(2)); assertEquals(0, row.getInt(3)); assertFalse(row.next());
+			}
+			try (java.sql.ResultSet indexes = connection.getMetaData().getIndexInfo(null, "PUBLIC", "ARBITRARYRESOURCESCACHE", false, false)) {
+				assertTrue("The existing QDN index must survive the repair", indexes.next());
+				assertEquals("ARBITRARYRESOURCESSERVICECREATEDINDEX", indexes.getString("INDEX_NAME"));
+			}
+
+			// The repaired schema must accept new trades, and another startup must retain their metadata.
+			statement.execute("INSERT INTO TradeBotStates (trade_private_key, funding_fee, funding_output_index) VALUES (X'02', 20000, 2)");
+			org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.updateDatabase(connection);
+			try (java.sql.ResultSet row = statement.executeQuery("SELECT funding_fee, funding_output_index FROM TradeBotStates WHERE trade_private_key = X'02'")) {
+				assertTrue(row.next()); assertEquals(20000L, row.getLong(1)); assertEquals(2, row.getInt(2));
+			}
+			statement.execute("SHUTDOWN");
+		}
+	}
+
+	@Test
+	public void interruptedFundingMigrationKeepsExistingFeeAndAddsMissingOutputIndex() throws Exception {
+		try (java.sql.Connection connection = java.sql.DriverManager.getConnection("jdbc:hsqldb:mem:arrr-partial-fee-" + System.nanoTime(), "SA", "");
+			 java.sql.Statement statement = connection.createStatement()) {
+			statement.execute("CREATE TABLE DatabaseInfo (version INT)"); statement.execute("INSERT INTO DatabaseInfo VALUES (53)");
+			statement.execute("CREATE TABLE TradeBotStates (funding_fee BIGINT DEFAULT NULL)");
+			statement.execute("INSERT INTO TradeBotStates VALUES (20000)");
+			org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.updateDatabase(connection);
+			assertEquals(54, org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection));
+			try (java.sql.ResultSet row = statement.executeQuery("SELECT funding_fee, funding_output_index FROM TradeBotStates")) {
+				assertTrue(row.next()); assertEquals(20000L, row.getLong(1)); assertEquals(0, row.getInt(2));
+			}
+			statement.execute("SHUTDOWN");
+		}
+	}
+
+	@Test
+	public void schemaVersion54KeepsExistingOutputIndexWhenAddingMissingFee() throws Exception {
+		try (java.sql.Connection connection = java.sql.DriverManager.getConnection("jdbc:hsqldb:mem:arrr-partial-index-" + System.nanoTime(), "SA", "");
+			 java.sql.Statement statement = connection.createStatement()) {
+			statement.execute("CREATE TABLE DatabaseInfo (version INT)"); statement.execute("INSERT INTO DatabaseInfo VALUES (54)");
+			statement.execute("CREATE TABLE TradeBotStates (funding_output_index INT DEFAULT 0 NOT NULL)");
+			statement.execute("INSERT INTO TradeBotStates VALUES (2)");
+			org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.updateDatabase(connection);
+			assertEquals(54, org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection));
+			try (java.sql.ResultSet row = statement.executeQuery("SELECT funding_fee, funding_output_index FROM TradeBotStates")) {
+				assertTrue(row.next()); assertNull(row.getObject(1)); assertEquals(2, row.getInt(2));
+			}
+			statement.execute("SHUTDOWN");
+		}
+	}
+
+	@Test
 	public void unavailableWalletIsNotReportedAsInsufficientBalance() throws Exception {
 		// Exercise the actual buy funding path. The JNI load gate prevents any native spending.
 		loadedField.setBoolean(null, false);

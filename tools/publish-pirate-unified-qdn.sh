@@ -8,12 +8,16 @@ set -euo pipefail
 # it locally or offline, then submit the signed transaction. The source ZIP is
 # never published.
 
-readonly EXPECTED_ARTIFACT_SHA256='55bd5979c01d424ce4b26428ac35b51aed2da2131ceb18c29443e0b46c18e018'
+script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+DEFAULT_BUNDLE_DIR="$script_directory/arrr-jni-bundle"
+
+readonly EXPECTED_ARTIFACT_SHA256='b7e0557790f6eebce1571186feb681619afdce962c0e0d4db7825dfd79272aa0'
 readonly DEFAULT_IDENTIFIER='LiteWalletJNI-2026-11-qortal-v0.3.9-test'
 
 usage() {
 	cat <<'EOF'
 Usage:
+  tools/publish-pirate-unified-qdn.sh
   tools/publish-pirate-unified-qdn.sh validate <test|release> <bundle-directory>
   tools/publish-pirate-unified-qdn.sh prepare <bundle-directory> <test-name> [identifier] [unsigned-output]
   tools/publish-pirate-unified-qdn.sh prepare-release <bundle-directory> <release-name> <release-identifier> [unsigned-output]
@@ -23,9 +27,18 @@ Usage:
   tools/publish-pirate-unified-qdn.sh publish <bundle-directory> <test-name> [identifier]
   tools/publish-pirate-unified-qdn.sh release <bundle-directory> <release-name> <release-identifier>
 
+With no arguments, uses the newest stashi-qortal-jni-*.zip (by modification
+time) in tools/arrr-jni-bundle/, resolved from the repository regardless of
+the current directory. Drop the downloaded combined build there first.
+Runs prep-and-publish-arrr-wallet.sh to stage all five libraries, prompt for
+the QDN name and identifier, prepare, sign, and submit the publication.
+This one-shot flow submits after signing without a separate confirmation.
+Explicit subcommands and their bundle-directory arguments work as before.
+
 Environment:
   QORTAL_API_URL  Qortal Core API URL (default: http://127.0.0.1:12391)
   QORTAL_API_KEY  API key for the local Qortal Core instance (prompted for if absent)
+  QORTAL_API_KEY_FILE  No-argument flow: key file (default: ~/qortal/apikey.txt)
   QDN_FEE         Fee in QORT atomic units (default: 1000000, i.e. 0.01 QORT)
 
 Commands:
@@ -313,7 +326,17 @@ verify_transaction() {
 }
 
 main() {
-	(( $# >= 1 )) || { usage >&2; exit 2; }
+	if (( $# == 0 )); then
+		local artifact='' candidate
+		for candidate in "$DEFAULT_BUNDLE_DIR"/stashi-qortal-jni-*.zip; do
+			[[ -f $candidate ]] || continue
+			if [[ -z $artifact || $candidate -nt $artifact ]]; then
+				artifact=$candidate
+			fi
+		done
+		[[ -n $artifact ]] || die "No combined JNI ZIP found. Drop the built stashi-qortal-jni-<version>-<commit>.zip into $DEFAULT_BUNDLE_DIR/ first."
+		exec "$script_directory/prep-and-publish-arrr-wallet.sh" "$artifact"
+	fi
 	local command=$1
 	shift
 
