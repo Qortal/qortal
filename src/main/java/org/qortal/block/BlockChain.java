@@ -91,6 +91,7 @@ public class BlockChain {
 		fixBatchRewardHeight,
 		adminsReplaceFoundersHeight,
 		nullGroupMembershipHeight,
+		adminCanKickBan,
 		ignoreLevelForRewardShareHeight,
 		adminQueryFixHeight,
 		multipleNamesPerAccountHeight,
@@ -697,6 +698,10 @@ public class BlockChain {
 
 	public int getNullGroupMembershipHeight() {
 		return this.featureTriggers.get(FeatureTrigger.nullGroupMembershipHeight.name()).intValue();
+	}
+
+	public int getAdminCanKickBanHeight() {
+		return this.featureTriggers.get(FeatureTrigger.adminCanKickBan.name()).intValue();
 	}
 
 	public int getIgnoreLevelForRewardShareHeight() {

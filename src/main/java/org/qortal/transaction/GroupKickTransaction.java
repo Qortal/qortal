@@ -84,25 +84,31 @@ public class GroupKickTransaction extends Transaction {
 		if (!admin.getAddress().equals(groupData.getOwner()) && groupRepository.adminExists(groupId, member.getAddress()))
 			return ValidationResult.INVALID_GROUP_OWNER;
 
-		if( this.repository.getBlockRepository().getBlockchainHeight() < BlockChain.getInstance().getNullGroupMembershipHeight() ) {
+		int blockchainHeight = this.repository.getBlockRepository().getBlockchainHeight();
+
+		// Before adminCanKickBan trigger: only the group owner can kick members (old behavior)
+		if (blockchainHeight < BlockChain.getInstance().getAdminCanKickBanHeight()) {
 			// Can't kick if not group's current owner
 			if (!admin.getAddress().equals(groupData.getOwner()))
 				return ValidationResult.INVALID_GROUP_OWNER;
 		}
-		// if( this.repository.getBlockRepository().getBlockchainHeight() >= BlockChain.getInstance().getNullGroupMembershipHeight() )
+		// At/after adminCanKickBan trigger: any admin can kick regular members
 		else {
-			String groupOwner = this.repository.getGroupRepository().getOwner(groupId);
-			boolean groupOwnedByNullAccount = Objects.equals(groupOwner, Group.NULL_OWNER_ADDRESS);
+			// Null-ownership groups only exist after nullGroupMembershipHeight trigger.
+			// For those decentralized groups, kick operations require group approval.
+			if (blockchainHeight >= BlockChain.getInstance().getNullGroupMembershipHeight()) {
+				String groupOwner = this.repository.getGroupRepository().getOwner(groupId);
+				boolean groupOwnedByNullAccount = Objects.equals(groupOwner, Group.NULL_OWNER_ADDRESS);
 
-			// if null ownership group, then check for admin approval
-			if(groupOwnedByNullAccount ) {
-				// Require approval if transaction relates to a group owned by the null account
-				if (!this.needsGroupApproval())
-					return ValidationResult.GROUP_APPROVAL_REQUIRED;
+				// if null ownership group, then check for admin approval
+				if (groupOwnedByNullAccount) {
+					// Require approval if transaction relates to a group owned by the null account
+					if (!this.needsGroupApproval())
+						return ValidationResult.GROUP_APPROVAL_REQUIRED;
+				}
 			}
-			// Can't kick if not group's current owner
-			else if (!admin.getAddress().equals(groupData.getOwner()))
-				return ValidationResult.INVALID_GROUP_OWNER;
+			// For regular groups, any admin can kick regular members.
+			// Owner and fellow-admin protections are already enforced above.
 		}
 
 		// Check creator has enough funds

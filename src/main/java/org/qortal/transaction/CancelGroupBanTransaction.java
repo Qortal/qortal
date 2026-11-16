@@ -72,28 +72,45 @@ public class CancelGroupBanTransaction extends Transaction {
 		if (!this.repository.getGroupRepository().adminExists(groupId, admin.getAddress()))
 			return ValidationResult.NOT_GROUP_ADMIN;
 
-		if( this.repository.getBlockRepository().getBlockchainHeight() < BlockChain.getInstance().getNullGroupMembershipHeight() ) {
-			// Can't cancel ban if not group's current owner
+		int blockchainHeight = this.repository.getBlockRepository().getBlockchainHeight();
+
+		// Before adminCanKickBan trigger: only the group owner can unban members (old behavior)
+		if (blockchainHeight < BlockChain.getInstance().getAdminCanKickBanHeight()) {
+			// Can't unban if not group's current owner
 			if (!admin.getAddress().equals(groupData.getOwner()))
 				return ValidationResult.INVALID_GROUP_OWNER;
 		}
-		// if( this.repository.getBlockRepository().getBlockchainHeight() >= BlockChain.getInstance().getNullGroupMembershipHeight() )
+		// At/after adminCanKickBan trigger: any admin can unban regular members
 		else {
-			String groupOwner = this.repository.getGroupRepository().getOwner(groupId);
-			boolean groupOwnedByNullAccount = Objects.equals(groupOwner, Group.NULL_OWNER_ADDRESS);
+			// Null-ownership groups only exist after nullGroupMembershipHeight trigger.
+			// For those decentralized groups, unban operations require group approval.
+			if (blockchainHeight >= BlockChain.getInstance().getNullGroupMembershipHeight()) {
+				String groupOwner = this.repository.getGroupRepository().getOwner(groupId);
+				boolean groupOwnedByNullAccount = Objects.equals(groupOwner, Group.NULL_OWNER_ADDRESS);
 
-			// if null ownership group, then check for admin approval
-			if(groupOwnedByNullAccount ) {
-				// Require approval if transaction relates to a group owned by the null account
-				if (!this.needsGroupApproval())
-					return ValidationResult.GROUP_APPROVAL_REQUIRED;
+				// if null ownership group, then check for admin approval
+				if (groupOwnedByNullAccount) {
+					// Require approval if transaction relates to a group owned by the null account
+					if (!this.needsGroupApproval())
+						return ValidationResult.GROUP_APPROVAL_REQUIRED;
+				}
 			}
-			// Can't cancel ban if not group's current owner
-			else if (!admin.getAddress().equals(groupData.getOwner()))
-				return ValidationResult.INVALID_GROUP_OWNER;
+			// For regular groups, any admin can unban regular members.
+			// Owner and fellow-admin protections are enforced below.
 		}
 
-		Account member = getMember();
+Account member = getMember();
+
+		// Can't unban group owner
+		if (member.getAddress().equals(groupData.getOwner()))
+			return ValidationResult.INVALID_GROUP_OWNER;
+
+		// Note: We don't check if the banned person was an admin because:
+		// 1. Non-owner admins can't ban other admins (protected in GroupBanTransaction)
+		// 2. Owner CAN ban admins - in that case, only owner should reverse it
+		// 3. However, tracking "banned admin" state isn't available here
+		// 4. The admin status is removed during ban, so adminExists() would return false anyway
+		// For consistency with kick/ban, we allow any admin to cancel a ban after the feature trigger.
 
 		// Check ban actually exists
 		if (!this.repository.getGroupRepository().banExists(groupId, member.getAddress(), this.groupUnbanTransactionData.getTimestamp()))
