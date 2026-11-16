@@ -251,25 +251,31 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	/**
 	 * Returns current blockchain height.
 	 * <p>
-	 * 
+	 *
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	@Override
 	public int getCurrentHeight() throws ForeignBlockchainException {
-		BlockID latestBlock = this.getCompactTxStreamerStub()
-				.withDeadlineAfter(10, TimeUnit.SECONDS)
-				.getLatestBlock(DEFAULT_CHAIN_SPEC);
+		CompactTxStreamerGrpc.CompactTxStreamerBlockingStub stub = getCompactTxStreamerStub();
+		try {
+			BlockID latestBlock = stub
+					.withDeadlineAfter(10, TimeUnit.SECONDS)
+					.getLatestBlock(DEFAULT_CHAIN_SPEC);
 
-		if (!(latestBlock instanceof BlockID))
-			throw new ForeignBlockchainException.NetworkException("Unexpected output from Pirate Chain getLatestBlock gRPC");
+			if (!(latestBlock instanceof BlockID))
+				throw new ForeignBlockchainException.NetworkException("Unexpected output from Pirate Chain getLatestBlock gRPC");
 
-		return (int) latestBlock.getHeight();
+			return (int) latestBlock.getHeight();
+
+		} catch (io.grpc.StatusRuntimeException e) {
+			throw failedRead(e, stub.getChannel());
+		}
 	}
 
 	/**
 	 * Returns list of compact blocks, starting from <tt>startHeight</tt> inclusive.
 	 * <p>
-	 * 
+	 *
 	 * @throws ForeignBlockchainException if error occurs
 	 * @return
 	 */
@@ -292,7 +298,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	 * Returns list of raw block headers, starting from <tt>startHeight</tt>
 	 * inclusive.
 	 * <p>
-	 * 
+	 *
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	@Override
@@ -322,36 +328,42 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	 * Returns list of raw block timestamps, starting from <tt>startHeight</tt>
 	 * inclusive.
 	 * <p>
-	 * 
+	 *
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	@Override
 	public List<Long> getBlockTimestamps(int startHeight, int count) throws ForeignBlockchainException {
-		BlockID startBlock = BlockID.newBuilder().setHeight(startHeight).build();
-		BlockID endBlock = BlockID.newBuilder().setHeight(startHeight + count - 1).build();
-		BlockRange range = BlockRange.newBuilder().setStart(startBlock).setEnd(endBlock).build();
+		CompactTxStreamerGrpc.CompactTxStreamerBlockingStub stub = getCompactTxStreamerStub();
+		try {
+			BlockID startBlock = BlockID.newBuilder().setHeight(startHeight).build();
+			BlockID endBlock = BlockID.newBuilder().setHeight(startHeight + count - 1).build();
+			BlockRange range = BlockRange.newBuilder().setStart(startBlock).setEnd(endBlock).build();
 
-		Iterator<CompactBlock> blocks = this.getCompactTxStreamerStub().getBlockRange(range);
+			Iterator<CompactBlock> blocks = stub.getBlockRange(range);
 
-		List<Long> rawBlockTimestamps = new ArrayList<>();
+			List<Long> rawBlockTimestamps = new ArrayList<>();
 
-		while (blocks.hasNext()) {
-			CompactBlock block = blocks.next();
+			while (blocks.hasNext()) {
+				CompactBlock block = blocks.next();
 
-			if (block.getTime() <= 0) {
-				throw new ForeignBlockchainException.NetworkException("Unexpected output from Pirate Chain getBlockRange gRPC");
+				if (block.getTime() <= 0) {
+					throw new ForeignBlockchainException.NetworkException("Unexpected output from Pirate Chain getBlockRange gRPC");
+				}
+
+				rawBlockTimestamps.add(Long.valueOf(block.getTime()));
 			}
 
-			rawBlockTimestamps.add(Long.valueOf(block.getTime()));
-		}
+			return rawBlockTimestamps;
 
-		return rawBlockTimestamps;
+		} catch (io.grpc.StatusRuntimeException e) {
+			throw failedRead(e, stub.getChannel());
+		}
 	}
 
 	/**
 	 * Returns confirmed balance, based on passed payment script.
 	 * <p>
-	 * 
+	 *
 	 * @return confirmed balance, or zero if script unknown
 	 * @throws ForeignBlockchainException if there was an error
 	 */
@@ -363,7 +375,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	/**
 	 * Returns confirmed balance, based on passed base58 encoded address.
 	 * <p>
-	 * 
+	 *
 	 * @return confirmed balance, or zero if address unknown
 	 * @throws ForeignBlockchainException if there was an error
 	 */
@@ -382,50 +394,56 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	/**
 	 * Returns list of unspent outputs pertaining to passed address.
 	 * <p>
-	 * 
+	 *
 	 * @return list of unspent outputs, or empty list if address unknown
 	 * @throws ForeignBlockchainException if there was an error.
 	 */
 	@Override
 	public List<UnspentOutput> getUnspentOutputs(String address, boolean includeUnconfirmed)
 			throws ForeignBlockchainException {
-		GetAddressUtxosArg getAddressUtxosArg = GetAddressUtxosArg.newBuilder().addAddresses(address).build();
-		GetAddressUtxosReplyList replyList = this.getCompactTxStreamerStub().getAddressUtxos(getAddressUtxosArg);
+		CompactTxStreamerGrpc.CompactTxStreamerBlockingStub stub = getCompactTxStreamerStub();
+		try {
+			GetAddressUtxosArg getAddressUtxosArg = GetAddressUtxosArg.newBuilder().addAddresses(address).build();
+			GetAddressUtxosReplyList replyList = stub.getAddressUtxos(getAddressUtxosArg);
 
-		if (!(replyList instanceof GetAddressUtxosReplyList))
-			throw new ForeignBlockchainException.NetworkException(
-					"Unexpected output from Pirate Chain getUnspentOutputs gRPC");
+			if (!(replyList instanceof GetAddressUtxosReplyList))
+				throw new ForeignBlockchainException.NetworkException(
+						"Unexpected output from Pirate Chain getUnspentOutputs gRPC");
 
-		List<GetAddressUtxosReply> unspentList = replyList.getAddressUtxosList();
-		if (unspentList == null)
-			throw new ForeignBlockchainException.NetworkException(
-					"Unexpected output from Pirate Chain getUnspentOutputs gRPC");
+			List<GetAddressUtxosReply> unspentList = replyList.getAddressUtxosList();
+			if (unspentList == null)
+				throw new ForeignBlockchainException.NetworkException(
+						"Unexpected output from Pirate Chain getUnspentOutputs gRPC");
 
-		List<UnspentOutput> unspentOutputs = new ArrayList<>();
-		for (GetAddressUtxosReply unspent : unspentList) {
+			List<UnspentOutput> unspentOutputs = new ArrayList<>();
+			for (GetAddressUtxosReply unspent : unspentList) {
 
-			int height = (int) unspent.getHeight();
-			// We only want unspent outputs from confirmed transactions (and definitely not
-			// mempool duplicates with height 0)
-			if (!includeUnconfirmed && height <= 0)
-				continue;
+				int height = (int) unspent.getHeight();
+				// We only want unspent outputs from confirmed transactions (and definitely not
+				// mempool duplicates with height 0)
+				if (!includeUnconfirmed && height <= 0)
+					continue;
 
-			byte[] txHash = unspent.getTxid().toByteArray();
-			int outputIndex = unspent.getIndex();
-			long value = unspent.getValueZat();
-			byte[] script = unspent.getScript().toByteArray();
-			String addressRes = unspent.getAddress();
+				byte[] txHash = unspent.getTxid().toByteArray();
+				int outputIndex = unspent.getIndex();
+				long value = unspent.getValueZat();
+				byte[] script = unspent.getScript().toByteArray();
+				String addressRes = unspent.getAddress();
 
-			unspentOutputs.add(new UnspentOutput(txHash, outputIndex, height, value, script, addressRes));
+				unspentOutputs.add(new UnspentOutput(txHash, outputIndex, height, value, script, addressRes));
+			}
+
+			return unspentOutputs;
+
+		} catch (io.grpc.StatusRuntimeException e) {
+			throw failedRead(e, stub.getChannel());
 		}
-
-		return unspentOutputs;
 	}
 
 	/**
 	 * Returns list of unspent outputs pertaining to passed payment script.
 	 * <p>
-	 * 
+	 *
 	 * @return list of unspent outputs, or empty list if script unknown
 	 * @throws ForeignBlockchainException if there was an error.
 	 */
@@ -459,20 +477,21 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	 */
 	@Override
 	public byte[] getRawTransaction(byte[] txHash) throws ForeignBlockchainException {
+		CompactTxStreamerGrpc.CompactTxStreamerBlockingStub stub = getCompactTxStreamerStub();
 		try {
 			TxFilter filter = TxFilter.newBuilder().setHash(ByteString.copyFrom(txHash)).build();
-			return this.getCompactTxStreamerStub().withDeadlineAfter(30, TimeUnit.SECONDS).getTransaction(filter).getData().toByteArray();
+			return stub.withDeadlineAfter(30, TimeUnit.SECONDS).getTransaction(filter).getData().toByteArray();
 		} catch (io.grpc.StatusRuntimeException e) {
-			if (e.getStatus().getCode() == io.grpc.Status.Code.NOT_FOUND)
+			if (isTransactionAbsent(e))
 				throw new ForeignBlockchainException.NotFoundException("Pirate transaction not found");
-			throw new ForeignBlockchainException.NetworkException("Unable to fetch Pirate transaction: " + e.getStatus().getCode());
+			throw failedRead(e, stub.getChannel());
 		}
 	}
 
 	/**
 	 * Returns transaction info for passed transaction hash.
 	 * <p>
-	 * 
+	 *
 	 * @throws ForeignBlockchainException.NotFoundException if transaction not found
 	 * @throws ForeignBlockchainException                   if error occurs
 	 */
@@ -597,7 +616,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	/**
 	 * Returns list of transactions, relating to passed payment script.
 	 * <p>
-	 * 
+	 *
 	 * @return list of related transactions, or empty list if script unknown
 	 * @throws ForeignBlockchainException if error occurs
 	 */
@@ -612,18 +631,19 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	@Override
 	public List<BitcoinyTransaction> getAddressBitcoinyTransactions(String address, boolean includeUnconfirmed)
 			throws ForeignBlockchainException {
+		CompactTxStreamerGrpc.CompactTxStreamerBlockingStub stub = getCompactTxStreamerStub();
 		try {
 			// Firstly we need to get the latest block
-			int defaultBirthday = Settings.getInstance().getArrrDefaultBirthday();
-			BlockID endBlock = this.getCompactTxStreamerStub().getLatestBlock(DEFAULT_CHAIN_SPEC);
-			BlockID startBlock = BlockID.newBuilder().setHeight(defaultBirthday).build();
+			// Transparent contracts must remain discoverable after wallet birthday changes.
+			BlockID endBlock = stub.getLatestBlock(DEFAULT_CHAIN_SPEC);
+			BlockID startBlock = BlockID.newBuilder().setHeight(1).build();
 			BlockRange blockRange = BlockRange.newBuilder().setStart(startBlock).setEnd(endBlock).build();
 
 			TransparentAddressBlockFilter blockFilter = TransparentAddressBlockFilter.newBuilder()
 					.setAddress(address)
 					.setRange(blockRange)
 					.build();
-			Iterator<Service.RawTransaction> transactionIterator = this.getCompactTxStreamerStub()
+			Iterator<Service.RawTransaction> transactionIterator = stub
 					.getTaddressTxids(blockFilter);
 
 			// Map from Iterator to List
@@ -647,6 +667,8 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 			}
 
 			return transactions;
+		} catch (io.grpc.StatusRuntimeException e) {
+			throw failedRead(e, stub.getChannel());
 		} catch (RuntimeException | TransformationException e) {
 			throw new ForeignBlockchainException(
 					String.format("Unable to get transactions for address %s: %s", address, e.getMessage()));
@@ -656,7 +678,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	/**
 	 * Broadcasts raw transaction to network.
 	 * <p>
-	 * 
+	 *
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	@Override
@@ -776,7 +798,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	/**
 	 * Performs RPC call, with automatic reconnection to different server if needed.
 	 * <p>
-	 * 
+	 *
 	 * @return "result" object from within JSON output
 	 * @throws ForeignBlockchainException if server returns error or something goes
 	 *                                    wrong
@@ -800,7 +822,8 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 					}
 				}
 
-				return CompactTxStreamerGrpc.newBlockingStub(this.channel);
+				return CompactTxStreamerGrpc.newBlockingStub(this.channel)
+						.withDeadlineAfter(rpcTimeoutSeconds(), TimeUnit.SECONDS);
 
 				// // Didn't work, try another server...
 				// this.closeServer();
@@ -1091,6 +1114,31 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 		}
 
 		return Optional.of(connection);
+	}
+
+	protected long rpcTimeoutSeconds() { return 15; }
+
+	private static boolean isTransactionAbsent(io.grpc.StatusRuntimeException error) {
+		if (error.getStatus().getCode() == io.grpc.Status.Code.NOT_FOUND) return true;
+		String description = error.getStatus().getDescription();
+		return error.getStatus().getCode() == io.grpc.Status.Code.UNKNOWN && description != null
+				&& description.matches("-5: No such mempool or blockchain transaction(?:\\..*)?");
+	}
+
+	private ForeignBlockchainException failedRead(io.grpc.StatusRuntimeException error, io.grpc.Channel failedChannel) {
+		// Do not reuse an apparently connected channel after a failed/deadline-exceeded read.
+		// Next attempt can select another configured server; never retry a monetary broadcast here.
+		if (error.getStatus().getCode() == io.grpc.Status.Code.UNAVAILABLE
+				|| error.getStatus().getCode() == io.grpc.Status.Code.DEADLINE_EXCEEDED) {
+			synchronized (serverLock) {
+				if (channel == failedChannel) {
+					channel.shutdownNow();
+					channel = null;
+					currentServer = null;
+				}
+			}
+		}
+		return new ForeignBlockchainException.NetworkException("Pirate read failed: " + error.getStatus().getCode());
 	}
 
 	/** Closes connection to currently connected server (if any). */

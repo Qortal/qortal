@@ -4,7 +4,7 @@ import com.google.common.hash.HashCode;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
-/** Versioned refund checkpoint in the existing 64-byte last-transaction field. No schema change. */
+/** Versioned ARRR refund/redemption checkpoint in the existing 64-byte last-transaction field. */
 public final class PirateChainRefundState {
     private static final byte[] MAGIC = new byte[] { 'A', 'R', 'R', 'R', 'R', 'F', '0', '1' };
     public final int retryHeight;

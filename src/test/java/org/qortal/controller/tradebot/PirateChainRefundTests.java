@@ -50,6 +50,7 @@ public class PirateChainRefundTests extends Common {
         when(pirate.deriveP2shAddressBPrefix(any())).thenAnswer(i -> "b-" + ((byte[]) i.getArgument(0))[0]);
         when(pirate.deriveP2shAddress(any())).thenAnswer(i -> "t3-" + ((byte[]) i.getArgument(0))[0]);
         when(pirate.refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString(), anyLong(), anyInt())).thenReturn(TXID);
+        when(pirate.redeemP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), anyString(), anyLong(), anyInt())).thenReturn(TXID);
         data = new CrossChainTradeData();
         data.mode = AcctMode.REFUNDED; data.expectedForeignAmount = 100000000L;
         data.tradeTimeout = 60; data.creatorForeignPKH = new byte[33];
@@ -151,7 +152,9 @@ public class PirateChainRefundTests extends Common {
     }
     @Test public void sellerRecoversOriginalReserveAndOutputIndexBeforeRedeeming() throws Exception {
         TradeBotData seller = trade(1); seller.setState("BOB_WAITING_FOR_AT_REDEEM"); seller.setStateValue(25);
-        data.mode = AcctMode.REDEEMED; data.lockTimeA = 1; data.partnerForeignPKH = new byte[33]; data.hashOfSecretA = new byte[20];
+        data.mode = AcctMode.REDEEMED; data.lockTimeA = 1; data.partnerForeignPKH = new byte[33];
+        data.creatorForeignPKH = seller.getTradeForeignPublicKey();
+        data.hashOfSecretA = org.qortal.crypto.Crypto.hash160(new byte[32]);
         htlc.when(() -> PirateChainHTLC.determineHtlcStatus(any(), anyString(), anyLong())).thenReturn(BitcoinyHTLC.Status.FUNDED);
         htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(funding(2, 20000L));
         PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
@@ -305,7 +308,9 @@ public class PirateChainRefundTests extends Common {
         }
     }
     @Test public void refundAllContinuesAfterOneWalletFails() throws Exception {
-        when(cross.getAllTradeBotData()).thenReturn(List.of(trade(1), trade(2)));
+        TradeBotData malformed = trade(3);
+        var pub = TradeBotData.class.getDeclaredField("tradeForeignPublicKey"); pub.setAccessible(true); pub.set(malformed, null);
+        when(cross.getAllTradeBotData()).thenReturn(List.of(malformed, trade(1), trade(2)));
         when(pirate.getWalletAddress("wallet-1")).thenThrow(new ForeignBlockchainException("wallet unavailable"));
         ACCT acct = mock(ACCT.class);
         when(acct.getBlockchain()).thenReturn(pirate); when(acct.populateTradeData(repository, at)).thenReturn(data);
@@ -316,6 +321,7 @@ public class PirateChainRefundTests extends Common {
             chains.when(() -> SupportedBlockchain.getAcctByCodeHash(any())).thenReturn(acct);
             assertTrue(new CrossChainHtlcResource().refundAllHtlc("dummy"));
             verify(pirate).refundP2sh(eq("t3-2"), eq("address-wallet-2"), anyLong(), anyString(), anyString(), anyInt(), anyString(), anyLong(), anyInt());
+            verify(pirate, never()).getWalletAddress("wallet-3");
         }
     }
     @Test public void refundAllLogsFullFailuresAtErrorAndPreservesBooleanResponse() throws Exception {
@@ -340,6 +346,234 @@ public class PirateChainRefundTests extends Common {
             assertTrue(events.stream().anyMatch(event -> event.getLevel() == org.apache.logging.log4j.Level.ERROR
                     && event.getThrown() == failure && event.getMessage().getFormattedMessage().contains("AT AT (trade native-1)")));
         } finally { logger.removeAppender(appender); logger.setLevel(level); appender.stop(); }
+    }
+
+    private PirateChainACCTv3TradeBot freshBot() throws Exception {
+        var constructor = PirateChainACCTv3TradeBot.class.getDeclaredConstructor(); constructor.setAccessible(true);
+        return constructor.newInstance();
+    }
+
+    @Test public void legacyBuyerWithoutQortSettlementReentersRecoveryAndCannotBeDeleted() throws Exception {
+        TradeBotData buyer = trade(1); buyer.setState("ALICE_DONE"); buyer.setStateValue(95);
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.populateTradeData(repository, at)).thenReturn(data);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            assertFalse(bot.canDelete(repository, buyer));
+            freshBot().progress(repository, buyer);
+            assertEquals("ALICE_REFUNDING_A", buyer.getState());
+            noBroadcast();
+        }
+    }
+
+    @Test public void submittedQortMessageDoesNotCompleteBuyerUntilAtSettles() throws Exception {
+        TradeBotData buyer = trade(1); buyer.setState("ALICE_WAITING_FOR_AT_LOCK"); buyer.setStateValue(85);
+        var lock = TradeBotData.class.getDeclaredField("lockTimeA"); lock.setAccessible(true); lock.set(buyer, 2000);
+        when(at.getIsFinished()).thenReturn(false);
+        data.mode = AcctMode.TRADING; data.qortalPartnerAddress = buyer.getTradeNativeAddress();
+        data.qortalCreatorTradeAddress = "seller-contact"; data.refundTimeout = 8;
+        var message = mock(org.qortal.data.transaction.MessageTransactionData.class);
+        when(message.getTimestamp()).thenReturn(1_000_000L);
+        MessageRepository messages = mock(MessageRepository.class);
+        when(repository.getMessageRepository()).thenReturn(messages);
+        when(messages.getMessagesByParticipants(any(), any(), any(), any(), any())).thenReturn(List.of(message));
+        when(messages.exists(any(), any(), any())).thenReturn(true);
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.populateTradeData(repository, at)).thenReturn(data);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class);
+             MockedStatic<TradeBot> bots = mockStatic(TradeBot.class, CALLS_REAL_METHODS)) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            bots.when(TradeBot::getInstance).thenReturn(mock(TradeBot.class));
+            bot.progress(repository, buyer);
+            assertEquals("ALICE_WAITING_FOR_AT_LOCK", buyer.getState());
+            assertFalse(bot.canDelete(repository, buyer));
+            when(at.getIsFinished()).thenReturn(true); data.mode = AcctMode.REDEEMED;
+            bot.progress(repository, buyer);
+            assertEquals("ALICE_DONE", buyer.getState()); noBroadcast();
+        }
+    }
+
+    @Test public void actuallySettledBuyerRemainsDoneAndIsDeletable() throws Exception {
+        TradeBotData buyer = trade(1); buyer.setState("ALICE_DONE"); buyer.setStateValue(95);
+        data.mode = AcctMode.REDEEMED; data.qortalPartnerAddress = buyer.getTradeNativeAddress();
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.populateTradeData(repository, at)).thenReturn(data);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            freshBot().progress(repository, buyer);
+            assertEquals("ALICE_DONE", buyer.getState()); assertTrue(bot.canDelete(repository, buyer));
+            noBroadcast();
+        }
+    }
+
+    @Test public void unknownFundingIntentIsRecoveredWithoutRepeatingFunding() throws Exception {
+        TradeBotData buyer = trade(1); buyer.setState("ALICE_WAITING_FOR_FUNDING"); buyer.setStateValue(80);
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.populateTradeData(repository, at)).thenReturn(data);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            freshBot().progress(repository, TradeBotData.fromJson(buyer.toJson()));
+            verify(pirate, never()).fundP2SH(anyString(), anyString(), anyLong(), anyString());
+            verify(cross, atLeastOnce()).save(argThat(row -> row.getState().equals("ALICE_REFUNDING_A")));
+            assertFalse(bot.canDelete(repository, buyer));
+        }
+    }
+
+    @Test public void absentFundingIntentIsRetainedWithoutAnnouncingOrResending() throws Exception {
+        TradeBotData buyer = trade(1); buyer.setState("ALICE_WAITING_FOR_FUNDING"); buyer.setStateValue(80);
+        status(BitcoinyHTLC.Status.UNFUNDED);
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(null);
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.populateTradeData(repository, at)).thenReturn(data);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            freshBot().progress(repository, buyer);
+            assertEquals("ALICE_WAITING_FOR_FUNDING", buyer.getState());
+            verify(pirate, never()).fundP2SH(anyString(), anyString(), anyLong(), anyString()); noBroadcast();
+        }
+    }
+
+    private TradeBotData seller(int id, String address) throws Exception {
+        TradeBotData seller = trade(id); seller.setState("BOB_WAITING_FOR_AT_REDEEM"); seller.setStateValue(25);
+        var field = TradeBotData.class.getDeclaredField("receivingAccountInfo"); field.setAccessible(true);
+        field.set(seller, PirateChainAddress.toReceivingAccountInfo(address));
+        return seller;
+    }
+
+    private void sellerData(TradeBotData seller) {
+        data.mode = AcctMode.REDEEMED; data.lockTimeA = 1; data.partnerForeignPKH = new byte[33];
+        data.creatorForeignPKH = seller.getTradeForeignPublicKey();
+        data.hashOfSecretA = org.qortal.crypto.Crypto.hash160(new byte[32]);
+    }
+
+    private static final String SAPLING = "zs1mj80tkyjqjhc84aquetymwgrasxjdkkft0qcn5xtp2p9r42vs5ernyv4nzgufmz6xzuqvw20w9z";
+    private static final String IRONWOOD = "pirate1lyp0g5438qkp9s5me5epku9ak9k0dxqsfyt9z894zym8qw38sps488ljyee27yw29vc2cyj8mse";
+
+    @Test public void redeemAllUsesNativeArrrAddressesAndQuarantinesLostAcknowledgements() throws Exception {
+        TradeBotData seller = seller(1, IRONWOOD); sellerData(seller);
+        when(cross.getAllTradeBotData()).thenReturn(List.of(trade(2), seller));
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.getBlockchain()).thenReturn(pirate); when(acct.populateTradeData(repository, at)).thenReturn(data);
+        when(acct.findSecretA(repository, data)).thenReturn(new byte[32]);
+        when(pirate.redeemP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), anyString(), anyLong(), anyInt()))
+                .thenThrow(new ForeignBlockchainException("lost native acknowledgement"));
+        try (MockedStatic<RepositoryManager> repos = mockStatic(RepositoryManager.class);
+             MockedStatic<SupportedBlockchain> chains = mockStatic(SupportedBlockchain.class);
+             MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class);
+             MockedStatic<Security> security = mockStatic(Security.class)) {
+            repos.when(RepositoryManager::getRepository).thenReturn(repository);
+            chains.when(() -> SupportedBlockchain.getAcctByCodeHash(any())).thenReturn(acct);
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            assertFalse(new CrossChainHtlcResource().redeemAllHtlc("dummy"));
+            assertNotNull(PirateChainRefundState.decode(seller.getLastTransactionSignature()));
+            assertEquals("BOB_WAITING_FOR_AT_REDEEM", seller.getState());
+            clearInvocations(pirate);
+            assertFalse(new CrossChainHtlcResource().redeemAllHtlc("dummy"));
+            verify(pirate, never()).redeemP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), anyString(), anyLong(), anyInt());
+        }
+    }
+
+    @Test public void targetedArrrRedeemUsesSellerRecordAndWaitsForThreeConfirmations() throws Exception {
+        for (String destination : List.of(SAPLING, IRONWOOD)) {
+            TradeBotData seller = seller(1, destination); sellerData(seller);
+            when(cross.getAllTradeBotData()).thenReturn(List.of(trade(2), seller));
+            PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+            when(acct.getBlockchain()).thenReturn(pirate); when(acct.populateTradeData(repository, at)).thenReturn(data);
+            when(acct.findSecretA(repository, data)).thenReturn(new byte[32]);
+            try (MockedStatic<RepositoryManager> repos = mockStatic(RepositoryManager.class);
+                 MockedStatic<SupportedBlockchain> chains = mockStatic(SupportedBlockchain.class);
+                 MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class);
+                 MockedStatic<Security> security = mockStatic(Security.class)) {
+                repos.when(RepositoryManager::getRepository).thenReturn(repository);
+                chains.when(() -> SupportedBlockchain.getAcctByCodeHash(any())).thenReturn(acct);
+                accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+                status(BitcoinyHTLC.Status.FUNDED);
+                assertTrue(new CrossChainHtlcResource().redeemHtlc("dummy", "AT"));
+                verify(pirate).redeemP2sh(anyString(), eq(destination), eq(100000000L), anyString(), anyString(), anyString(), anyString(), eq(10000L), eq(0));
+                status(BitcoinyHTLC.Status.REDEEM_IN_PROGRESS);
+                assertFalse(new CrossChainHtlcResource().redeemAllHtlc("dummy"));
+                assertEquals("BOB_WAITING_FOR_AT_REDEEM", seller.getState());
+                status(BitcoinyHTLC.Status.REDEEMED);
+                assertFalse(new CrossChainHtlcResource().redeemAllHtlc("dummy"));
+                assertEquals("BOB_DONE", seller.getState()); assertTrue(bot.canDelete(repository, seller));
+            }
+        }
+    }
+
+    @Test public void redeemRejectsUnsettledAtWrongSellerAndWrongSecret() throws Exception {
+        TradeBotData seller = seller(1, SAPLING); sellerData(seller);
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.findSecretA(repository, data)).thenReturn(new byte[32]);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            when(at.getIsFinished()).thenReturn(false); assertFalse(bot.redeem(repository, seller, at, data));
+            when(at.getIsFinished()).thenReturn(true); data.creatorForeignPKH = new byte[33];
+            assertFalse(bot.redeem(repository, seller, at, data));
+            sellerData(seller); data.hashOfSecretA = new byte[20]; assertFalse(bot.redeem(repository, seller, at, data));
+            verify(pirate, never()).redeemP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), anyString(), anyLong(), anyInt());
+        }
+    }
+
+    @Test public void staleSellerUsesCommittedCheckpointAndCannotRepeatRedemption() throws Exception {
+        TradeBotData stale = seller(1, SAPLING), committed = seller(1, SAPLING); sellerData(stale);
+        committed.setLastTransactionSignature(new PirateChainRefundState(130, 999999L, TXID).encode());
+        when(cross.getTradeBotData(stale.getTradePrivateKey())).thenReturn(committed);
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.findSecretA(repository, data)).thenReturn(new byte[32]);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            assertFalse(bot.redeem(repository, stale, at, data));
+            verify(pirate, never()).redeemP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), anyString(), anyLong(), anyInt());
+        }
+    }
+
+    @Test public void legacySellerIsAuditedWithoutImmediateDuplicateAndCannotBeDeleted() throws Exception {
+        TradeBotData seller = seller(1, SAPLING); sellerData(seller);
+        seller.setState("BOB_DONE"); seller.setStateValue(30);
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.findSecretA(repository, data)).thenReturn(new byte[32]);
+        when(acct.populateTradeData(repository, at)).thenReturn(data);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            assertFalse(bot.canDelete(repository, seller)); freshBot().progress(repository, seller);
+            assertEquals("BOB_WAITING_FOR_AT_REDEEM", seller.getState());
+            assertNotNull(PirateChainRefundState.decode(seller.getLastTransactionSignature()));
+            verify(pirate, never()).redeemP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), anyString(), anyLong(), anyInt());
+        }
+    }
+
+    @Test public void redeemAllContinuesAnotherArrrSellerAfterAnUncertainBroadcast() throws Exception {
+        TradeBotData first = seller(1, SAPLING), second = seller(2, IRONWOOD);
+        sellerData(first);
+        var address = TradeBotData.class.getDeclaredField("atAddress"); address.setAccessible(true); address.set(second, "AT2");
+        CrossChainTradeData secondData = new CrossChainTradeData();
+        secondData.mode = AcctMode.REDEEMED; secondData.lockTimeA = 1; secondData.expectedForeignAmount = 100000000L;
+        secondData.creatorForeignPKH = second.getTradeForeignPublicKey(); secondData.partnerForeignPKH = new byte[33];
+        secondData.hashOfSecretA = org.qortal.crypto.Crypto.hash160(new byte[32]);
+        ATData secondAt = mock(ATData.class); when(secondAt.getIsFinished()).thenReturn(true); when(secondAt.getCodeHash()).thenReturn(new byte[32]);
+        when(repository.getATRepository().fromATAddress("AT2")).thenReturn(secondAt);
+        when(cross.getAllTradeBotData()).thenReturn(List.of(first, second));
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.getBlockchain()).thenReturn(pirate);
+        when(acct.populateTradeData(repository, at)).thenReturn(data);
+        when(acct.populateTradeData(repository, secondAt)).thenReturn(secondData);
+        when(acct.findSecretA(eq(repository), any())).thenReturn(new byte[32]);
+        when(pirate.redeemP2sh(anyString(), eq(SAPLING), anyLong(), anyString(), anyString(), anyString(), anyString(), anyLong(), anyInt()))
+                .thenThrow(new ForeignBlockchainException("Synthetic lost response"));
+        try (MockedStatic<RepositoryManager> repos = mockStatic(RepositoryManager.class);
+             MockedStatic<SupportedBlockchain> chains = mockStatic(SupportedBlockchain.class);
+             MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class);
+             MockedStatic<Security> security = mockStatic(Security.class)) {
+            repos.when(RepositoryManager::getRepository).thenReturn(repository);
+            chains.when(() -> SupportedBlockchain.getAcctByCodeHash(any())).thenReturn(acct);
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            assertTrue(new CrossChainHtlcResource().redeemAllHtlc("dummy"));
+            assertNotNull(PirateChainRefundState.decode(first.getLastTransactionSignature()));
+            assertEquals(TXID, PirateChainRefundState.decode(second.getLastTransactionSignature()).txid);
+            verify(pirate).redeemP2sh(eq("t3-0"), eq(IRONWOOD), eq(100000000L), anyString(), anyString(), anyString(),
+                    eq(org.qortal.utils.Base58.encode(second.getTradePrivateKey())), eq(10000L), eq(0));
+            noBroadcast();
+        }
     }
 
 }

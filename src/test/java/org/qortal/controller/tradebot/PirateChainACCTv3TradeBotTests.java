@@ -119,6 +119,7 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 			verify(pirate).fundP2SH(anyString(), anyString(), eq(100020000L), anyString());
 			JSONObject backup = new JSONObject(Files.readString(backupDirectory.resolve("TradeBotStates.json")));
 			assertEquals(20000L, backup.getJSONArray("data").getJSONObject(0).getLong("fundingFee"));
+			repository.discardChanges(); // The Mockito spy shares the connection, but copies the dirty flag.
 		}
 	}
 
@@ -143,6 +144,47 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 			TradeBotData backup = TradeBotData.fromJson(restored.toJson());
 			assertEquals(Long.valueOf(20000), backup.getFundingFee()); assertEquals(2, backup.getFundingOutputIndex());
 		}
+	}
+
+	@Test
+	public void lostFundingResponseRetainsCommittedIntentEvenWhenBackupFails() throws Exception {
+		PirateChain pirate = mock(PirateChain.class);
+		when(pirate.getP2shFee(any())).thenReturn(20000L);
+		when(pirate.deriveP2shAddress(any())).thenReturn("synthetic-funding-address");
+		when(pirate.fundP2SH(anyString(), anyString(), anyLong(), anyString())).thenAnswer(call -> {
+			try (Repository reopened = RepositoryManager.getRepository()) {
+				List<TradeBotData> intents = reopened.getCrossChainRepository().getAllTradeBotData();
+				assertEquals(1, intents.size());
+				assertEquals("ALICE_WAITING_FOR_FUNDING", intents.get(0).getState());
+				assertNotNull(intents.get(0).getTradePrivateKey());
+				assertNotNull(intents.get(0).getForeignKey());
+			}
+			throw new org.qortal.crosschain.ForeignBlockchainException("Synthetic lost funding response");
+		});
+		try (Repository repository = RepositoryManager.getRepository();
+			 MockedStatic<PirateChain> pirates = mockStatic(PirateChain.class);
+			 MockedStatic<org.qortal.repository.hsqldb.HSQLDBImportExport> backups = mockStatic(org.qortal.repository.hsqldb.HSQLDBImportExport.class);
+			 MockedStatic<NTP> clock = mockStatic(NTP.class)) {
+			pirates.when(PirateChain::getInstance).thenReturn(pirate);
+			clock.when(NTP::getTime).thenReturn(1000000L);
+			backups.when(() -> org.qortal.repository.hsqldb.HSQLDBImportExport.backupTradeBotStates(any(), any()))
+					.thenThrow(new DataException("Synthetic export failure"));
+			CrossChainTradeData data = new CrossChainTradeData();
+			data.qortalAtAddress = Common.getTestAccount(repository, "bob").getAddress();
+			data.creatorForeignPKH = new byte[33]; data.tradeTimeout = 60;
+			data.qortAmount = 100000000L; data.expectedForeignAmount = 100000000L;
+			assertEquals(AcctTradeBot.ResponseResult.NETWORK_ISSUE, PirateChainACCTv3TradeBot.getInstance().startResponse(
+					repository, null, PirateChainACCTv3.getInstance(), data, Base58.encode(new byte[32]),
+					Common.getTestAccount(repository, "alice").getAddress()));
+		}
+		try (Repository reopened = RepositoryManager.getRepository()) {
+			TradeBotData intent = reopened.getCrossChainRepository().getAllTradeBotData().get(0);
+			assertEquals("ALICE_WAITING_FOR_FUNDING", intent.getState());
+			assertEquals(Long.valueOf(20000), intent.getFundingFee());
+			assertEquals("ALICE_WAITING_FOR_FUNDING", TradeBotData.fromJson(intent.toJson()).getState());
+			assertFalse(PirateChainACCTv3TradeBot.getInstance().canDelete(reopened, intent));
+		}
+		verify(pirate, times(1)).fundP2SH(anyString(), anyString(), eq(100020000L), anyString());
 	}
 
 	@Test

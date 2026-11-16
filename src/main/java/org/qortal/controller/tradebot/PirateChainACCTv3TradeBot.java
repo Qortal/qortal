@@ -3,7 +3,6 @@ package org.qortal.controller.tradebot;
 import com.rust.litewalletjni.LiteWalletJni;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.bitcoinj.core.Coin;
 import org.qortal.account.PrivateKeyAccount;
 import org.qortal.account.PublicKeyAccount;
 import org.qortal.api.model.crosschain.TradeBotCreateRequest;
@@ -205,7 +204,11 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 	 * @return true if P2SH-A funding transaction successfully broadcast to PirateChain network, false otherwise
 	 * @throws DataException
 	 */
-	public ResponseResult startResponse(Repository repository, ATData atData, ACCT acct, CrossChainTradeData crossChainTradeData, String entropy58, String receivingAddress) throws DataException {
+	public synchronized ResponseResult startResponse(Repository repository, ATData atData, ACCT acct, CrossChainTradeData crossChainTradeData, String entropy58, String receivingAddress) throws DataException {
+		// Repeat the outer check under this lock: concurrent API requests may both have
+		// observed no attempt before the first one committed its durable funding intent.
+		if (repository.getCrossChainRepository().existsTradeWithAtExcludingStates(crossChainTradeData.qortalAtAddress, endStates))
+			return ResponseResult.TRADE_ALREADY_EXISTS;
 		byte[] tradePrivateKey = TradeBot.generateTradePrivateKey();
 		byte[] secretA = TradeBot.generateSecret();
 		byte[] hashOfSecretA = Crypto.hash160(secretA);
@@ -223,7 +226,7 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		int lockTimeA = crossChainTradeData.tradeTimeout * 60 + (int) (now / 1000L);
 
 		TradeBotData tradeBotData =  new TradeBotData(tradePrivateKey, PirateChainACCTv3.NAME,
-				State.ALICE_WAITING_FOR_AT_LOCK.name(), State.ALICE_WAITING_FOR_AT_LOCK.value,
+				State.ALICE_WAITING_FOR_FUNDING.name(), State.ALICE_WAITING_FOR_FUNDING.value,
 				receivingAddress, crossChainTradeData.qortalAtAddress, now, crossChainTradeData.qortAmount,
 				tradeNativePublicKey, tradeNativePublicKeyHash, tradeNativeAddress,
 				secretA, hashOfSecretA,
@@ -241,8 +244,13 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		}
 
 		tradeBotData.setFundingFee(p2shFee);
-		// Back up the original reserve before funding, including the not-yet-persisted attempt.
-		TradeBot.backupTradeBotData(repository, Arrays.asList(tradeBotData));
+		// Persist the recovery keys BEFORE JNI. An uncertain funding result must survive a crash
+		// even when the best-effort JSON backup fails. Funding is never automatically repeated.
+		repository.getCrossChainRepository().save(tradeBotData);
+		repository.saveChanges();
+		LOGGER.info("Persisted ARRR funding recovery intent for AT {} (trade {})",
+				tradeBotData.getAtAddress(), tradeBotData.getTradeNativeAddress());
+		TradeBot.backupTradeBotData(repository, null);
 
 		// Fee for redeem/refund is subtracted from P2SH-A balance.
 		// Do not include fee for funding transaction as this is covered by buildSpend()
@@ -266,17 +274,29 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 				// A successful broadcast can precede lightwalletd visibility. Recovery re-reads the UTXO.
 				LOGGER.warn("ARRR funding {} not yet available to capture output index; will recover from UTXO", txid, e);
 			}
-			repository.getCrossChainRepository().save(tradeBotData);
-			repository.saveChanges();
+			TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_WAITING_FOR_AT_LOCK,
+					() -> "ARRR funding acknowledged; waiting for AT lock");
 
-		} catch (ForeignBlockchainException.InsufficientFundsException e) {
-			LOGGER.warn("Unable to fund PirateChain P2SH-A: {}", e.getMessage());
-			return ResponseResult.BALANCE_ISSUE;
+		} catch (ForeignBlockchainException.InsufficientFundsException | ForeignBlockchainException.TransactionRejectedException e) {
+			// These typed native validation failures establish that no transaction was sent.
+			repository.getCrossChainRepository().delete(tradePrivateKey);
+			repository.saveChanges();
+			LOGGER.warn("ARRR funding rejected before broadcast: {}", e.getMessage());
+			return e instanceof ForeignBlockchainException.InsufficientFundsException
+					? ResponseResult.BALANCE_ISSUE : ResponseResult.NETWORK_ISSUE;
 		} catch (ForeignBlockchainException e) {
 			LOGGER.warn("Unable to fund PirateChain P2SH-A: {}", e.getMessage());
+			TradeBot.updateTradeBotState(repository, tradeBotData,
+					() -> "Uncertain ARRR funding result; retaining recovery intent without resending");
 			return ResponseResult.NETWORK_ISSUE;
 		}
 
+		announceFunding(repository, tradeBotData, crossChainTradeData);
+		return ResponseResult.OK;
+	}
+
+	private void announceFunding(Repository repository, TradeBotData tradeBotData,
+			CrossChainTradeData crossChainTradeData) throws DataException {
 		// Attempt to send MESSAGE to Bob's Qortal trade address
 		byte[] messageData = CrossChainUtils.buildOfferMessage(tradeBotData.getTradeForeignPublicKey(), tradeBotData.getHashOfSecret(), tradeBotData.getLockTimeA());
 		String messageRecipient = crossChainTradeData.qortalCreatorTradeAddress;
@@ -315,9 +335,27 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			}, "TradeBot response").start();
 		}
 
-		TradeBot.updateTradeBotState(repository, tradeBotData, () -> String.format("Funding P2SH-A %s. Messaged Bob. Waiting for AT-lock", p2shAddressT3));
+	}
 
-		return ResponseResult.OK;
+	private void recoverFunding(Repository repository, TradeBotData trade, ATData at,
+			CrossChainTradeData data) throws DataException, ForeignBlockchainException {
+		PirateChain pirate = PirateChain.getInstance();
+		byte[] script = PirateChainHTLC.buildScript(trade.getTradeForeignPublicKey(), trade.getLockTimeA(),
+				data.creatorForeignPKH, trade.getHashOfSecret());
+		String address = pirate.deriveP2shAddressBPrefix(script);
+		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address,
+				data.expectedForeignAmount + fundingFeeOrDefault(trade));
+		BitcoinyHTLC.Status status = PirateChainHTLC.determineHtlcStatus(pirate.getBlockchainProvider(), address,
+				data.expectedForeignAmount + fundingFeeOrDefault(trade), 3);
+		if (funding == null && (status == BitcoinyHTLC.Status.UNFUNDED
+				|| status == BitcoinyHTLC.Status.FUNDING_IN_PROGRESS)) return;
+		if (funding != null) recordFundingDetails(trade, funding, data.expectedForeignAmount);
+		TradeBot.updateTradeBotState(repository, trade, State.ALICE_WAITING_FOR_AT_LOCK,
+				() -> "Recovered ARRR funding intent from the chain");
+		if (!at.getIsFinished() && data.mode == AcctMode.OFFERING
+				&& NTP.getTime() != null && NTP.getTime() < trade.getLockTimeA() * 1000L)
+			announceFunding(repository, trade, data);
+		handleAliceWaitingForAtLock(repository, trade, at, data);
 	}
 
 	public static String hex(byte[] bytes) {
@@ -336,8 +374,18 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		if (tradeBotState == null)
 			return true;
 
-		if (tradeBotState == State.ALICE_REFUNDING_A || (tradeBotState == State.ALICE_REFUNDED
+		if (tradeBotState == State.ALICE_WAITING_FOR_FUNDING || tradeBotState == State.ALICE_WAITING_FOR_AT_LOCK
+				|| tradeBotState == State.ALICE_REFUNDING_A || (tradeBotState == State.ALICE_REFUNDED
 				&& !PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature()))) return false;
+
+		if (tradeBotState == State.BOB_DONE)
+			return PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature());
+		if (tradeBotState == State.ALICE_DONE) {
+			ATData at = repository.getATRepository().fromATAddress(tradeBotData.getAtAddress());
+			if (at == null) return false;
+			CrossChainTradeData data = PirateChainACCTv3.getInstance().populateTradeData(repository, at);
+			return data != null && buyerReceivedQort(tradeBotData, at, data);
+		}
 
 		// If the AT doesn't exist then we might as well let the user tidy up
 		if (!repository.getATRepository().exists(tradeBotData.getAtAddress()))
@@ -358,87 +406,72 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 
 	@Override
 	public void progress(Repository repository, TradeBotData tradeBotData) throws DataException, ForeignBlockchainException {
-		State tradeBotState = State.valueOf(tradeBotData.getStateValue());
-		if (tradeBotState == null) {
-			LOGGER.info(() -> String.format("Trade-bot entry for AT %s has invalid state?", tradeBotData.getAtAddress()));
-			return;
-		}
-
-		boolean legacyRefund = tradeBotState == State.ALICE_REFUNDED
-				&& !PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature());
-		if (legacyRefund) {
+		State state = State.valueOf(tradeBotData.getStateValue());
+		if (state == null) return;
+		boolean audit = state == State.ALICE_DONE || ((state == State.ALICE_REFUNDED || state == State.BOB_DONE)
+				&& !PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature()));
+		if (audit) {
 			Long now = NTP.getTime();
 			synchronized (this) {
-				if (now == null || now < nextLegacyRefundAudit || now < auditedLegacyRefunds.getOrDefault(tradeBotData.getTradeNativeAddress(), 0L)) return;
+				if (now == null || now < nextLegacyRefundAudit
+						|| now < auditedLegacyRefunds.getOrDefault(tradeBotData.getTradeNativeAddress(), 0L)) return;
 				auditedLegacyRefunds.put(tradeBotData.getTradeNativeAddress(), now + 5 * 60_000L);
 				nextLegacyRefundAudit = now + 60_000L;
 			}
 		}
-		ATData atData = null;
-		CrossChainTradeData tradeData = null;
-
-		if (tradeBotState.requiresAtData || legacyRefund) {
-			// Attempt to fetch AT data
-			atData = repository.getATRepository().fromATAddress(tradeBotData.getAtAddress());
-			if (atData == null) {
-				LOGGER.debug(() -> String.format("Unable to fetch trade AT %s from repository", tradeBotData.getAtAddress()));
-				return;
-			}
-
-			if (tradeBotState.requiresTradeData || legacyRefund) {
-				tradeData = PirateChainACCTv3.getInstance().populateTradeData(repository, atData);
-				if (tradeData == null) {
-					LOGGER.warn(() -> String.format("Unable to fetch ACCT trade data for AT %s from repository", tradeBotData.getAtAddress()));
-					return;
-				}
-			}
+		ATData at = null;
+		CrossChainTradeData data = null;
+		if (state.requiresAtData || audit) {
+			at = repository.getATRepository().fromATAddress(tradeBotData.getAtAddress());
+			if (at == null) return;
+			data = PirateChainACCTv3.getInstance().populateTradeData(repository, at);
+			if (data == null) return;
 		}
-
-		switch (tradeBotState) {
+		switch (state) {
 			case BOB_WAITING_FOR_AT_CONFIRM:
-				handleBobWaitingForAtConfirm(repository, tradeBotData);
-				break;
-
+				handleBobWaitingForAtConfirm(repository, tradeBotData); break;
 			case BOB_WAITING_FOR_MESSAGE:
-				TradeBot.getInstance().updatePresence(repository, tradeBotData, tradeData);
-				handleBobWaitingForMessage(repository, tradeBotData, atData, tradeData);
-				break;
-
+				TradeBot.getInstance().updatePresence(repository, tradeBotData, data);
+				handleBobWaitingForMessage(repository, tradeBotData, at, data); break;
+			case ALICE_WAITING_FOR_FUNDING:
+				recoverFunding(repository, tradeBotData, at, data); break;
 			case ALICE_WAITING_FOR_AT_LOCK:
-				TradeBot.getInstance().updatePresence(repository, tradeBotData, tradeData);
-				handleAliceWaitingForAtLock(repository, tradeBotData, atData, tradeData);
-				break;
-
+				TradeBot.getInstance().updatePresence(repository, tradeBotData, data);
+				handleAliceWaitingForAtLock(repository, tradeBotData, at, data); break;
 			case BOB_WAITING_FOR_AT_REDEEM:
-				TradeBot.getInstance().updatePresence(repository, tradeBotData, tradeData);
-				handleBobWaitingForAtRedeem(repository, tradeBotData, atData, tradeData);
-				break;
-
+				TradeBot.getInstance().updatePresence(repository, tradeBotData, data);
+				handleBobWaitingForAtRedeem(repository, tradeBotData, at, data); break;
 			case ALICE_DONE:
-			case BOB_DONE:
-				break;
-
-			case ALICE_REFUNDING_A:
-				TradeBot.getInstance().updatePresence(repository, tradeBotData, tradeData);
-				handleAliceRefundingP2shA(repository, tradeBotData, atData, tradeData);
-				break;
-
-			case ALICE_REFUNDED:
-				if (legacyRefund) {
-					refund(repository, tradeBotData, atData, tradeData);
-					synchronized (this) {
-						if (PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature()) || !State.ALICE_REFUNDED.name().equals(tradeBotData.getState()))
-							auditedLegacyRefunds.remove(tradeBotData.getTradeNativeAddress());
-						else {
-							Long checkedAt = NTP.getTime();
-							auditedLegacyRefunds.put(tradeBotData.getTradeNativeAddress(), (checkedAt == null ? System.currentTimeMillis() : checkedAt) + 6 * 60 * 60_000L);
-						}
-					}
+				if (!buyerReceivedQort(tradeBotData, at, data)) {
+					TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_WAITING_FOR_AT_LOCK,
+							() -> "Rechecking legacy buyer before QORT settlement");
+					handleAliceWaitingForAtLock(repository, tradeBotData, at, data);
 				}
 				break;
-			case BOB_REFUNDED:
-				break;
+			case BOB_DONE:
+				if (audit) redeem(repository, tradeBotData, at, data); break;
+			case ALICE_REFUNDING_A:
+				TradeBot.getInstance().updatePresence(repository, tradeBotData, data);
+				refund(repository, tradeBotData, at, data); break;
+			case ALICE_REFUNDED:
+				if (audit) refund(repository, tradeBotData, at, data); break;
+			default: break;
 		}
+		if (audit) synchronized (this) {
+			if (!state.name().equals(tradeBotData.getState())
+					|| PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature()))
+				auditedLegacyRefunds.remove(tradeBotData.getTradeNativeAddress());
+			else {
+				Long now = NTP.getTime();
+				auditedLegacyRefunds.put(tradeBotData.getTradeNativeAddress(),
+						(now == null ? System.currentTimeMillis() : now) + 6 * 60 * 60_000L);
+			}
+		}
+	}
+
+	private static boolean buyerReceivedQort(TradeBotData trade, ATData at, CrossChainTradeData data) {
+		return at.getIsFinished() && data.mode == AcctMode.REDEEMED
+				&& trade.getTradeNativeAddress().equals(data.qortalPartnerAddress);
 	}
 
 	/**
@@ -715,8 +748,8 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			}
 		}
 
-		TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_DONE,
-				() -> String.format("Redeeming AT %s. Funds should arrive at %s",
+		TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_WAITING_FOR_AT_LOCK,
+				() -> String.format("Redeem message submitted to AT %s; awaiting settlement at %s",
 						tradeBotData.getAtAddress(), qortalReceivingAddress));
 	}
 
@@ -731,97 +764,111 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 	 * <p>
 	 * (This could potentially be 'improved' to send ARRR to any address of Bob's choosing by changing the transaction output).
 	 * <p>
-	 * If trade-bot successfully broadcasts the transaction, then this specific trade is done.
+	 * A broadcast remains pending until the ARRR spend has three confirmations.
 	 * @throws ForeignBlockchainException
 	 */
-	private void handleBobWaitingForAtRedeem(Repository repository, TradeBotData tradeBotData,
-			ATData atData, CrossChainTradeData crossChainTradeData) throws DataException, ForeignBlockchainException {
-		// AT should be 'finished' once Alice has redeemed QORT funds
-		if (!atData.getIsFinished())
-			// Not finished yet
-			return;
-
-		// If AT is REFUNDED or CANCELLED then something has gone wrong
-		if (crossChainTradeData.mode == AcctMode.REFUNDED || crossChainTradeData.mode == AcctMode.CANCELLED) {
-			// Alice hasn't redeemed the QORT, so there is no point in trying to redeem the ARRR
-			TradeBot.updateTradeBotState(repository, tradeBotData, State.BOB_REFUNDED,
-					() -> String.format("AT %s has auto-refunded - trade aborted", tradeBotData.getAtAddress()));
-
+	private void handleBobWaitingForAtRedeem(Repository repository, TradeBotData trade,
+			ATData at, CrossChainTradeData data) throws DataException, ForeignBlockchainException {
+		if (at.getIsFinished() && (data.mode == AcctMode.REFUNDED || data.mode == AcctMode.CANCELLED)) {
+			TradeBot.updateTradeBotState(repository, trade, State.BOB_REFUNDED, () -> "QORT offer refunded; no ARRR redemption");
 			return;
 		}
+		redeem(repository, trade, at, data);
+	}
 
-		byte[] secretA = PirateChainACCTv3.getInstance().findSecretA(repository, crossChainTradeData);
-		if (secretA == null) {
-			LOGGER.debug(() -> String.format("Unable to find secret-A from redeem message to AT %s?", tradeBotData.getAtAddress()));
-			return;
+	/** Seller recovery for scheduler, targeted API and redeemAll. ACKs remain pending. */
+	public synchronized boolean redeem(Repository repository, TradeBotData trade, ATData at,
+			CrossChainTradeData data) throws DataException, ForeignBlockchainException {
+		refreshCheckpoint(repository, trade);
+		if (trade.getState() == null || !trade.getState().startsWith("BOB_")
+				|| trade.getTradePrivateKey() == null || trade.getTradePrivateKey().length != 32
+				|| trade.getTradeForeignPublicKey() == null || trade.getTradeForeignPublicKey().length != 33
+				|| data.creatorForeignPKH == null || data.creatorForeignPKH.length != 33
+				|| trade.getReceivingAccountInfo() == null
+				|| !Arrays.equals(trade.getTradeForeignPublicKey(), data.creatorForeignPKH)
+				|| !at.getIsFinished() || data.mode != AcctMode.REDEEMED
+				|| data.partnerForeignPKH == null || data.partnerForeignPKH.length != 33
+				|| data.hashOfSecretA == null || data.hashOfSecretA.length != 20 || data.lockTimeA == null) return false;
+		byte[] secret = PirateChainACCTv3.getInstance().findSecretA(repository, data);
+		if (secret == null || secret.length != 32 || !Arrays.equals(Crypto.hash160(secret), data.hashOfSecretA)) return false;
+		Long now = NTP.getTime();
+		if (now == null) return false;
+		PirateChain pirate = PirateChain.getInstance();
+		String destination;
+		try { destination = PirateChainAddress.fromReceivingAccountInfo(trade.getReceivingAccountInfo()); }
+		catch (IllegalArgumentException e) { throw new DataException("Invalid stored ARRR receiving address", e); }
+		byte[] script = PirateChainHTLC.buildScript(data.partnerForeignPKH, data.lockTimeA,
+				data.creatorForeignPKH, data.hashOfSecretA);
+		String address = pirate.deriveP2shAddressBPrefix(script);
+		BitcoinyHTLC.Status status = PirateChainHTLC.determineHtlcStatus(pirate.getBlockchainProvider(), address,
+				data.expectedForeignAmount, 3);
+		if (status == BitcoinyHTLC.Status.REDEEMED) {
+			PirateChainRefundState previous = PirateChainRefundState.decode(trade.getLastTransactionSignature());
+			trade.setLastTransactionSignature(new PirateChainRefundState(0, now, previous == null ? null : previous.txid, true).encode());
+			TradeBot.updateTradeBotState(repository, trade, State.BOB_DONE, () -> "ARRR redemption confirmed");
+			return false;
 		}
-
-		// Use secret-A to redeem P2SH-A
-
-		PirateChain pirateChain = PirateChain.getInstance();
-
-		byte[] receivingAccountInfo = tradeBotData.getReceivingAccountInfo();
-		int lockTimeA = crossChainTradeData.lockTimeA;
-		byte[] redeemScriptA = PirateChainHTLC.buildScript(crossChainTradeData.partnerForeignPKH, lockTimeA, crossChainTradeData.creatorForeignPKH, crossChainTradeData.hashOfSecretA);
-		String p2shAddress = pirateChain.deriveP2shAddressBPrefix(redeemScriptA); // Use 'b' prefix when checking status
-		String p2shAddressT3 = pirateChain.deriveP2shAddress(redeemScriptA); // Use 't3' prefix when refunding
-
-		// Fee for redeem/refund is subtracted from P2SH-A balance.
-		// Bob learns the buyer's reserve from the selected funding output below.
-		long minimumAmountA = crossChainTradeData.expectedForeignAmount;
-		String receivingAddress;
+		if (status != BitcoinyHTLC.Status.FUNDED) {
+			if (State.BOB_DONE.name().equals(trade.getState()) && !PirateChainRefundState.isConfirmed(trade.getLastTransactionSignature())
+					&& status == BitcoinyHTLC.Status.REDEEM_IN_PROGRESS)
+				TradeBot.updateTradeBotState(repository, trade, State.BOB_WAITING_FOR_AT_REDEEM, () -> "Checking legacy ARRR redemption confirmations");
+			return false;
+		}
+		int height = pirate.getBlockchainProvider().getCurrentHeight();
+		PirateChainRefundState checkpoint = PirateChainRefundState.decode(trade.getLastTransactionSignature());
+		if (State.BOB_DONE.name().equals(trade.getState()) && (checkpoint == null || !checkpoint.confirmed)) {
+			trade.setLastTransactionSignature(new PirateChainRefundState(height + 30, now, checkpoint == null ? null : checkpoint.txid).encode());
+			TradeBot.updateTradeBotState(repository, trade, State.BOB_WAITING_FOR_AT_REDEEM, () -> "Legacy ARRR redemption still funded; quarantining before retry");
+			return false;
+		}
+		if (!mayReplaceSpend(pirate, checkpoint, height, now)) return false;
+		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address, data.expectedForeignAmount);
+		if (funding == null) return false;
+		recordFundingDetails(trade, funding, data.expectedForeignAmount);
+		trade.setLastTransactionSignature(new PirateChainRefundState(height + 30, now, null).encode());
+		TradeBot.updateTradeBotState(repository, trade, State.BOB_WAITING_FOR_AT_REDEEM, () -> "Broadcasting ARRR redemption; awaiting confirmations");
 		try {
-			receivingAddress = PirateChainAddress.fromReceivingAccountInfo(receivingAccountInfo);
+			String txid = pirate.redeemP2sh(pirate.deriveP2shAddress(script), destination, data.expectedForeignAmount,
+					Base58.encode(script), Base58.encode(funding.hash), Base58.encode(secret),
+					Base58.encode(trade.getTradePrivateKey()), fundingFeeOrDefault(trade), trade.getFundingOutputIndex());
+			trade.setLastTransactionSignature(new PirateChainRefundState(height + 30, now, txid).encode());
+			repository.getCrossChainRepository().save(trade); repository.saveChanges();
+			LOGGER.info("ARRR redemption broadcast: {} (awaiting confirmations)", txid);
+			return true;
+		} catch (ForeignBlockchainException.TransactionRejectedException e) {
+			trade.setLastTransactionSignature(null);
+			repository.getCrossChainRepository().save(trade); repository.saveChanges();
+			throw e;
 		} catch (IllegalArgumentException e) {
-			throw new DataException("Invalid stored Pirate Chain receiving address", e);
+			throw new ForeignBlockchainException("Invalid ARRR redemption transaction ID");
 		}
+	}
 
-		BitcoinyHTLC.Status htlcStatusA = PirateChainHTLC.determineHtlcStatus(pirateChain.getBlockchainProvider(), p2shAddress, minimumAmountA);
+	private static void refreshCheckpoint(Repository repository, TradeBotData trade) throws DataException {
+		TradeBotData latest = repository.getCrossChainRepository().getTradeBotData(trade.getTradePrivateKey());
+		if (latest != null) {
+			trade.setLastTransactionSignature(latest.getLastTransactionSignature());
+			trade.setFundingFee(latest.getFundingFee());
+			trade.setFundingOutputIndex(latest.getFundingOutputIndex());
+			trade.setState(latest.getState()); trade.setStateValue(latest.getStateValue());
+		}
+	}
 
-		switch (htlcStatusA) {
-			case UNFUNDED:
-			case FUNDING_IN_PROGRESS:
-				// P2SH-A suddenly not funded? Our best bet at this point is to hope for AT auto-refund
-				return;
-
-			case REDEEM_IN_PROGRESS:
-			case REDEEMED:
-				// Double-check that we have redeemed P2SH-A...
-				break;
-
-			case REFUND_IN_PROGRESS:
-			case REFUNDED:
-				// Wait for AT to auto-refund
-				return;
-
-			case FUNDED: {
-				// Get funding txid
-				UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirateChain.getBlockchainProvider(), p2shAddress, minimumAmountA);
-				if (funding == null) {
-					throw new ForeignBlockchainException("Missing funding txid when redeeming P2SH");
-				}
-				recordFundingDetails(tradeBotData, funding, crossChainTradeData.expectedForeignAmount);
-				repository.getCrossChainRepository().save(tradeBotData);
-				repository.saveChanges();
-				String fundingTxid58 = Base58.encode(funding.hash);
-
-				// Redeem P2SH
-				Coin redeemAmount = Coin.valueOf(crossChainTradeData.expectedForeignAmount);
-				byte[] privateKey = tradeBotData.getTradePrivateKey();
-				String secret58 = Base58.encode(secretA);
-				String privateKey58 = Base58.encode(privateKey);
-				String redeemScript58 = Base58.encode(redeemScriptA);
-
-				String txid = PirateChain.getInstance().redeemP2sh(p2shAddressT3, receivingAddress, redeemAmount.value,
-						redeemScript58, fundingTxid58, secret58, privateKey58,
-						fundingFeeOrDefault(tradeBotData), tradeBotData.getFundingOutputIndex());
-				LOGGER.info("Redeem txid: {}", txid);
-				break;
+	private static boolean mayReplaceSpend(PirateChain pirate, PirateChainRefundState checkpoint,
+			int height, long now) throws ForeignBlockchainException {
+		if (checkpoint == null) return true;
+		if (!checkpoint.mayRetry(height, now)) return false;
+		if (checkpoint.txid != null) {
+			try {
+				int expiry = PirateChainTransaction.read(pirate.getBlockchainProvider().getRawTransaction(checkpoint.transactionHash())).expiryHeight;
+				if (expiry == 0 || height <= expiry + 2) return false;
+			} catch (org.qortal.transform.TransformationException e) {
+				throw new ForeignBlockchainException("Unable to verify ARRR spend expiry");
+			} catch (ForeignBlockchainException.NotFoundException e) {
+				// The block/time quarantine passed; still require a fresh unspent output below.
 			}
 		}
-
-		TradeBot.updateTradeBotState(repository, tradeBotData, State.BOB_DONE,
-				() -> String.format("P2SH-A %s redeemed. Funds should arrive at %s", tradeBotData.getAtAddress(), receivingAddress));
+		return true;
 	}
 
 	/**
@@ -836,13 +883,7 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 	/** Shared by the scheduler and manual recovery. An ACK is pending, never settlement. */
 	public synchronized boolean refund(Repository repository, TradeBotData tradeBotData,
 			ATData atData, CrossChainTradeData tradeData) throws DataException, ForeignBlockchainException {
-		// API and scheduler can have loaded the same record before either acquires this lock.
-		TradeBotData latest = repository.getCrossChainRepository().getTradeBotData(tradeBotData.getTradePrivateKey());
-		if (latest != null) {
-			tradeBotData.setLastTransactionSignature(latest.getLastTransactionSignature());
-			tradeBotData.setFundingFee(latest.getFundingFee());
-			tradeBotData.setFundingOutputIndex(latest.getFundingOutputIndex());
-		}
+		refreshCheckpoint(repository, tradeBotData);
 		if (atData.getIsFinished() && tradeData.mode == AcctMode.REDEEMED
 				&& tradeData.qortalPartnerAddress != null && tradeData.qortalPartnerAddress.equals(tradeBotData.getTradeNativeAddress())
 				&& tradeBotData.getState() != null && tradeBotData.getState().startsWith("ALICE_")) {
@@ -889,20 +930,7 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_REFUNDING_A, () -> "Legacy ARRR refund still funded; checking before retry");
 			return false;
 		}
-		if (checkpoint != null) {
-			if (!checkpoint.mayRetry(height, now)) return false;
-			if (checkpoint.txid != null) {
-				try {
-					int expiry = PirateChainTransaction.read(pirate.getBlockchainProvider().getRawTransaction(checkpoint.transactionHash())).expiryHeight;
-					// A non-expiring or still-live transaction must not be replaced.
-					if (expiry == 0 || height <= expiry + 2) return false;
-				} catch (org.qortal.transform.TransformationException e) {
-					throw new ForeignBlockchainException("Unable to verify ARRR refund expiry");
-				} catch (ForeignBlockchainException.NotFoundException e) {
-					// The checkpoint's block/time quarantine has elapsed; reconcile the UTXO below.
-				}
-			}
-		}
+		if (!mayReplaceSpend(pirate, checkpoint, height, now)) return false;
 		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address, minimum);
 		if (funding == null) return false; // Missing/unconfirmed spend: wait for a definitive chain result.
 		recordFundingDetails(tradeBotData, funding, tradeData.expectedForeignAmount);
@@ -941,7 +969,10 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		if (trade.getState() == null || !trade.getState().startsWith("ALICE_")
 				|| trade.getForeignKey() == null || trade.getForeignKey().isEmpty() || trade.getLockTimeA() == null
 				|| trade.getLockTimeA() <= 0 || trade.getTradePrivateKey() == null || trade.getTradePrivateKey().length != 32
-				|| trade.getHashOfSecret() == null || trade.getHashOfSecret().length != 20) return false;
+				|| trade.getHashOfSecret() == null || trade.getHashOfSecret().length != 20
+				|| trade.getTradeForeignPublicKey() == null || trade.getTradeForeignPublicKey().length != 33
+				|| (SupportedBlockchain.PIRATECHAIN.name().equals(trade.getForeignBlockchain())
+						&& (data.creatorForeignPKH == null || data.creatorForeignPKH.length != 33))) return false;
 		if (!at.getIsFinished()) return true;
 		if (data.mode == AcctMode.REFUNDED || data.mode == AcctMode.CANCELLED) return true;
 		return data.mode == AcctMode.REDEEMED && data.qortalPartnerAddress != null

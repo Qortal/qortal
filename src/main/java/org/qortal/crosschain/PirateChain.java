@@ -250,7 +250,7 @@ public class PirateChain extends Bitcoiny {
 		int height = this.blockchainProvider.getCurrentHeight();
 
 		// Grab latest 11 blocks
-		List<Long> blockTimestamps = this.blockchainProvider.getBlockTimestamps(height - 11, 11);
+		List<Long> blockTimestamps = this.blockchainProvider.getBlockTimestamps(height - 10, 11);
 		if (blockTimestamps.size() < 11)
 			throw new ForeignBlockchainException("Not enough blocks to determine median block time");
 
@@ -851,7 +851,11 @@ public class PirateChain extends Bitcoiny {
 			String redeemScript58) throws ForeignBlockchainException {
 
 		PirateChainWalletController walletController = PirateChainWalletController.getInstance();
-		walletController.beginWalletUse(entropy58, false, true, true);
+		try {
+			walletController.beginWalletUse(entropy58, false, true, true);
+		} catch (ForeignBlockchainException e) {
+			throw new ForeignBlockchainException.TransactionRejectedException("ARRR funding not started: " + e.getMessage());
+		}
 		try {
 			// Unlock wallet
 			walletController.getCurrentWallet().unlock();
@@ -891,14 +895,14 @@ public class PirateChain extends Bitcoiny {
 			String message = (String) error;
 			// The JNI compatibility commands return plain strings rather than typed errors.
 			// Only the native insufficient-funds result establishes a balance issue.
-			if (command.startsWith("redeemp2sh") && isDeterministicP2shRejection(message))
+			if ((command.startsWith("redeemp2sh") || command.equals("sendp2sh")) && isDeterministicP2shRejection(message))
 				throw new ForeignBlockchainException.TransactionRejectedException(message);
 			if (message.startsWith("Insufficient funds:"))
 				throw new ForeignBlockchainException.InsufficientFundsException(message);
 			throw new ForeignBlockchainException(message);
 		}
 		Object txId = json.opt("txid");
-		if (!json.has("error") && txId instanceof String && !((String) txId).isBlank())
+		if (!json.has("error") && txId instanceof String && ((String) txId).matches("[0-9a-fA-F]{64}"))
 			return (String) txId;
 		throw new ForeignBlockchainException("Pirate " + command + " returned an invalid spend result");
 	}

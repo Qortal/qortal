@@ -2,6 +2,50 @@
 
 ## Trade refund test build
 
+Both authenticated `POST /crosschain/htlc/refundAll` and
+`POST /crosschain/htlc/redeemAll` support ARRR. Targeted
+`/refund/{ataddress}` and `/redeem/{ataddress}` use the same per-attempt handlers
+as automatic recovery. Refunds use the buyer record's wallet. Redemptions use
+the seller record's Sapling or Ironwood address, full public keys, original
+reserve and actual funding outpoint, and require a finished, redeemed QORT AT
+with a matching secret and seller key. The generic 20-byte-PKH `/htlc/address`
+and `/htlc/status` helpers reject ARRR because its trade script differs.
+
+The bulk endpoints preserve their boolean contract: `true` means at least one
+new spend was broadcast, not settlement. An immature, pending or already spent
+attempt can return `false`. A failed or malformed attempt is logged without
+stopping the rest. ARRR redemptions stay `BOB_WAITING_FOR_AT_REDEEM` through
+three confirmations before `BOB_DONE`. Legacy ACK-only seller records are
+audited gradually and quarantined before replacement. Keep their checkpoints.
+
+Funding commits `ALICE_WAITING_FOR_FUNDING`, with recovery keys and reserve,
+before JNI. A crash or lost response leaves a database intent even if the
+best-effort JSON export fails. Recovery observes the existing contract and
+never repeats funding. Known pre-broadcast rejections remove the intent so a
+new deliberate attempt can proceed. An ambiguous intent without visible
+funding remains protected and pending; absence alone does not prove failure.
+Buyer redemption messages retain `ALICE_WAITING_FOR_AT_LOCK` until the AT proves
+QORT settlement. Legacy `ALICE_DONE` records are checked for failed settlement;
+unresolved buyer keys cannot be deleted through tradebot cleanup.
+
+Transparent history starts at height 1 independently of shielded wallet
+birthday. Recovery reads carry deadlines; unavailable/timed-out connections
+are retired for the next attempt. Only typed `NOT_FOUND` or the recognised
+legacy lightwalletd `UNKNOWN` / pirated `-5: No such mempool or blockchain
+transaction` result establishes absence. Other errors retain quarantine.
+Median-time checks use the latest eleven blocks ending at the tip.
+
+These recovery changes require the new Core JAR and retain the existing
+indexed-output JNI publication. No new migration, rescan, Hub, native bundle
+or Q-Trade update is required. Keep the Q-Trade `0.0.3-test.4` pairing. Stop
+Core, retain a consistent copy of repository/wallet/settings/trade backups and
+the old JAR, then replace the JAR and restart normally. Verify the build ID,
+loaded native publication, normal trading, confirmed refunds and both bulk
+endpoints. Restart while a spend is pending and verify no immediate duplicate.
+Rollback uses the retained JAR with recovery data preserved for reconciliation;
+older code might not progress the new pending intents. Never independently
+restore old wallet/database state after a monetary transaction was broadcast.
+
 The refund fixes on `pirate-changes` keep ARRR trades in `ALICE_REFUNDING_A` after
 broadcast and require three confirmations of the foreign-chain spend before
 marking `ALICE_REFUNDED`. The API exposes `foreignRefundConfirmed` so the client
@@ -55,11 +99,12 @@ creation should then succeed without the missing-column errors. Restart again to
 check that existing funding metadata is retained. This repair does not change
 the native bundle selection or require a Hub update.
 
-Output zero works with the existing JNI. Nonzero outputs require the companion
-Stashi native patch: `funding_output_index` is used for selection, signing and
-serialization. Core uses `redeemp2sh_indexed` for these outputs so older libraries
-reject explicitly instead of silently spending output zero. The default QDN pin
-has not changed; this source fix does not publish or select a new native bundle.
+The selected Stashi `bd9b620194d1` bundle supports zero and nonzero funding
+outputs. `funding_output_index` is used for selection, signing and serialization.
+Core uses `redeemp2sh_indexed` for nonzero outputs so older library overrides
+reject explicitly instead of silently spending output zero. Check the actual
+loaded publication when a node overrides the QDN signature. The default
+immutable pin is retained by this recovery update.
 
 Offline regression coverage includes maturity gates, three-confirmation settlement,
 lost acknowledgements and restarts, native txid byte order, expiry and UTXO checks,
@@ -69,22 +114,23 @@ Use an isolated checkout for Maven so an IDE compiler cannot replace packaged cl
 For owner testing, build Core with `mvn -o -Dmaven.gitcommitid.nativegit=true -DskipJUnitTests=true package`.
 Before a rollout, stop Core and take a consistent copy of the complete configured
 repository directory, wallet directory, settings and trade backups; retain the previous
-JAR and native bundle signature. In the Stashi checkout, build for a Linux x86_64
-test host with `QORTAL_JNI_TARGET=x86_64-unknown-linux-gnu scripts/build-qortal-jni.sh`
-(or use its combined JNI workflow for all five platforms), then use the existing
-reviewed staging/publication procedure below to obtain and select a new immutable `pirateChainWalletQdnSignature` before
-testing nonzero outputs. The staging pins require a separate reviewed update for
-that new artifact; the existing helper still accepts only the previously reviewed
-bundle. Replace the JAR and restart using the owner's existing lifecycle. Verify the fee endpoint,
+JAR and native bundle signature. If testing a different native artifact, build in
+the Stashi checkout with
+`QORTAL_JNI_TARGET=x86_64-unknown-linux-gnu scripts/build-qortal-jni.sh` for Linux
+x86_64 (or use the combined JNI workflow for all five platforms), then follow
+the reviewed publication procedure below. The selected indexed-output bundle
+can be retained for this Core update.
+Replace the JAR and restart using the owner's existing lifecycle. Verify the fee endpoint,
 normal ARRR trading and an expired/aborted buy's refund through confirmation. Restart
 while a refund is pending and verify it remains pending without immediate resubmission.
 Check a reserve of 20000 and a nonzero funding output through refund and redemption
 with the patched native bundle, and verify checkpoint clearing for a known native
-rejection. No funded acceptance test is performed by the offline suite. To roll
-back, stop Core and restore the previous JAR, native signature and consistent
-pre-upgrade repository copy together (schema 54 contains new trade metadata).
-Retain the post-upgrade database and wallet data for reconciliation; never discard
-wallet state or roll back independently of transactions broadcast during testing.
+rejection. Funded acceptance remains an owner test. This recovery-only update
+introduces no additional schema migration. For code rollback, stop Core and
+restore the retained JAR; retain the post-change repository and wallet data for
+reconciliation, especially after broadcasts. Restore the native signature only
+if it was deliberately changed. Older code might not progress new pending
+intents; do not discard or independently roll back their recovery state.
 
 Qortal selects the Pirate Chain LiteWallet JNI bundle with the
 `pirateChainWalletQdnSignature` setting. The value is an exact QDN transaction
@@ -111,7 +157,7 @@ tools/prep-and-publish-arrr-wallet.sh
 
 Choose the **inner combined JNI ZIP**, or the build directory containing that
 ZIP. For the current build it is
-`stashi-qortal-jni-0.3.9-deb736549e9b.zip`; the outer GitHub Actions download
+`stashi-qortal-jni-0.3.9-bd9b620194d1.zip`; the outer GitHub Actions download
 must first be extracted to get this file. Enter the registered QDN name and a
 new identifier, then the name owner's private key at the hidden signing prompt.
 The default identifier includes a timestamp and is marked as a test candidate.
@@ -560,7 +606,7 @@ described in [local-wallet-signing.md](local-wallet-signing.md).
 
 Download the combined artifact from the [verified fork workflow](https://github.com/crowetic/Stashi-Wallet/actions/runs/41546354523)
 and extract the outer GitHub artifact download to obtain the inner
-`stashi-qortal-jni-0.3.9-deb736549e9b.zip`. Verify it:
+`stashi-qortal-jni-0.3.9-bd9b620194d1.zip`. Verify it:
 
 ```bash
 sha256sum --check <<'EOF'

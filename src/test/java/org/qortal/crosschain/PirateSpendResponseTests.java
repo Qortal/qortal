@@ -46,7 +46,8 @@ public class PirateSpendResponseTests extends Common {
 	@Test
 	public void malformedAndAmbiguousResponsesNeverClaimSuccess() throws Exception {
 		for (String response : new String[] { "", "not JSON", "[]", "{}", "{\"txid\":null}",
-				"{\"txid\":123}", "{\"txid\":\"\"}", "{\"txid\":\"abc\",\"error\":\"failed\"}",
+				"{\"txid\":123}", "{\"txid\":\"\"}", "{\"txid\":\"abc\"}",
+				"{\"txid\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}", "{\"txid\":\"abc\",\"error\":\"failed\"}",
 				"{\"txid\":\"abc\",\"error\":{\"message\":\"failed\"}}" }) {
 			assertFalse(failure(response, "send") instanceof ForeignBlockchainException.InsufficientFundsException);
 		}

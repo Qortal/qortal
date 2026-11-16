@@ -1,6 +1,5 @@
 package org.qortal.api.resource;
 
-import com.google.common.hash.HashCode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -32,7 +31,6 @@ import javax.ws.rs.core.MediaType;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Objects;
-import java.util.stream.Collectors;
 
 @Path("/crosschain/htlc")
 @Tag(name = "Cross-Chain (Hash time-locked contracts)")
@@ -61,7 +59,7 @@ public class CrossChainHtlcResource {
 			@PathParam("redeemPKH") String redeemPKH,
 			@PathParam("hashOfSecret") String hashOfSecret) {
 		SupportedBlockchain blockchain = SupportedBlockchain.valueOf(blockchainName);
-		if (blockchain == null)
+		if (blockchain == null || blockchain == SupportedBlockchain.PIRATECHAIN)
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
 
 		byte[] refunderPubKeyHash;
@@ -115,7 +113,7 @@ public class CrossChainHtlcResource {
 		Security.checkApiCallAllowed(request);
 
 		SupportedBlockchain blockchain = SupportedBlockchain.valueOf(blockchainName);
-		if (blockchain == null)
+		if (blockchain == null || blockchain == SupportedBlockchain.PIRATECHAIN)
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
 
 		byte[] refunderPubKeyHash;
@@ -180,7 +178,7 @@ public class CrossChainHtlcResource {
 	@Path("/redeem/{ataddress}")
 	@Operation(
 			summary = "Redeems HTLC associated with supplied AT",
-			description = "To be used by a QORT seller (Bob) who needs to redeem LTC/DOGE/etc proceeds that are stuck in a P2SH.<br>" +
+			description = "To be used by a QORT seller (Bob) who needs to redeem ARRR/LTC/DOGE/etc proceeds that are stuck in a P2SH.<br>" +
 					"This requires Bob's trade bot data to be present in the database for this AT.<br>" +
 					"It will fail if the buyer has yet to redeem the QORT held in the AT.",
 			responses = {
@@ -195,43 +193,21 @@ public class CrossChainHtlcResource {
 		Security.checkApiCallAllowed(request);
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
-			ATData atData = repository.getATRepository().fromATAddress(atAddress);
-			if (atData == null)
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.ADDRESS_UNKNOWN);
-
-			ACCT acct = SupportedBlockchain.getAcctByCodeHash(atData.getCodeHash());
-			if (acct == null)
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
-
-			CrossChainTradeData crossChainTradeData = acct.populateTradeData(repository, atData);
-			if (crossChainTradeData == null)
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
-
-			// Attempt to find secret from the buyer's message to AT
-			byte[] decodedSecret = acct.findSecretA(repository, crossChainTradeData);
-			if (decodedSecret == null) {
-				LOGGER.info(() -> String.format("Unable to find secret-A from redeem message to AT %s", atAddress));
-				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+			boolean found = false, broadcast = false;
+			ForeignBlockchainException failure = null;
+			for (TradeBotData trade : repository.getCrossChainRepository().getAllTradeBotData()) {
+				if (!Objects.equals(atAddress, trade.getAtAddress())) continue;
+				found = true;
+				try { broadcast |= doRedeemHtlc(repository, trade); }
+				catch (ForeignBlockchainException e) { failure = e; }
 			}
-
-			List<TradeBotData> allTradeBotData = repository.getCrossChainRepository().getAllTradeBotData();
-			TradeBotData tradeBotData = allTradeBotData.stream().filter(tradeBotDataItem -> tradeBotDataItem.getAtAddress().equals(atAddress)).findFirst().orElse(null);
-
-			// Search for the tradePrivateKey in the tradebot data
-			byte[] decodedPrivateKey = null;
-			if (tradeBotData != null)
-				decodedPrivateKey = tradeBotData.getTradePrivateKey();
-
-			// Search for the foreign blockchain receiving address in the tradebot data
-			byte[] foreignBlockchainReceivingAccountInfo = null;
-			if (tradeBotData != null)
-				// Use receiving address PKH from tradebot data
-				foreignBlockchainReceivingAccountInfo = tradeBotData.getReceivingAccountInfo();
-
-			return this.doRedeemHtlc(atAddress, decodedPrivateKey, decodedSecret, foreignBlockchainReceivingAccountInfo);
-
+			if (!found) throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+			if (!broadcast && failure != null) throw failure;
+			return broadcast;
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		} catch (ForeignBlockchainException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE, e);
 		}
 	}
 
@@ -239,9 +215,9 @@ public class CrossChainHtlcResource {
 	@Path("/redeemAll")
 	@Operation(
 			summary = "Redeems HTLC for all applicable ATs in tradebot data",
-			description = "To be used by a QORT seller (Bob) who needs to redeem LTC/DOGE/etc proceeds that are stuck in P2SH transactions.<br>" +
+			description = "To be used by a QORT seller (Bob) who needs to redeem ARRR/LTC/DOGE/etc proceeds that are stuck in P2SH transactions.<br>" +
 					"This requires Bob's trade bot data to be present in the database for any ATs that need redeeming.<br>" +
-					"Returns true if at least one trade is redeemed. More detail is available in the log.txt.* file.",
+					"Returns true if a new spend was broadcast for at least one attempt. ARRR remains pending until three confirmations. More detail is available in the logs.",
 			responses = {
 					@ApiResponse(
 							content = @Content(mediaType = MediaType.TEXT_PLAIN, schema = @Schema(type = "boolean"))
@@ -252,85 +228,35 @@ public class CrossChainHtlcResource {
 	@SecurityRequirement(name = "apiKey")
 	public boolean redeemAllHtlc(@HeaderParam(Security.API_KEY_HEADER) String apiKey) {
 		Security.checkApiCallAllowed(request);
-		boolean success = false;
-
+		boolean broadcast = false;
 		try (final Repository repository = RepositoryManager.getRepository()) {
-			List<TradeBotData> allTradeBotData = repository.getCrossChainRepository().getAllTradeBotData();
-
-			for (TradeBotData tradeBotData : allTradeBotData) {
-				String atAddress = tradeBotData.getAtAddress();
-				if (atAddress == null) {
-					LOGGER.info("Missing AT address in tradebot data", atAddress);
-					continue;
-				}
-
-				String tradeState = tradeBotData.getState();
-				if (tradeState == null) {
-					LOGGER.info("Missing trade state for AT {}", atAddress);
-					continue;
-				}
-
-				if (tradeState.startsWith("ALICE")) {
-					LOGGER.info("AT {} isn't redeemable because it is a buy order", atAddress);
-					continue;
-				}
-
-				ATData atData = repository.getATRepository().fromATAddress(atAddress);
-				if (atData == null) {
-					LOGGER.info("Couldn't find AT with address {}", atAddress);
-					continue;
-				}
-
-				ACCT acct = SupportedBlockchain.getAcctByCodeHash(atData.getCodeHash());
-				if (acct == null) {
-					continue;
-				}
-
-				Bitcoiny bitcoiny = (Bitcoiny) acct.getBlockchain();
-				if (Objects.equals(bitcoiny.getCurrencyCode(), "ARRR")) {
-					LOGGER.info("Skipping AT {} because ARRR is currently unsupported", atAddress);
-					continue;
-				}
-
-				CrossChainTradeData crossChainTradeData = acct.populateTradeData(repository, atData);
-				if (crossChainTradeData == null) {
-					LOGGER.info("Couldn't find crosschain trade data for AT {}", atAddress);
-					continue;
-				}
-
-				// Attempt to find secret from the buyer's message to AT
-				byte[] decodedSecret = acct.findSecretA(repository, crossChainTradeData);
-				if (decodedSecret == null) {
-					LOGGER.info("Unable to find secret-A from redeem message to AT {}", atAddress);
-					continue;
-				}
-
-				// Search for the tradePrivateKey in the tradebot data
-				byte[] decodedPrivateKey = tradeBotData.getTradePrivateKey();
-
-				// Search for the foreign blockchain receiving address PKH in the tradebot data
-				byte[] foreignBlockchainReceivingAccountInfo = tradeBotData.getReceivingAccountInfo();
-
-				try {
-					LOGGER.info("Attempting to redeem P2SH balance associated with AT {}...", atAddress);
-					boolean redeemed = this.doRedeemHtlc(atAddress, decodedPrivateKey, decodedSecret, foreignBlockchainReceivingAccountInfo);
-					if (redeemed) {
-						LOGGER.info("Redeemed P2SH balance associated with AT {}", atAddress);
-						success = true;
-					}
-					else {
-						LOGGER.info("Couldn't redeem P2SH balance associated with AT {}. Already redeemed?", atAddress);
-					}
-				} catch (ApiException e) {
-					LOGGER.info("Couldn't redeem P2SH balance associated with AT {}. Missing data?", atAddress);
+			for (TradeBotData trade : repository.getCrossChainRepository().getAllTradeBotData()) {
+				try { broadcast |= doRedeemHtlc(repository, trade); }
+				catch (ForeignBlockchainException | ApiException | IllegalArgumentException | DataException e) {
+					repository.discardChanges();
+					LOGGER.error("Unable to redeem HTLC attempt for AT {} (trade {}); continuing other attempts",
+							trade.getAtAddress(), trade.getTradeNativeAddress(), e);
 				}
 			}
-
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}
+		return broadcast;
+	}
 
-		return success;
+	private boolean doRedeemHtlc(Repository repository, TradeBotData trade) throws DataException, ForeignBlockchainException {
+		if (trade.getAtAddress() == null || trade.getState() == null || !trade.getState().startsWith("BOB_")) return false;
+		ATData at = repository.getATRepository().fromATAddress(trade.getAtAddress());
+		if (at == null || !at.getIsFinished()) return false;
+		ACCT acct = SupportedBlockchain.getAcctByCodeHash(at.getCodeHash());
+		if (acct == null) return false;
+		CrossChainTradeData data = acct.populateTradeData(repository, at);
+		if (data == null || data.mode != AcctMode.REDEEMED) return false;
+		if (Objects.equals(((Bitcoiny) acct.getBlockchain()).getCurrencyCode(), "ARRR"))
+			return PirateChainACCTv3TradeBot.getInstance().redeem(repository, trade, at, data);
+		byte[] secret = acct.findSecretA(repository, data);
+		if (secret == null) return false;
+		return doRedeemHtlc(trade.getAtAddress(), trade.getTradePrivateKey(), secret, trade.getReceivingAccountInfo());
 	}
 
 	private boolean doRedeemHtlc(String atAddress, byte[] decodedTradePrivateKey, byte[] decodedSecret,
@@ -426,9 +352,9 @@ public class CrossChainHtlcResource {
 	@Path("/refund/{ataddress}")
 	@Operation(
 			summary = "Refunds HTLC associated with supplied AT",
-			description = "To be used by a QORT buyer (Alice) who needs to refund their LTC/DOGE/etc that is stuck in a P2SH.<br>" +
+			description = "To be used by a QORT buyer (Alice) who needs to refund their ARRR/LTC/DOGE/etc that is stuck in a P2SH.<br>" +
 					"This requires Alice's trade bot data to be present in the database for this AT.<br>" +
-					"It will fail if it's already redeemed by the seller, or if the lockTime (60 minutes) hasn't passed yet.",
+					"No new broadcast occurs while immature, pending or already spent. ARRR requires its recorded locktime and chain median time to pass; a true result is a broadcast acknowledgement, not settlement.",
 			responses = {
 					@ApiResponse(
 							content = @Content(mediaType = MediaType.TEXT_PLAIN, schema = @Schema(type = "boolean"))
@@ -459,7 +385,7 @@ public class CrossChainHtlcResource {
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		} catch (ForeignBlockchainException e) {
-			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_BALANCE_ISSUE, e);
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE, e);
 		}
 	}
 
@@ -468,9 +394,9 @@ public class CrossChainHtlcResource {
 	@Path("/refundAll")
 	@Operation(
 			summary = "Refunds HTLC for all applicable ATs in tradebot data",
-			description = "To be used by a QORT buyer (Alice) who needs to refund their LTC/DOGE/etc proceeds that are stuck in P2SH transactions.<br>" +
+			description = "To be used by a QORT buyer (Alice) who needs to refund their ARRR/LTC/DOGE/etc proceeds that are stuck in P2SH transactions.<br>" +
 					"This requires Alice's trade bot data to be present in the database for this AT.<br>" +
-					"It will fail if it's already redeemed by the seller, or if the lockTime (60 minutes) hasn't passed yet.",
+					"No new broadcast occurs while immature, pending or already spent. ARRR requires its recorded locktime and chain median time to pass; a true result is a broadcast acknowledgement, not settlement.",
 			responses = {
 					@ApiResponse(
 							content = @Content(mediaType = MediaType.TEXT_PLAIN, schema = @Schema(type = "boolean"))
@@ -486,7 +412,8 @@ public class CrossChainHtlcResource {
 			for (TradeBotData trade : repository.getCrossChainRepository().getAllTradeBotData()) {
 				try {
 					broadcast |= doRefundHtlc(repository, trade);
-				} catch (ForeignBlockchainException | ApiException e) {
+				} catch (ForeignBlockchainException | ApiException | IllegalArgumentException | DataException e) {
+					repository.discardChanges();
 					LOGGER.error("Unable to refund HTLC attempt for AT {} (trade {}); continuing other attempts",
 							trade.getAtAddress(), trade.getTradeNativeAddress(), e);
 				}
