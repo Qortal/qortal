@@ -47,3 +47,20 @@ Discovery queries history (including mempool) for the full receive/change gap.
 It queries unspent outputs only for addresses with history and reads the chain
 height at most once per response. Each new request rechecks history and outputs;
 there is no cache of spendable balances across approvals.
+
+Electrum connection scoring must not discard a completed RPC. When an otherwise
+successful server exceeds the response-time threshold and another connection is
+available, Core returns its reply and retires it from the connection pool for
+future requests. Missing replies still try an available alternative; definitive
+daemon errors are returned to the caller. The former slow-server path discarded
+valid replies and raised a network error despite other connected servers, which
+could interrupt public wallet discovery before Hub displayed payment approval.
+This applies to all five Electrum-backed coins and requires a Core update only.
+
+The offline `ElectrumXResponseTests` exercise actual loopback socket responses,
+connection retirement, failover and terminal errors without wallets or funds.
+After updating Core, prepare a payment in Hub and check that the approval screen
+appears; cancel it if only testing preparation. If error 1201 persists, it still
+requires investigation: this error also covers discovery limits and rejected
+transaction data. This fix does not establish that every preparation failure has
+the same cause. No wallet rescan or database change is needed for this correction.

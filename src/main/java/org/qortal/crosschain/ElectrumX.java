@@ -997,9 +997,8 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 			ElectrumServer electrumServer = acquireServer();
 
-			Object response = null;
-
-			while(response == null) {
+			while (true) {
+				Object response;
 
 				try {
 					response = connectedRpc(electrumServer, method, params);
@@ -1019,19 +1018,18 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 					throw e;
 				}
 
-				// If we have more servers and this one replied slowly, try another
-				if (!this.availableConnections.isEmpty()) {
-					long averageResponseTime = electrumServer.averageResponseTime();
-					if (averageResponseTime > MAX_AVG_RESPONSE_TIME) {
-						String message = String.format("Slow average response time %dms from %s - trying another server...", averageResponseTime, electrumServer.getServer());
-						LOGGER.info(message);
-						electrumServer.closeServer(this.getClass().getSimpleName(), message);
-						break;
-					}
-				}
-
 				if (response != null) {
-					releaseServer(electrumServer);
+					// A slow but successful reply still completes this RPC. Retire the
+					// connection for future calls without discarding or repeating it.
+					long averageResponseTime = electrumServer.averageResponseTime();
+					if (!this.availableConnections.isEmpty() && averageResponseTime > MAX_AVG_RESPONSE_TIME) {
+						String message = String.format("Slow average response time %dms from %s - retiring after completed RPC", averageResponseTime, electrumServer.getServer());
+						LOGGER.info(message);
+						this.connections.remove(electrumServer);
+						electrumServer.closeServer(this.getClass().getSimpleName(), message);
+					} else {
+						releaseServer(electrumServer);
+					}
 					this.lastRpcTimeMs = System.currentTimeMillis();
 					return new ElectrumServerResponse(electrumServer, response);
 				}
@@ -1043,10 +1041,6 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 				electrumServer.closeServer(this.getClass().getSimpleName(), NULL_RESPONSE_FROM_ELECTRUM_X_SERVER);
 				electrumServer = acquireServer();
 			}
-
-			// Failed to perform RPC - maybe lack of servers?
-			LOGGER.info("Error: No connected Electrum servers when trying to make RPC call");
-			throw new ForeignBlockchainException.NetworkException(String.format("Failed to perform ElectrumX RPC %s", method));
 		} finally {
 			this.inFlightRpcCount.decrementAndGet();
 		}
