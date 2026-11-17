@@ -5,16 +5,19 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.qortal.api.ApiError;
 import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
+import org.qortal.api.Security;
 import org.qortal.controller.DevProxyManager;
 import org.qortal.repository.DataException;
 
 import javax.servlet.ServletContext;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import javax.ws.rs.HeaderParam;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
 import javax.ws.rs.core.Context;
@@ -58,8 +61,9 @@ public class DeveloperResource {
 			}
 	)
 	@ApiErrors({ApiError.INVALID_CRITERIA})
-	public Integer startProxy(String sourceHostAndPort) {
-		// TODO: API key
+	@SecurityRequirement(name = "apiKey")
+	public Integer startProxy(@HeaderParam(Security.API_KEY_HEADER) String apiKey, String sourceHostAndPort) {
+		Security.checkApiCallAllowed(request);
 		DevProxyManager devProxyManager = DevProxyManager.getInstance();
 		try {
 			devProxyManager.setSourceHostAndPort(sourceHostAndPort);
@@ -87,7 +91,9 @@ public class DeveloperResource {
 					)
 			}
 	)
-	public boolean stopProxy() {
+	@SecurityRequirement(name = "apiKey")
+	public boolean stopProxy(@HeaderParam(Security.API_KEY_HEADER) String apiKey) {
+		Security.checkApiCallAllowed(request);
 		DevProxyManager devProxyManager = DevProxyManager.getInstance();
 		devProxyManager.stop();
 		return !devProxyManager.isRunning();
