@@ -75,6 +75,10 @@
 			<resource>
 				<directory>${basedir}/src/main/resources</directory>
 				<filtering>true</filtering>
+				<excludes>
+					<!-- ARRR native libraries are delivered through QDN, not the Core JAR. -->
+					<exclude>META-INF/arrr-jni/**</exclude>
+				</excludes>
 			</resource>
 		</resources>
 		<extensions>
@@ -321,6 +325,12 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-jar-plugin</artifactId>
 				<version>${maven-jar-plugin.version}</version>
+				<configuration>
+					<excludes>
+						<!-- Also reject files left in target/classes by local publication staging. -->
+						<exclude>META-INF/arrr-jni/**</exclude>
+					</excludes>
+				</configuration>
 				<executions>
 					<execution>
 						<configuration>
@@ -384,6 +394,7 @@
 								<exclude>META-INF/*.SF</exclude>
 								<exclude>META-INF/*.DSA</exclude>
 								<exclude>META-INF/*.RSA</exclude>
+								<exclude>META-INF/arrr-jni/**</exclude>
 								<exclude>**/*.js.map</exclude>
 							</excludes>
 						</filter>
