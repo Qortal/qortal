@@ -1,6 +1,6 @@
 # Monero (XMR) support plan
 
-Date: 2026-11-17. Scope: Qortal Core foundations, device-local wallets in Hub/Q-Wallets, and eventual direct QORT/XMR trading in Q-Trade. This is an implementation roadmap, not an announcement of usable XMR wallets or trades.
+Date: 2026-11-17. Scope: Qortal Core foundations, device-local wallets owned by Qortal Hub with Q-Wallets as their interface, and eventual direct QORT/XMR trading in Q-Trade. This is an implementation roadmap, not an announcement of usable XMR wallets or trades.
 
 ## Current result and decisions
 
@@ -14,6 +14,8 @@ The first increment adds offline Java primitives in `org.qortal.crosschain.moner
 These classes have no runtime callers yet. No RPC settings, wallet processes, endpoints, database migrations, supported-chain registration, ATs or native bundles are added. Address acceptance is deliberately stricter than a checksum-only decoder: unusual encodings with noncanonical, identity or non-prime-order keys are rejected. Differential tests against the selected wallet implementation are required before this becomes a sending gate. Validation does not prove ownership, receipt or spendability.
 
 Wallet work can proceed while the direct-swap protocol is researched. XMR must enter `SupportedBlockchain` only when there is a real, tested ACCT implementation; that registry currently couples a chain to its AT code hashes and latest ACCT. Wallet availability needs its own capability model.
+
+The owner has since fixed the client boundary: **all cryptography runs locally in Qortal Hub**, including XMR account-key creation alongside the other coins. The same Qortal account backup must recover XMR. Q-Apps request approved operations and display public results. Qortal testnet maps to **Monero stagenet**; normal/default mode maps to **Monero mainnet**. See [the Hub client decision and integration work](monero-hub-client.md). A synthetic `monero-ts` worker feasibility probe is now available in [`tools/xmr-hub-client`](../tools/xmr-hub-client/README.md); it is not a product wallet or a Q-App key store.
 
 ## Repository findings
 
@@ -36,10 +38,10 @@ The initial inspected source base was `44b602f54f416cbb17e8ba272dcf8fcb7c00ef14`
 Use three separate responsibilities:
 
 1. **Chain access** reads public daemon status, headers, transactions and fee information. It verifies network, sync state and supported protocol versions and treats a remote daemon as an untrusted data source. A daemon does not provide an address-indexed wallet balance.
-2. **Device-local wallet service** scans outputs, manages account/subaddress indexes and restore height, tracks signed key images and available funds, prepares transactions, and invokes a local signer. Private view keys disclose wallet information and remain private even when they cannot spend. Private spend keys, seeds and full wallet files stay on the user's device.
+2. **Hub-local wallet service** derives the XMR key during account creation/restoration, scans outputs, manages account/subaddress indexes and restore height, tracks signed key images and available funds, prepares transactions, and signs locally. Private view keys disclose wallet information and remain private even when they cannot spend. Private spend/view keys, seeds and full wallet files stay inside trusted Hub code on the user's device; Q-Apps receive no root keys.
 3. **Swap engine** coordinates only a reviewed protocol, authenticates counterparty messages, persists recovery material before side effects and monitors both chains. It requires separate protocol and recovery capabilities, not just a wallet capable of sending XMR.
 
-For the first wallet prototype, use an explicitly configured, authenticated loopback `monero-wallet-rpc` as a reference backend, with an owned development wallet and stagenet. Wallet RPC is a sensitive local service, not a public Core proxy. Do not expose arbitrary wallet methods, wallet filenames or process arguments through hosted APIs. Keep secrets out of URLs, command lines, logs and API diagnostics. An external remote daemon is distinct from a remote wallet service. The official [wallet-process reference](https://docs.getmonero.org/interacting/monero-wallet-rpc-reference/) describes this separation.
+The selected feasibility candidate is `monero-ts` 0.11.22, running its local `wallet2` WASM engine in a trusted Hub worker. Bundle the pinned assets with Hub. Account derivation and Q-App permissions still need implementation and recovery tests before this becomes a usable wallet. Keep an explicitly configured, authenticated loopback `monero-wallet-rpc` as an interoperability reference for development tests, not the product's default wallet service. Do not expose wallet RPC through hosted Core. The official [wallet-process reference](https://docs.getmonero.org/interacting/monero-wallet-rpc-reference/) describes the daemon/wallet separation.
 
 Before product packaging, record an architecture decision comparing:
 
@@ -47,11 +49,11 @@ Before product packaging, record an architecture decision comparing:
 | --- | --- |
 | Local reference wallet RPC | Authentication, process ownership, per-wallet serialization, restart/recovery, wallet-file protection, binary verification, packaged desktop lifecycle and IPC boundaries. Lowest-cost interoperability prototype. |
 | Native `wallet2` integration | Maintained bindings, ABI stability, reproducible builds, licenses, crash isolation and every supported OS/architecture. Do not reuse or modify the ARRR bundle for this. |
-| Browser/WASM wallet library | Current protocol coverage, scanning cost, key handling, audited signing, reproducibility and browser constraints. Evaluate against the reference wallet before selecting. |
+| Browser/WASM wallet library | `monero-ts` 0.11.22 selected for the Hub feasibility increment; synthetic browser/worker tests pass. Actual Hub integration, scanning, payment interoperability, independent review and supported platforms remain release gates. |
 
 Pin the exact backend release, source commit, binary hashes, schema and network in acceptance evidence. The official [release page](https://github.com/monero-project/monero/releases/tag/v0.18.5.4) identifies v0.18.5.4 as the current release at this review. Development `master` is not a promise of activated network behavior; recheck compatibility at implementation and release time.
 
-Do not silently derive XMR from an existing Qortal, Bitcoin or ARRR seed. Decide and version the wallet derivation/import scheme, domain separation, backup format, restore height and device migration first. Verify restoration independently before receiving funds. Present scan height, daemon height, last refresh, locked balance, unlocked balance and incomplete spent-status information separately.
+The owner requires deterministic XMR recovery from the existing Qortal account backup. Hub currently encrypts the root seed and stores the Qortal wallet version, then rebuilds coin wallets through `PhraseWallet`. Add XMR to that account lifecycle with a fixed, versioned, domain-separated derivation; do not generate an unrelated random wallet or change existing coin derivation. Freeze the exact algorithm and recovery vectors before receiving funds. Scan-cache files are replaceable state, not the only copy of spending authority. Present scan height, daemon height, last refresh, locked balance, unlocked balance and incomplete spent-status information separately.
 
 ## Amounts, APIs and persistence
 
@@ -90,8 +92,8 @@ These are ordered deliverables, not calendar promises. Wallet and protocol resea
 | --- | --- | --- | --- | --- |
 | XMR-001 | Evidence, architecture and roadmap (Core docs) | Repository review | Explicit custody, precision, direct-swap and release gates | Complete for this increment |
 | XMR-002 | Amount/network/address primitives (Core) | XMR-001 | Offline independent vectors, overflow and network rejection | Complete: 18 tests pass |
-| XMR-003 | Backend, key derivation and backup ADR (Core/Hub) | XMR-001 | A second device restores the same development wallet; documented local/hosted boundaries | Next |
-| XMR-004 | Bounded read-only daemon/wallet adapters (Core/local wallet) | XMR-002, 003 | Typed errors, exact uint64 parsing, network/version/sync checks; authenticated local wallet; fixture and local-process tests | Planned |
+| XMR-003 | Backend, key derivation and backup ADR (Core/Hub) | XMR-001 | A second device restores the same development wallet; documented Hub/Q-App/daemon boundaries | Candidate and Hub ownership decided; synthetic engine recovery passes; actual Hub derivation/backup test next |
+| XMR-004 | Bounded read-only daemon/wallet adapters (Core/Hub) | XMR-002, 003 | Typed errors, exact uint64 parsing, network/version/sync checks; local wallet ownership; fixture and local-process tests | Fixture transport proven; product adapter planned |
 | XMR-005 | Receive, scan, balances and history (Hub/Q-Wallets) | XMR-004 | Account/subaddress allocation, restore-height recovery, key-image spent status, reorg reconciliation; no false zero balance | Planned |
 | XMR-006 | Prepare, local signing and broadcast (Hub/local wallet) | XMR-005 | Independent destination/amount/change/fee/network confirmation; restart-safe intent; ambiguous submission recovery; verified wallet receipt | Planned |
 | XMR-007 | Direct-swap specification and feasibility experiment (Core/AT research) | XMR-001 | All six protocol requirements above, executable adversarial model and independent review | Research required |
@@ -101,7 +103,7 @@ These are ordered deliverables, not calendar promises. Wallet and protocol resea
 | XMR-011 | Review, reproducible packaging and soak tests (all components) | Wallet or trade candidate | Supported platform matrix; pinned artifacts; fault-injection results; independent security findings resolved | Gated per release |
 | XMR-012 | Opt-in release and staged rollout (owner) | XMR-011 | Owner-authorized controlled acceptance, readiness checks and recovery runbook | Not authorized by this development task |
 
-The next coding increment should implement XMR-004's daemon-status adapter with fixture tests while XMR-003 resolves the device-local wallet contract. Keep it unregistered and read-only. Do not add an unused generic RPC proxy or invent signing APIs before selecting the backend.
+The next coding increment belongs in Hub: freeze XMR derivation vectors, connect account creation/unlock/backup restore, then add the trusted worker lifecycle and a public-only, permissioned Q-App interface. Validate the existing backup on a fresh profile before exposing receive addresses. Core should provide network/node metadata and, only if transport requires it, a bounded daemon connector. The native WASM wallet drops URI path prefixes, so a generic Core URL prefix is not a working relay without an explicit adapter. Keep wallet support separate from ACCT registration.
 
 ## Verification matrix
 

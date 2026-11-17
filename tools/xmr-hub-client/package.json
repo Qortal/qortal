@@ -1,0 +1,23 @@
+{
+  "name": "qortal-xmr-hub-client-spike",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "build": "vite build",
+    "test": "node --test src/network.test.mjs",
+    "test:browser": "node scripts/browser-smoke.mjs"
+  },
+  "dependencies": {
+    "memfs": "4.80.1",
+    "monero-ts": "0.11.22"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1",
+    "vite": "8.3.8",
+    "vite-plugin-node-polyfills": "0.28.0"
+  }
+}
