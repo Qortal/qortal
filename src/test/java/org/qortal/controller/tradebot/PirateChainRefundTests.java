@@ -353,6 +353,159 @@ public class PirateChainRefundTests extends Common {
         return constructor.newInstance();
     }
 
+    private static final class RecoveryLogCapture implements AutoCloseable {
+        private final org.apache.logging.log4j.core.Logger logger =
+                (org.apache.logging.log4j.core.Logger) org.apache.logging.log4j.LogManager.getLogger(PirateChainACCTv3TradeBot.class);
+        private final org.apache.logging.log4j.Level previousLevel = logger.getLevel();
+        private final List<String> messages = new ArrayList<>();
+        private final org.apache.logging.log4j.core.appender.AbstractAppender appender =
+                new org.apache.logging.log4j.core.appender.AbstractAppender("arrr-recovery-diagnostics", null, null, false, null) {
+                    @Override public void append(org.apache.logging.log4j.core.LogEvent event) {
+                        messages.add(event.getMessage().getFormattedMessage());
+                    }
+                };
+        RecoveryLogCapture() { appender.start(); logger.addAppender(appender); logger.setLevel(org.apache.logging.log4j.Level.INFO); }
+        List<String> diagnostics() {
+            return messages.stream().filter(message -> message.startsWith("ARRR recovery for AT ")).collect(java.util.stream.Collectors.toList());
+        }
+        @Override public void close() { logger.removeAppender(appender); logger.setLevel(previousLevel); appender.stop(); }
+    }
+
+    @Test public void missingReserveAndUnfundedHistoryProducePublicDiagnosticsWithoutSecrets() throws Exception {
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(null);
+        status(BitcoinyHTLC.Status.UNFUNDED);
+        TradeBotData attempt = trade(1);
+        try (RecoveryLogCapture logs = new RecoveryLogCapture()) {
+            assertFalse(freshBot().refund(repository, attempt, at, data));
+            assertEquals(1, logs.diagnostics().size());
+            String message = logs.diagnostics().get(0);
+            assertTrue(message.contains("AT AT (trade native-1)"));
+            assertTrue(message.contains("phase=refund state=ALICE_REFUNDING_A reason=HTLC_UNFUNDED"));
+            assertTrue(message.contains("htlc=b-1 expectedAmount=100000000 fundingFee=null minimumAmount=100010000"));
+            assertFalse(message.contains(attempt.getForeignKey()));
+            assertFalse(message.contains(org.qortal.utils.Base58.encode(attempt.getTradePrivateKey())));
+            assertFalse(message.contains(org.qortal.utils.Base58.encode(attempt.getSecret())));
+        }
+        noBroadcast();
+    }
+
+    @Test public void nativeSubmissionStagesAndAcknowledgementIdentifyTheAttempt() throws Exception {
+        TradeBotData attempt = trade(1);
+        try (RecoveryLogCapture logs = new RecoveryLogCapture()) {
+            assertTrue(freshBot().refund(repository, attempt, at, data));
+            assertEquals(2, logs.diagnostics().size());
+            assertTrue(logs.diagnostics().get(0).contains("reason=PREPARING_NATIVE_REFUND"));
+            assertTrue(logs.diagnostics().get(1).contains("reason=SUBMITTING_NATIVE_REFUND htlc=b-1 fundingOutputIndex=0 checkpoint=committed"));
+            assertTrue(logs.messages.stream().anyMatch(message -> message.contains("ARRR refund broadcast: " + TXID + " for AT AT (trade native-1)")));
+        }
+        assertEquals(TXID, PirateChainRefundState.decode(attempt.getLastTransactionSignature()).txid);
+        assertEquals("ALICE_REFUNDING_A", attempt.getState());
+    }
+
+    @Test public void clockAndMaturityWaitsIdentifyTheirGateAndDoNotBroadcast() throws Exception {
+        PirateChainACCTv3TradeBot recovery = freshBot();
+        try (RecoveryLogCapture logs = new RecoveryLogCapture()) {
+            clock.when(NTP::getTime).thenReturn(null);
+            assertFalse(recovery.refund(repository, trade(1), at, data));
+            clock.when(NTP::getTime).thenReturn(1_000L);
+            assertFalse(recovery.refund(repository, trade(1), at, data));
+            clock.when(NTP::getTime).thenReturn(1_000_000L);
+            when(pirate.getMedianBlockTime()).thenReturn(1);
+            assertFalse(recovery.refund(repository, trade(1), at, data));
+            assertEquals(3, logs.diagnostics().size());
+            assertTrue(logs.diagnostics().get(0).contains("reason=CLOCK_UNAVAILABLE"));
+            assertTrue(logs.diagnostics().get(1).contains("reason=LOCKTIME_NOT_REACHED"));
+            assertTrue(logs.diagnostics().get(2).contains("reason=MEDIAN_TIME_NOT_MATURE medianBlockTime=1 lockTime=1"));
+        }
+        noBroadcast();
+    }
+
+    @Test public void repeatedQuarantineIsQuietButLiveTransactionReasonAppearsImmediately() throws Exception {
+        PirateChainACCTv3TradeBot recovery = freshBot();
+        TradeBotData attempt = trade(1);
+        attempt.setLastTransactionSignature(new PirateChainRefundState(130, 1_000_000L, TXID).encode());
+        try (RecoveryLogCapture logs = new RecoveryLogCapture()) {
+            assertFalse(recovery.refund(repository, attempt, at, data));
+            assertFalse(recovery.refund(repository, attempt, at, data));
+            assertEquals(1, logs.diagnostics().size());
+            assertTrue(logs.diagnostics().get(0).contains("reason=RETRY_QUARANTINE"));
+            assertTrue(logs.diagnostics().get(0).contains("retryAfterHeight=130"));
+            assertTrue(logs.diagnostics().get(0).contains("retryAtMillis=1600000"));
+            when(chain.getCurrentHeight()).thenReturn(131);
+            clock.when(NTP::getTime).thenReturn(1_600_000L);
+            byte[] raw = java.nio.ByteBuffer.allocate(22).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                    .putInt(0x80000006).putInt(0xd884b698).putInt(0x37a5165b).putInt(1).putInt(200).put((byte)0).put((byte)0).array();
+            when(chain.getRawTransaction(any(byte[].class))).thenReturn(raw);
+            assertFalse(recovery.refund(repository, attempt, at, data));
+            assertEquals(2, logs.diagnostics().size());
+            assertTrue(logs.diagnostics().get(1).contains("reason=SPEND_NOT_EXPIRED"));
+            assertTrue(logs.diagnostics().get(1).contains("expiryHeight=200"));
+        }
+        noBroadcast();
+    }
+
+    @Test public void fundedHistoryWithMissingUnspentOutputReportsDiscoveryMismatch() throws Exception {
+        TradeBotData attempt = trade(1); attempt.setFundingFee(10000L);
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(null);
+        try (RecoveryLogCapture logs = new RecoveryLogCapture()) {
+            assertFalse(freshBot().refund(repository, attempt, at, data));
+            assertEquals(1, logs.diagnostics().size());
+            assertTrue(logs.diagnostics().get(0).contains("reason=NO_CONFIRMED_FUNDING_OUTPUT"));
+            assertTrue(logs.diagnostics().get(0).contains("htlc=b-1 historyStatus=FUNDED minimumAmount=100010000"));
+        }
+        noBroadcast();
+    }
+
+    @Test public void shallowSpendsReportConfirmationWaitWithoutAnotherSpend() throws Exception {
+        PirateChainACCTv3TradeBot recovery = freshBot();
+        try (RecoveryLogCapture logs = new RecoveryLogCapture()) {
+            for (BitcoinyHTLC.Status pending : List.of(BitcoinyHTLC.Status.REFUND_IN_PROGRESS, BitcoinyHTLC.Status.REDEEM_IN_PROGRESS)) {
+                status(pending);
+                assertFalse(recovery.refund(repository, trade(1), at, data));
+            }
+            assertEquals(2, logs.diagnostics().size());
+            assertTrue(logs.diagnostics().get(0).contains("reason=HTLC_REFUND_IN_PROGRESS htlc=b-1 requiredConfirmations=3"));
+            assertTrue(logs.diagnostics().get(1).contains("reason=HTLC_REDEEM_IN_PROGRESS htlc=b-1 requiredConfirmations=3"));
+        }
+        noBroadcast();
+    }
+
+    @Test public void fundingIntentWaitHasItsOwnPhaseAndDoesNotRepeatFunding() throws Exception {
+        TradeBotData attempt = trade(1); attempt.setState("ALICE_WAITING_FOR_FUNDING"); attempt.setStateValue(80);
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(null);
+        status(BitcoinyHTLC.Status.UNFUNDED);
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.populateTradeData(repository, at)).thenReturn(data);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class);
+             RecoveryLogCapture logs = new RecoveryLogCapture()) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            freshBot().progress(repository, attempt);
+            assertEquals(1, logs.diagnostics().size());
+            assertTrue(logs.diagnostics().get(0).contains("phase=funding-recovery state=ALICE_WAITING_FOR_FUNDING reason=HTLC_UNFUNDED"));
+            assertTrue(logs.diagnostics().get(0).contains("confirmedFundingOutput=not-found; funding is not resubmitted"));
+        }
+        assertEquals("ALICE_WAITING_FOR_FUNDING", attempt.getState());
+        verify(pirate, never()).fundP2SH(anyString(), anyString(), anyLong(), anyString());
+        noBroadcast();
+    }
+
+    @Test public void expiredBuyerReportsRefundEntryBeforeChangingState() throws Exception {
+        TradeBotData attempt = trade(1); attempt.setState("ALICE_WAITING_FOR_AT_LOCK"); attempt.setStateValue(85);
+        data.mode = AcctMode.OFFERING; when(at.getIsFinished()).thenReturn(false);
+        htlc.when(() -> PirateChainHTLC.determineHtlcStatus(any(), anyString(), anyLong())).thenReturn(BitcoinyHTLC.Status.UNFUNDED);
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.populateTradeData(repository, at)).thenReturn(data);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class);
+             RecoveryLogCapture logs = new RecoveryLogCapture()) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            freshBot().progress(repository, attempt);
+            assertEquals(1, logs.diagnostics().size());
+            assertTrue(logs.diagnostics().get(0).contains("phase=refund-entry state=ALICE_WAITING_FOR_AT_LOCK reason=HTLC_UNFUNDED"));
+        }
+        assertEquals("ALICE_REFUNDING_A", attempt.getState());
+        noBroadcast();
+    }
+
     @Test public void legacyBuyerWithoutQortSettlementReentersRecoveryAndCannotBeDeleted() throws Exception {
         TradeBotData buyer = trade(1); buyer.setState("ALICE_DONE"); buyer.setStateValue(95);
         PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);

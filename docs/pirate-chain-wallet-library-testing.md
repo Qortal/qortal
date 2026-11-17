@@ -2,6 +2,41 @@
 
 ## Trade refund test build
 
+### Diagnosing a refund that produces only the missing-fee warning
+
+`ARRR funding fee unavailable ... falling back to 10000` means the local attempt
+has no stored reserve. It does not establish a rejected transaction or an
+insufficient fee. The shared refund handler first tries to recover the actual
+reserve and output index from a matching confirmed unspent funding output.
+
+The diagnostic build adds INFO messages beginning `ARRR recovery for AT` for
+previously silent waits. They retain the full public AT and trade addresses,
+identify `phase=funding-recovery`, `refund-entry`, `refund` or `redeem`, and give
+a reason such as `HTLC_UNFUNDED`, `NO_CONFIRMED_FUNDING_OUTPUT`,
+`MEDIAN_TIME_NOT_MATURE`, `RETRY_QUARANTINE` or `SPEND_NOT_EXPIRED`.
+Where available they include the transparent HTLC address, atomic amount,
+stored reserve, locktime, retry thresholds and public spend txid. A `null`
+reserve means unknown; it is distinct from a known zero reserve.
+`PREPARING_NATIVE_REFUND` means a matching unspent output was found and wallet
+preparation is starting. `SUBMITTING_NATIVE_REFUND` means the recovery checkpoint
+was committed and the native call is starting. Neither establishes broadcast;
+the separate acknowledgement log includes the txid and full AT/trade addresses.
+
+Repeated messages for the same attempt, phase, state and reason are limited to
+once per minute; a changed state or reason appears immediately. The original
+missing-fee warning remains available. No wallet entropy, private keys,
+unrevealed secrets, request bodies or shielded destinations are added to these
+messages. Collect the diagnostic lines for the affected AT from `qortal.log`
+after a normal chain tip or an authenticated manual refund attempt. Do not
+share a complete trade-bot export, which contains recovery secrets.
+
+This update changes logging only. It keeps the spending, confirmation,
+maturity and duplicate-submission checks, database format and native bundle.
+It does not establish that a funded refund succeeds on-chain. Use the normal
+backup/restart procedure below and retain the prior JAR for a code rollback.
+
+### Recovery behavior
+
 Both authenticated `POST /crosschain/htlc/refundAll` and
 `POST /crosschain/htlc/redeemAll` support ARRR. Targeted
 `/refund/{ataddress}` and `/redeem/{ataddress}` use the same per-attempt handlers

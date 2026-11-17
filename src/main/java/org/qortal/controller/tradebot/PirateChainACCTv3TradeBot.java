@@ -57,6 +57,34 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 	private final java.util.Map<String, Long> auditedLegacyRefunds = new java.util.HashMap<>();
 	private long nextLegacyRefundAudit;
 
+	// Keep ordinary wait diagnostics visible at INFO without logging every chain tip.
+	private final java.util.Map<String, RecoveryLogState> recoveryLogStates = new java.util.LinkedHashMap<>() {
+		@Override
+		protected boolean removeEldestEntry(java.util.Map.Entry<String, RecoveryLogState> eldest) {
+			return size() > 1024;
+		}
+	};
+	private static final class RecoveryLogState {
+		final String reason;
+		final long loggedAt;
+		RecoveryLogState(String reason, long loggedAt) { this.reason = reason; this.loggedAt = loggedAt; }
+	}
+
+	/** Public trade identifiers and explicit numeric observations only; never pass wallet or signing data. */
+	private void logRecoveryWait(TradeBotData trade, String phase, String reason, String details) {
+		String key = trade.getAtAddress() + ":" + trade.getTradeNativeAddress() + ":" + phase;
+		String stateReason = trade.getState() + ":" + reason;
+		long now = System.nanoTime();
+		synchronized (recoveryLogStates) {
+			RecoveryLogState previous = recoveryLogStates.get(key);
+			if (previous != null && previous.reason.equals(stateReason)
+					&& now - previous.loggedAt < 60_000_000_000L) return;
+			recoveryLogStates.put(key, new RecoveryLogState(stateReason, now));
+		}
+		LOGGER.info("ARRR recovery for AT {} (trade {}): phase={} state={} reason={} {}",
+				trade.getAtAddress(), trade.getTradeNativeAddress(), phase, trade.getState(), reason, details);
+	}
+
 	private final List<String> endStates = Arrays.asList(State.BOB_DONE, State.BOB_REFUNDED, State.ALICE_DONE, State.ALICE_REFUNDING_A, State.ALICE_REFUNDED).stream()
 			.map(State::name)
 			.collect(Collectors.toUnmodifiableList());
@@ -348,7 +376,12 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		BitcoinyHTLC.Status status = PirateChainHTLC.determineHtlcStatus(pirate.getBlockchainProvider(), address,
 				data.expectedForeignAmount + fundingFeeOrDefault(trade), 3);
 		if (funding == null && (status == BitcoinyHTLC.Status.UNFUNDED
-				|| status == BitcoinyHTLC.Status.FUNDING_IN_PROGRESS)) return;
+				|| status == BitcoinyHTLC.Status.FUNDING_IN_PROGRESS)) {
+			logRecoveryWait(trade, "funding-recovery", "HTLC_" + status,
+					"htlc=" + address + " expectedAmount=" + data.expectedForeignAmount
+					+ " fundingFee=" + trade.getFundingFee() + " confirmedFundingOutput=not-found; funding is not resubmitted");
+			return;
+		}
 		if (funding != null) recordFundingDetails(trade, funding, data.expectedForeignAmount);
 		TradeBot.updateTradeBotState(repository, trade, State.ALICE_WAITING_FOR_AT_LOCK,
 				() -> "Recovered ARRR funding intent from the chain");
@@ -658,6 +691,9 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			long minimumAmountA = crossChainTradeData.expectedForeignAmount + p2shFee;
 
 			BitcoinyHTLC.Status htlcStatusA = PirateChainHTLC.determineHtlcStatus(pirateChain.getBlockchainProvider(), p2shAddress, minimumAmountA);
+			logRecoveryWait(tradeBotData, "refund-entry", "HTLC_" + htlcStatusA,
+					"htlc=" + p2shAddress + " minimumAmount=" + minimumAmountA
+					+ " fundingFee=" + tradeBotData.getFundingFee() + " lockTime=" + lockTimeA);
 
 			switch (htlcStatusA) {
 				case UNFUNDED:
@@ -821,7 +857,7 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			TradeBot.updateTradeBotState(repository, trade, State.BOB_WAITING_FOR_AT_REDEEM, () -> "Legacy ARRR redemption still funded; quarantining before retry");
 			return false;
 		}
-		if (!mayReplaceSpend(pirate, checkpoint, height, now)) return false;
+		if (!mayReplaceSpend(pirate, checkpoint, height, now, trade, "redeem", address)) return false;
 		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address, data.expectedForeignAmount);
 		if (funding == null) return false;
 		recordFundingDetails(trade, funding, data.expectedForeignAmount);
@@ -854,14 +890,23 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		}
 	}
 
-	private static boolean mayReplaceSpend(PirateChain pirate, PirateChainRefundState checkpoint,
-			int height, long now) throws ForeignBlockchainException {
+	private boolean mayReplaceSpend(PirateChain pirate, PirateChainRefundState checkpoint,
+			int height, long now, TradeBotData trade, String phase, String address) throws ForeignBlockchainException {
 		if (checkpoint == null) return true;
-		if (!checkpoint.mayRetry(height, now)) return false;
+		if (!checkpoint.mayRetry(height, now)) {
+			logRecoveryWait(trade, phase, "RETRY_QUARANTINE", "htlc=" + address + " height=" + height
+					+ " retryAfterHeight=" + checkpoint.retryHeight + " nowMillis=" + now
+					+ " retryAtMillis=" + (checkpoint.attemptedAt + 10 * 60_000L) + " txid=" + checkpoint.txid);
+			return false;
+		}
 		if (checkpoint.txid != null) {
 			try {
 				int expiry = PirateChainTransaction.read(pirate.getBlockchainProvider().getRawTransaction(checkpoint.transactionHash())).expiryHeight;
-				if (expiry == 0 || height <= expiry + 2) return false;
+				if (expiry == 0 || height <= expiry + 2) {
+					logRecoveryWait(trade, phase, "SPEND_NOT_EXPIRED", "htlc=" + address + " txid=" + checkpoint.txid
+							+ " height=" + height + " expiryHeight=" + expiry + " expirySafetyBlocks=2");
+					return false;
+				}
 			} catch (org.qortal.transform.TransformationException e) {
 				throw new ForeignBlockchainException("Unable to verify ARRR spend expiry");
 			} catch (ForeignBlockchainException.NotFoundException e) {
@@ -887,15 +932,30 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		if (atData.getIsFinished() && tradeData.mode == AcctMode.REDEEMED
 				&& tradeData.qortalPartnerAddress != null && tradeData.qortalPartnerAddress.equals(tradeBotData.getTradeNativeAddress())
 				&& tradeBotData.getState() != null && tradeBotData.getState().startsWith("ALICE_")) {
+			logRecoveryWait(tradeBotData, "refund", "QORT_ALREADY_RECEIVED", "atMode=" + tradeData.mode);
 			TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_DONE, () -> "QORT already redeemed by this buyer");
 			return false;
 		}
-		if (!isRefundEligible(tradeBotData, atData, tradeData)) return false;
+		if (!isRefundEligible(tradeBotData, atData, tradeData)) {
+			logRecoveryWait(tradeBotData, "refund", "INELIGIBLE_RECORD",
+					"atFinished=" + atData.getIsFinished() + " atMode=" + tradeData.mode
+					+ "; requires a buyer record with its recovery keys and a refundable AT state");
+			return false;
+		}
 		Long now = NTP.getTime();
 		int lockTime = tradeBotData.getLockTimeA();
-		if (now == null || now <= lockTime * 1000L) return false;
+		if (now == null || now <= lockTime * 1000L) {
+			logRecoveryWait(tradeBotData, "refund", now == null ? "CLOCK_UNAVAILABLE" : "LOCKTIME_NOT_REACHED",
+					"nowMillis=" + now + " lockTime=" + lockTime);
+			return false;
+		}
 		PirateChain pirate = PirateChain.getInstance();
-		if (pirate.getMedianBlockTime() <= lockTime) return false;
+		int medianTime = pirate.getMedianBlockTime();
+		if (medianTime <= lockTime) {
+			logRecoveryWait(tradeBotData, "refund", "MEDIAN_TIME_NOT_MATURE",
+					"medianBlockTime=" + medianTime + " lockTime=" + lockTime + " nowMillis=" + now);
+			return false;
+		}
 		byte[] script = PirateChainHTLC.buildScript(tradeBotData.getTradeForeignPublicKey(), lockTime,
 				tradeData.creatorForeignPKH, tradeBotData.getHashOfSecret());
 		String address = pirate.deriveP2shAddressBPrefix(script);
@@ -907,33 +967,52 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		long minimum = tradeData.expectedForeignAmount + fundingFeeOrDefault(tradeBotData);
 		BitcoinyHTLC.Status status = PirateChainHTLC.determineHtlcStatus(pirate.getBlockchainProvider(), address, minimum, 3);
 		if (status == BitcoinyHTLC.Status.REFUNDED) {
+			logRecoveryWait(tradeBotData, "refund", "HTLC_REFUNDED", "htlc=" + address + " requiredConfirmations=3");
 			PirateChainRefundState previous = PirateChainRefundState.decode(tradeBotData.getLastTransactionSignature());
 			tradeBotData.setLastTransactionSignature(new PirateChainRefundState(0, now, previous == null ? null : previous.txid, true).encode());
 			TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_REFUNDED, () -> "ARRR refund confirmed");
 			return false;
 		}
 		if (status == BitcoinyHTLC.Status.REDEEMED) {
+			logRecoveryWait(tradeBotData, "refund", "HTLC_REDEEMED", "htlc=" + address + " requiredConfirmations=3");
 			TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_DONE, () -> "ARRR HTLC redeemed by seller");
 			return false;
 		}
 		if (status == BitcoinyHTLC.Status.REFUND_IN_PROGRESS || status == BitcoinyHTLC.Status.REDEEM_IN_PROGRESS) {
+			logRecoveryWait(tradeBotData, "refund", "HTLC_" + status,
+					"htlc=" + address + " requiredConfirmations=3 minimumAmount=" + minimum);
 			if (State.ALICE_REFUNDED.name().equals(tradeBotData.getState()))
 				TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_REFUNDING_A, () -> "Rechecking an unconfirmed legacy ARRR spend");
 			return false;
 		}
-		if (status != BitcoinyHTLC.Status.FUNDED) return false;
+		if (status != BitcoinyHTLC.Status.FUNDED) {
+			logRecoveryWait(tradeBotData, "refund", "HTLC_" + status,
+					"htlc=" + address + " expectedAmount=" + tradeData.expectedForeignAmount
+					+ " fundingFee=" + tradeBotData.getFundingFee() + " minimumAmount=" + minimum);
+			return false;
+		}
 
 		int height = pirate.getBlockchainProvider().getCurrentHeight();
 		PirateChainRefundState checkpoint = PirateChainRefundState.decode(tradeBotData.getLastTransactionSignature());
 		if ((checkpoint == null || !checkpoint.confirmed) && State.ALICE_REFUNDED.name().equals(tradeBotData.getState())) {
+			logRecoveryWait(tradeBotData, "refund", "LEGACY_REFUND_STILL_FUNDED",
+					"htlc=" + address + " height=" + height + "; saving a retry quarantine before replacement");
 			tradeBotData.setLastTransactionSignature(new PirateChainRefundState(height + 30, now, checkpoint == null ? null : checkpoint.txid).encode());
 			TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_REFUNDING_A, () -> "Legacy ARRR refund still funded; checking before retry");
 			return false;
 		}
-		if (!mayReplaceSpend(pirate, checkpoint, height, now)) return false;
+		if (!mayReplaceSpend(pirate, checkpoint, height, now, tradeBotData, "refund", address)) return false;
 		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address, minimum);
-		if (funding == null) return false; // Missing/unconfirmed spend: wait for a definitive chain result.
+		if (funding == null) {
+			logRecoveryWait(tradeBotData, "refund", "NO_CONFIRMED_FUNDING_OUTPUT",
+					"htlc=" + address + " historyStatus=" + status + " minimumAmount=" + minimum
+					+ "; waiting for a matching confirmed unspent output");
+			return false; // Missing/unconfirmed spend: wait for a definitive chain result.
+		}
 		recordFundingDetails(tradeBotData, funding, tradeData.expectedForeignAmount);
+		logRecoveryWait(tradeBotData, "refund", "PREPARING_NATIVE_REFUND",
+				"htlc=" + address + " fundingOutputIndex=" + funding.index + " fundingValue=" + funding.value
+				+ " amount=" + tradeData.expectedForeignAmount + " fee=" + tradeBotData.getFundingFee());
 		String destination = pirate.getWalletAddress(tradeBotData.getForeignKey());
 		// Commit before JNI so a crash or lost response cannot cause an immediate duplicate attempt.
 		checkpoint = new PirateChainRefundState(height + 30, now, null);
@@ -941,6 +1020,8 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_REFUNDING_A, () -> "Broadcasting ARRR refund; awaiting confirmation");
 		String txid;
 		try {
+			logRecoveryWait(tradeBotData, "refund", "SUBMITTING_NATIVE_REFUND", "htlc=" + address
+					+ " fundingOutputIndex=" + funding.index + " checkpoint=committed");
 			txid = pirate.refundP2sh(pirate.deriveP2shAddress(script), destination, tradeData.expectedForeignAmount,
 					Base58.encode(script), Base58.encode(funding.hash), lockTime,
 					Base58.encode(tradeBotData.getTradePrivateKey()), fundingFeeOrDefault(tradeBotData), tradeBotData.getFundingOutputIndex());
@@ -960,7 +1041,8 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		}
 		repository.getCrossChainRepository().save(tradeBotData);
 		repository.saveChanges();
-		LOGGER.info("ARRR refund broadcast: {} (awaiting confirmations)", txid);
+		LOGGER.info("ARRR refund broadcast: {} for AT {} (trade {}), awaiting confirmations",
+				txid, tradeBotData.getAtAddress(), tradeBotData.getTradeNativeAddress());
 		return true;
 	}
 
