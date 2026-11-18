@@ -2,6 +2,22 @@
 
 ## Trade refund test build
 
+### Native wallet delivery
+
+Core obtains the selected ARRR native wallet publication from QDN and loads the
+host's library from its wallet cache on disk. The native libraries are not
+compiled into, or loaded from, the Core JAR. Keep the configured immutable QDN
+signature and the separately published native bundle unchanged for this update.
+
+The large November test JARs mistakenly carried an inert copy of all five
+platform libraries under `META-INF/arrr-jni/`, adding about 333 MB compressed.
+That packaging is unnecessary for the QDN/disk loader. Maven now excludes this
+directory during resource copying, ordinary JAR creation and shading, including
+stale files already staged in `target/classes`. Keep native publication archives
+and staging files outside the Core artifact; do not append them after packaging.
+A normal Core test JAR is approximately 95 MB with the existing dependencies.
+Removing these copies changes packaging only, not recovery logic or QDN selection.
+
 ### Diagnosing a refund that produces only the missing-fee warning
 
 `ARRR funding fee unavailable ... falling back to 10000` means the local attempt
