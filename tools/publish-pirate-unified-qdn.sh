@@ -11,8 +11,8 @@ set -euo pipefail
 script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 DEFAULT_BUNDLE_DIR="$script_directory/arrr-jni-bundle"
 
-readonly EXPECTED_ARTIFACT_SHA256='b7e0557790f6eebce1571186feb681619afdce962c0e0d4db7825dfd79272aa0'
-readonly DEFAULT_IDENTIFIER='LiteWalletJNI-2026-11-qortal-v0.3.9-test'
+readonly EXPECTED_ARTIFACT_SHA256='1951430ac1f67eb5398de220f4f81422f1fbb26c4aea50558c7b0a3f657abb56'
+readonly DEFAULT_IDENTIFIER='LiteWalletJNI-2026-11-qortal-v0.3.10-test'
 
 usage() {
 	cat <<'EOF'
@@ -162,7 +162,7 @@ validate_bundle() {
 	done
 
 	grep -Fqx "artifact-sha256: $EXPECTED_ARTIFACT_SHA256" "$bundle_directory/MANIFEST.txt" \
-		|| die 'Bundle manifest does not identify the pinned Qortal JNI 0.3.9 artifact (Stashi v1.2.6 base).'
+		|| die 'Bundle manifest does not identify the pinned Qortal JNI 0.3.10 artifact (Stashi v1.2.6 base).'
 	grep -Fqx "bundle-kind: $expected_bundle_kind" "$bundle_directory/MANIFEST.txt" \
 		|| die "Bundle is not a $expected_bundle_kind bundle."
 

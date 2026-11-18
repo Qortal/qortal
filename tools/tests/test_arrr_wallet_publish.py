@@ -98,8 +98,14 @@ else:
     def publication(self):
         return next(Path(self.env['QDN_OUTPUT_DIR']).iterdir())
 
-    def test_prompted_zip_reads_local_key_and_runs_prepare_sign_submit(self):
-        result = self.run_helper(answers=f'{self.archive}\nA name with spaces\nnew test id\n5ABC\n')
+    def test_default_zip_reads_local_key_and_runs_prepare_sign_submit(self):
+        bundles = self.tools / 'arrr-jni-bundle'
+        bundles.mkdir()
+        stale = bundles / 'stashi-qortal-jni-0.3.9-stale.zip'
+        stale.write_bytes(b'Not the newest reviewed archive')
+        os.utime(stale, (1, 1))
+        shutil.copyfile(self.archive, bundles / 'stashi-qortal-jni-0.3.10-fixture.zip')
+        result = self.run_helper(answers='A name with spaces\nnew test id\n5ABC\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.calls()
         self.assertEqual([call['step'] for call in calls], ['prepare', 'sign', 'submit'])
@@ -111,7 +117,7 @@ else:
         self.assertEqual({file.name for file in bundle.iterdir()},
                          set(LIBRARIES) | {'MANIFEST.txt', 'LICENSE-qortal-jni.txt', 'qortal-handoff.md'})
         manifest = (bundle / 'MANIFEST.txt').read_text()
-        self.assertIn('jni-version: 0.3.9', manifest)
+        self.assertIn('jni-version: 0.3.10', manifest)
         self.assertIn('upstream-release: v1.2.6', manifest)
         for name, value in [('unsigned.base58', '3ABC'), ('signed.base58', '4ABC'),
                             ('signature.txt', '6ABC')]:
@@ -133,7 +139,8 @@ else:
 
     def test_tilde_path_and_manual_key_fallback(self):
         (self.node / 'apikey.txt').unlink()
-        result = self.run_helper(answers='~/stashi build/combined JNI.zip\n\n\nmanual-key\n5ABC\n')
+        result = self.run_helper('~/stashi build/combined JNI.zip',
+                                 answers='\n\nmanual-key\n5ABC\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('X-API-KEY: manual-key', self.calls()[0]['args'])
 
