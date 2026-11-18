@@ -225,19 +225,30 @@ public class Serialization {
 	 */
 	public static Map<String, Object> deserializeMap(ByteBuffer bytes) throws IOException {
 		byte[] byteArray;
+		int offset;
+		int length;
 
 		if (bytes.hasArray()) {
-			// Use the backing array directly if available
+			// Use only the bytes between position() and limit(), honouring arrayOffset().
+			// Callers such as Message.fromByteBuffer() pass slices of a larger read buffer,
+			// so bytes.array() on its own starts at the wrong place (e.g. the message magic).
 			byteArray = bytes.array();
+			offset = bytes.arrayOffset() + bytes.position();
+			length = bytes.remaining();
 		} else {
 			// Otherwise, copy remaining bytes into new array
 			byteArray = new byte[bytes.remaining()];
 			bytes.get(byteArray);
+			offset = 0;
+			length = byteArray.length;
 		}
 
-		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(byteArray))) {
+		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(byteArray, offset, length))) {
 			int mapSize = dis.readInt();
-			Map<String, Object> map = new HashMap<>(mapSize);
+			if (mapSize < 0)
+				throw new IOException("Serialized map size is negative: " + mapSize);
+
+			Map<String, Object> map = new HashMap<>();
 
 			for (int i = 0; i < mapSize; i++) {
 				String key = deserializeSizedString(dis);
