@@ -113,13 +113,7 @@ public final class LocalWalletSupport {
                         if (raw.length > 1000000 || bytes > 8000000)
                             throw trace.reject("PREVIOUS_TRANSACTION_SIZE_LIMIT", "Wallet response too large");
                         trace.stage = "PREVIOUS_TRANSACTION_VALIDATION";
-                        // Funding can contain witness inputs even when this wallet
-                        // spends only P2PKH outputs. Some altcoin defaults predate
-                        // witness parsing; use a separate serializer for raw bytes.
-                        MessageSerializer serializer = coin.params.getSerializer(false).withProtocolVersion(
-                                Math.max(coin.params.getDefaultSerializer().getProtocolVersion(),
-                                        NetworkParameters.ProtocolVersion.WITNESS_VERSION.getBitcoinProtocolVersion()));
-                        tx = serializer.makeTransaction(raw);
+                        tx = coin.deserializeTransaction(raw);
                         if (!tx.getTxId().toString().equals(hash))
                             throw trace.reject("PREVIOUS_TRANSACTION_HASH_MISMATCH", "Previous transaction hash mismatch");
                         parsed.put(hash, tx);

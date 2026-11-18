@@ -416,8 +416,9 @@ public abstract class Bitcoiny extends AbstractBitcoinNetParams implements Forei
 			try {
 				byte[] rawTransactionBytes = this.blockchainProvider.getRawTransaction(txHash);
 
-				Context.propagate(bitcoinjContext);
-				Transaction transaction = new Transaction(this.params, rawTransactionBytes);
+				Transaction transaction = deserializeTransaction(rawTransactionBytes);
+				if (!Arrays.equals(txHash, transaction.getTxId().getBytes()))
+					throw new ForeignBlockchainException("Previous transaction hash mismatch");
 				return transaction.getOutputs();
 			} catch (ForeignBlockchainException | RuntimeException e) {
 				lastException = e;
@@ -428,6 +429,24 @@ public abstract class Bitcoiny extends AbstractBitcoinNetParams implements Forei
 				HashCode.fromBytes(txHash),
 				lastException == null ? "unknown error" : lastException.getMessage());
 		throw new ForeignBlockchainException(message);
+	}
+
+	/**
+	 * Parse complete Bitcoin-family transaction bytes independently of P2P protocol defaults.
+	 * A legacy wallet output can be funded by a transaction containing witness inputs.
+	 * This does not change network-wide serializers or the wallet's signing policy.
+	 * ARRR transactions use PirateChainTransaction and the native wallet instead.
+	 */
+	Transaction deserializeTransaction(byte[] rawTransactionBytes) throws ForeignBlockchainException {
+		Context.propagate(bitcoinjContext);
+		MessageSerializer serializer = this.params.getSerializer(false).withProtocolVersion(
+				Math.max(this.params.getDefaultSerializer().getProtocolVersion(),
+						NetworkParameters.ProtocolVersion.WITNESS_VERSION.getBitcoinProtocolVersion()));
+		Transaction transaction = serializer.makeTransaction(rawTransactionBytes);
+		if (transaction.getMessageSize() != rawTransactionBytes.length
+				|| !Arrays.equals(rawTransactionBytes, transaction.bitcoinSerialize()))
+			throw new ForeignBlockchainException("Invalid raw transaction encoding");
+		return transaction;
 	}
 
 	/**
