@@ -112,6 +112,22 @@ public class PirateSpendResponseTests extends Common {
 	}
 
 	@Test
+	public void saplingFundingRequirementIsRejectedBeforeBroadcast() throws Exception {
+		String message = "Transaction build error: Qortal P2SH funding requires a spendable Sapling note; "
+				+ "Ironwood-only funds cannot fund this contract";
+		ForeignBlockchainException rejected = failure(new JSONObject().put("error", message).toString(), "sendp2sh");
+		assertTrue(rejected instanceof ForeignBlockchainException.TransactionRejectedException);
+		assertEquals(message, rejected.getMessage());
+
+		// The observed node rejection has already crossed the broadcast boundary.
+		// Its NON_RETRYABLE marker must not authorize clearing a funding intent.
+		String broadcast = "Broadcast failed: Sync error: NON_RETRYABLE: Broadcast failed: "
+				+ "16: bad-txns-acprivacy-chain (code -26)";
+		assertFalse(failure(new JSONObject().put("error", broadcast).toString(), "sendp2sh")
+				instanceof ForeignBlockchainException.TransactionRejectedException);
+	}
+
+	@Test
 	public void refundAndRedeemJniRequestsUseOriginalFeeAndOutputIndex() {
 		for (int locktime : new int[] {0, 123}) {
 			String secret = locktime == 0 ? "secret" : "";

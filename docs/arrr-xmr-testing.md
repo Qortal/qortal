@@ -28,6 +28,37 @@ For an owner-operated test node:
 
 No node is installed or restarted by this source/build task. See [ARRR testing and recovery](pirate-chain-wallet-library-testing.md) for the native publication, restore-birthday and pending-refund rules. For a code rollback, stop the test node and restore its retained JAR while preserving current repository/wallet/recovery records. Do not erase an ambiguous funding/refund intent or independently replace its data with an older snapshot.
 
+## Pirate contract funding compatibility
+
+The November 18 Musiqo log shows a funding broadcast rejected with
+`bad-txns-acprivacy-chain`, followed by `ALICE_WAITING_FOR_FUNDING`; it does not
+show a funded refund failing. The native selector could choose Ironwood-only
+inputs, whereas Pirate v6.0.14's P2SH exception requires a Sapling spend. The
+archive has no rejected raw transaction, so that exact input selection remains
+unverified.
+
+The companion [Qortal JNI 0.3.10 fix](https://github.com/crowetic/Stashi-Wallet/commit/72a423ae845cef2ae638fd490f63936f01bde9e8)
+in the owner's Stashi-Wallet fork reserves a
+positive-value Sapling input and allows Ironwood inputs to supplement it.
+Contract change returns to Sapling so mixed funding can leave a spendable input
+for the next trade once confirmed. With
+no spendable Sapling note in the source key group, it returns a clear
+`Transaction build error:` before broadcasting. Existing Core code recognizes
+that early rejection. Broadcast and transport failures still retain the
+duplicate-funding quarantine; this update does not clear existing intents.
+
+**The JAR alone cannot install this fix.** Stage and verify the matching native
+bundle with the existing [native testing guide](pirate-chain-wallet-library-testing.md),
+then use a distinct test QDN publication and select its confirmed signature only
+as part of an owner-authorized rollout. Restart Core to load the changed library.
+Retain the current signature, native bundle and JAR for rollback. Neither this
+native change nor the `qdn-performance` build adds a database migration.
+
+Test Sapling funding, mixed-pool funding, change spending, redemption and an
+expired-contract refund on the updated test node. Ironwood-only funding should
+fail early without creating a transaction. Automated selection, serialization
+and error-contract checks do not establish that a live funded refund succeeded.
+
 ## Run the matching Hub
 
 An existing main/release Hub does not have the new XMR account implementation. Use the owner's Hub source branch, whose latest account-foundation tip is `cd894052`. For a browser-based account test, native desktop packaging is not needed:
