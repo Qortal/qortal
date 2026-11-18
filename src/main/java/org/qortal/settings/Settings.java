@@ -29,6 +29,7 @@ import org.eclipse.persistence.jaxb.UnmarshallerProperties;
 import org.qortal.block.BlockChain;
 import org.qortal.controller.arbitrary.ArbitraryDataStorageManager.StoragePolicy;
 import org.qortal.crosschain.Bitcoin.BitcoinNet;
+import org.qortal.crosschain.monero.MoneroNetwork;
 import org.qortal.crosschain.Digibyte.DigibyteNet;
 import org.qortal.crosschain.Dogecoin.DogecoinNet;
 import org.qortal.crosschain.Litecoin.*;
@@ -211,6 +212,8 @@ public class Settings {
 
 	// Peer-to-peer related
 	private boolean isTestNet = false;
+	/** Optional wallet network override, e.g. STAGENET for Qortal-mainnet testing. */
+	private MoneroNetwork moneroNetwork;
 	/** Single node testnet mode */
 	private boolean singleNodeTestnet = false;
 	/** Port number for inbound peer-to-peer connections. */
@@ -1053,6 +1056,12 @@ public class Settings {
 
 	public boolean isTestNet() {
 		return this.isTestNet;
+	}
+
+	public MoneroNetwork getMoneroNetwork() {
+		if (this.moneroNetwork != null)
+			return this.moneroNetwork;
+		return this.isTestNet ? MoneroNetwork.STAGENET : MoneroNetwork.MAINNET;
 	}
 
 	public boolean isSingleNodeTestnet() {
