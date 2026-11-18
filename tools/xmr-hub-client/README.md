@@ -4,6 +4,8 @@ Development-only feasibility test for `monero-ts` **0.11.22**. All fixture keys/
 
 The product architecture puts all cryptography in **trusted Qortal Hub**. Q-Apps request permissioned operations and receive public results. This fixture intentionally runs the engine in isolated browser surfaces to measure compatibility; it is not a proposed Q-App wallet vault. See [the decision and Hub integration plan](../../docs/monero-hub-client.md).
 
+For manual account/backup testing with the matching Hub branch, use the read-only page in `../xmr-account-test` and follow [the combined ARRR/XMR test guide](../../docs/arrr-xmr-testing.md). `npm run test:account-page` checks that page with a mock bridge; it does not replace the real Hub acceptance steps.
+
 Pinned SDK asset SHA-256 values measured on 2026-11-17 (the npm tarball integrity is in the lockfile):
 
 | Asset | Bytes | SHA-256 |

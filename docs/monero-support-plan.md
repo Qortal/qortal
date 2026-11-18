@@ -92,7 +92,7 @@ These are ordered deliverables, not calendar promises. Wallet and protocol resea
 | --- | --- | --- | --- | --- |
 | XMR-001 | Evidence, architecture and roadmap (Core docs) | Repository review | Explicit custody, precision, direct-swap and release gates | Complete for this increment |
 | XMR-002 | Amount/network/address primitives (Core) | XMR-001 | Offline independent vectors, overflow and network rejection | Complete: 18 tests pass |
-| XMR-003 | Backend, key derivation and backup ADR (Core/Hub) | XMR-001 | A second device restores the same development wallet; documented Hub/Q-App/daemon boundaries | Candidate and Hub ownership decided; synthetic engine recovery passes; actual Hub derivation/backup test next |
+| XMR-003 | Backend, key derivation and backup ADR (Core/Hub) | XMR-001 | A second device restores the same development wallet; documented Hub/Q-App/daemon boundaries | Hub `xmr-support` implements keys/backup/public addresses; independent and Monero-engine vectors pass; clean-profile manual acceptance described in [test guide](arrr-xmr-testing.md) |
 | XMR-004 | Bounded read-only daemon/wallet adapters (Core/Hub) | XMR-002, 003 | Typed errors, exact uint64 parsing, network/version/sync checks; local wallet ownership; fixture and local-process tests | Fixture transport proven; product adapter planned |
 | XMR-005 | Receive, scan, balances and history (Hub/Q-Wallets) | XMR-004 | Account/subaddress allocation, restore-height recovery, key-image spent status, reorg reconciliation; no false zero balance | Planned |
 | XMR-006 | Prepare, local signing and broadcast (Hub/local wallet) | XMR-005 | Independent destination/amount/change/fee/network confirmation; restart-safe intent; ambiguous submission recovery; verified wallet receipt | Planned |
@@ -103,7 +103,7 @@ These are ordered deliverables, not calendar promises. Wallet and protocol resea
 | XMR-011 | Review, reproducible packaging and soak tests (all components) | Wallet or trade candidate | Supported platform matrix; pinned artifacts; fault-injection results; independent security findings resolved | Gated per release |
 | XMR-012 | Opt-in release and staged rollout (owner) | XMR-011 | Owner-authorized controlled acceptance, readiness checks and recovery runbook | Not authorized by this development task |
 
-The next coding increment belongs in Hub: freeze XMR derivation vectors, connect account creation/unlock/backup restore, then add the trusted worker lifecycle and a public-only, permissioned Q-App interface. Validate the existing backup on a fresh profile before exposing receive addresses. Core should provide network/node metadata and, only if transport requires it, a bounded daemon connector. The native WASM wallet drops URI path prefixes, so a generic Core URL prefix is not a working relay without an explicit adapter. Keep wallet support separate from ACCT registration.
+The account/backup/public-address foundation is now on Hub's separate `xmr-support` branch. The next coding increment is its trusted local Monero worker lifecycle and read-only daemon scanning transport. Run the existing backup through the [manual fresh-profile test](arrr-xmr-testing.md) while developing that path. Core should provide network/node metadata and, only if transport requires it, a bounded daemon connector. The native WASM wallet drops URI path prefixes, so a generic Core URL prefix is not a working relay without an explicit adapter. Keep wallet support separate from ACCT registration.
 
 ## Verification matrix
 

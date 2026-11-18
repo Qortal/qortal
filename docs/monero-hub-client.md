@@ -1,6 +1,6 @@
 # XMR client: Hub ownership and unified recovery
 
-Decision date: 2026-11-17. Status: owner-approved custody/network requirements; selected engine feasibility candidate. Hub account integration is not implemented by this increment.
+Decision date: 2026-11-17. Status: owner-approved custody/network requirements; selected engine feasibility candidate. Hub's account/backup foundation is now implemented on its separate `xmr-support` branch (`a3731b9c`, `cd894052`); this Core branch does not contain the Hub sources. Scanning and sending remain disabled. See [the combined build and manual XMR test guide](arrr-xmr-testing.md).
 
 ## Responsibilities
 
@@ -77,7 +77,7 @@ Prefer Hub-owned networking to an open server proxy. Direct browser transports r
 
 | Order | Component | Completion evidence |
 | --- | --- | --- |
-| 1 | Hub derivation and unified-backup integration | Frozen independent vectors; existing coin regression vectors; ordinary backup restores the identical XMR wallet in a fresh profile |
+| 1 | Hub derivation and unified-backup integration | Implemented on Hub `xmr-support`; independent/Monero-engine vectors and real encrypted-backup tests pass. Run the fresh-profile manual acceptance in the combined test guide. |
 | 2 | Trusted Hub worker and vault lifecycle | Pinned local assets; account lock/switch/restart tests; safe cache encryption/storage; no secrets in app IPC or logs |
 | 3 | Read-only Q-App wallet interface | Permission checks; public address/balance/history models with atomic amounts as strings; explicit unavailable/syncing states |
 | 4 | Daemon pool and scan transport | Approved mainnet/stagenet targets; network/version checks; real scan and restart/reorg evidence; actual Hub platform tests |

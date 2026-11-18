@@ -9,7 +9,8 @@
   "scripts": {
     "build": "vite build",
     "test": "node --test src/network.test.mjs",
-    "test:browser": "node scripts/browser-smoke.mjs"
+    "test:browser": "node scripts/browser-smoke.mjs",
+    "test:account-page": "node scripts/account-page-smoke.mjs"
   },
   "dependencies": {
     "memfs": "4.80.1",

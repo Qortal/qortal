@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hub XMR account test</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 850px; margin: 2rem auto; padding: 0 1rem; }
+    button, input { font: inherit; padding: .6rem; margin: .4rem 0; }
+    input { box-sizing: border-box; width: 100%; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f1f3f5; padding: 1rem; }
+    label { display: block; margin-top: 1.5rem; }
+  </style>
+  <script src="probe.js" defer></script>
+</head>
+<body>
+  <h1>Hub XMR account test</h1>
+  <p>Open this through the updated Qortal Hub's Development Mode with a local Core selected.</p>
+  <p>Tests account keys, network selection and backup recovery. Scanning, balances and sending are not enabled; do not send funds to test these features.</p>
+  <button id="request" type="button">Request public XMR account</button>
+  <p id="status" role="status" aria-live="polite">Ready</p>
+  <pre id="result">No account requested.</pre>
+  <label for="expected">Previous public address (for backup recovery comparison)</label>
+  <input id="expected" type="text" autocomplete="off" spellcheck="false" placeholder="Paste the address recorded before restoring the backup">
+  <button id="compare" type="button" disabled>Compare addresses</button>
+  <p id="comparison" role="status" aria-live="polite"></p>
+  <p>This page requests only GET_USER_WALLET with coin XMR. It does not request private keys, import a seed, sign, or broadcast anything.</p>
+</body>
+</html>
