@@ -1,0 +1,18 @@
+# Reticulum config for the stock rngit and git-remote-rns clients, connecting
+# to the Java rngit node.
+
+[reticulum]
+  enable_transport = False
+  share_instance = No
+  panic_on_interface_error = No
+
+[logging]
+  loglevel = 4
+
+[interfaces]
+
+  [[rngit TCP Client]]
+    type = TCPClientInterface
+    interface_enabled = True
+    target_host = 127.0.0.1
+    target_port = 42508

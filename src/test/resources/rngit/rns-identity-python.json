@@ -1,0 +1,14 @@
+{
+  "format": "rns-identity/1",
+  "address": "QaliceAddr123",
+  "identities": [
+    {
+      "public_key": "620d5a115171b33e038ebabb1582999553289c62125f2f79810d8ac57deb577ca9a488aa51cf5b21e85fdf83b98f7d040b2db7fec5d1f0fa4a04149922f1f060",
+      "signature": "a3daf809ca930b7e1c659151ce0e5de53a12893cc3a6d144fc93666bdd4d6554a50bcec4b7c40e5a58f87a8a84b739feeec0d3f009e89253356dea572e012405"
+    },
+    {
+      "public_key": "49d9272e53d857a7197fe2cdede4856eeb7e8ab469fa5b97449754ad48ddea4ce93ef4e484d83f510ff6f65723cfc1446b087e1250954b1cdba2abae1260bbb7",
+      "signature": "6426c44a31a5f0f486f7b965b5a2e9aa2b8d8a7d33cd229f8f1f1bdcb6e61617ce643d579a0b96456fe282cfc72a7bfcc3b787652eef1a54aa9f633bc70d6e02"
+    }
+  ]
+}

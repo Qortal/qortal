@@ -82,7 +82,8 @@ final class RNSAnnounceHandler implements AnnounceHandler {
         log.debug("Received an announce from {}", encodeHexString(destinationHash));
 
         // Since getAspectFilter() returns null (match-all), we must verify manually.
-        // Recompute the expected hash for "qortal.core" + the announced identity and
+        // Recompute the expected hash for the aspect ("qortal.core", or "qortaltest.core"
+        // on testnet) + the announced identity and
         // compare; skip announces that belong to other apps/aspects.
         var expectedHash = hashFromNameAndIdentity(this.aspectFilter, announcedIdentity);
         if (!Arrays.equals(destinationHash, expectedHash)) {
@@ -106,6 +107,7 @@ final class RNSAnnounceHandler implements AnnounceHandler {
             // resolve it once they identify.
             if (announcedVersion != null) {
                 versions.put(announcedIdentity, announcedVersion);
+                updatePeerVersions(destinationHash, announcedIdentity, announcedVersion);
             }
         }
 
@@ -169,6 +171,28 @@ final class RNSAnnounceHandler implements AnnounceHandler {
                 addLinkedPeer.accept(newPeer);
                 log.info("added new {} ReticulumPeer, destinationHash: {}, version: {}",
                         newPeer.getPeerAspect(), encodeHexString(destinationHash), announcedVersion);
+            }
+        }
+    }
+
+    /**
+     * Bring the version of the peers we already have with this remote up to date. Peers created
+     * without an announce have none (cached-identity reconnects, and inbound peers that identified
+     * before the remote's first announce arrived), and a remote that upgraded announces a new one.
+     * Runs for every announce, also once enough peers are connected.
+     */
+    void updatePeerVersions(byte[] destinationHash, Identity identity, String version) {
+        for (ReticulumPeer p : registry.linked()) {
+            if (Arrays.equals(p.getDestinationHash(), destinationHash)) {
+                p.setPeersVersionString(version);
+            }
+        }
+        if (identity == null) return;
+        for (ReticulumPeer p : registry.incoming()) {
+            Identity remote = p.getServerIdentity();
+            if (p.getPeerAspect() == this.aspect && remote != null
+                    && Arrays.equals(remote.getHash(), identity.getHash())) {
+                p.setPeersVersionString(version);
             }
         }
     }

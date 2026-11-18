@@ -1,0 +1,61 @@
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --ink: #1f2328; --muted: #656d76; --line: #d8dee4;
+  --accent: #0b6bcb; --add: #e6ffec; --add-ink: #116329; --del: #ffebe9; --del-ink: #82071e;
+  --hunk: #ddf4ff; --warn: #9a6700; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0d1117; --panel: #161b22; --ink: #e6edf3; --muted: #8d96a0; --line: #30363d;
+          --accent: #4493f8; --add: #12261e; --add-ink: #7ee2a8; --del: #2d1214; --del-ink: #ffa198;
+          --hunk: #0c2d6b; --warn: #d29922; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.bar { display: flex; gap: 12px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.brand { font-weight: 700; font-size: 16px; color: var(--ink); }
+.goto { display: flex; gap: 6px; flex: 1; min-width: 220px; max-width: 420px; }
+.goto input { flex: 1; }
+.account { margin-left: auto; color: var(--muted); font-size: 13px; }
+input, textarea, select, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+textarea { width: 100%; font-family: var(--mono); font-size: 13px; }
+button { cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .5; cursor: default; }
+.crumbs { padding: 8px 16px; color: var(--muted); }
+.crumbs a { margin: 0 2px; }
+main { padding: 0 16px 24px; max-width: 1100px; margin: 0 auto; }
+.foot { text-align: center; color: var(--muted); font-size: 12px; padding: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin: 12px 0; overflow: hidden; }
+.panel > h2, .panel > .head { margin: 0; padding: 10px 14px; font-size: 14px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.panel > .body { padding: 12px 14px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-top: 12px; flex-wrap: wrap; }
+.tabs a { padding: 6px 12px; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; color: var(--muted); }
+.tabs a.on { background: var(--panel); border-color: var(--line); color: var(--ink); margin-bottom: -1px; }
+.row { display: flex; gap: 10px; align-items: center; padding: 7px 14px; border-top: 1px solid var(--line); }
+.row:first-child, .panel > .head + .row, .panel > h2 + .row { border-top: none; }
+.row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.muted { color: var(--muted); }
+.mono, code { font-family: var(--mono); font-size: 13px; }
+.sha { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.icon { width: 1.2em; text-align: center; color: var(--muted); }
+.code { overflow: auto; font-family: var(--mono); font-size: 13px; line-height: 1.45; }
+.code table { border-collapse: collapse; width: 100%; }
+.code td.n { user-select: none; text-align: right; color: var(--muted); padding: 0 10px; width: 1%; white-space: nowrap; border-right: 1px solid var(--line); }
+.code td.l { white-space: pre; padding: 0 10px; }
+.diff .add { background: var(--add); color: var(--add-ink); }
+.diff .del { background: var(--del); color: var(--del-ink); }
+.diff .hunk { background: var(--hunk); color: var(--muted); }
+.diff .file { font-weight: 600; background: var(--bg); }
+.badge { font-size: 12px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
+.badge.ok { color: var(--add-ink); border-color: var(--add-ink); }
+.badge.warn { color: var(--warn); border-color: var(--warn); }
+.clone { display: flex; gap: 6px; align-items: center; }
+.clone input { flex: 1; }
+.clone input[readonly] { font-family: var(--mono); font-size: 12px; }
+.note { padding: 10px 14px; color: var(--muted); }
+.error { padding: 10px 14px; color: var(--del-ink); background: var(--del); border-radius: 6px; margin: 12px 0; }
+.form { display: grid; gap: 10px; }
+.form label { display: grid; gap: 4px; }
+.form .hint { color: var(--muted); font-size: 12px; }
+.actions { display: flex; gap: 8px; justify-content: flex-end; }

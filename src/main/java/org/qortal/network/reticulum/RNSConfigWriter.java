@@ -79,10 +79,10 @@ final class RNSConfigWriter {
         String fqdn = InetAddress.getLocalHost().getCanonicalHostName();
 
         // A node must not list itself as a gateway to dial.
-        List<String> tcpGatewayServers =
-                Arrays.stream(Settings.getInstance().getReticulumTcpGatewayServers()).collect(Collectors.toList());
-        List<String> backboneGatewayServers =
-                Arrays.stream(Settings.getInstance().getReticulumBackboneGatewayServers()).collect(Collectors.toList());
+        // An empty list in settings.json unmarshals to null: no gateways, not a render failure,
+        // whose packaged fallback config would dial public gateways
+        List<String> tcpGatewayServers = gatewayList(Settings.getInstance().getReticulumTcpGatewayServers());
+        List<String> backboneGatewayServers = gatewayList(Settings.getInstance().getReticulumBackboneGatewayServers());
         tcpGatewayServers.remove(fqdn);
         backboneGatewayServers.remove(fqdn);
 
@@ -94,7 +94,8 @@ final class RNSConfigWriter {
         // * qortal_network_name: either "qortal" or "qortaltest" (from isTestnet)
         // * is_reticulum_gateway: one of the instances (Qortal core or RNS) has
         //                         at least one Gateway interface
-        // * target_port: target port for TCPServerInterface or BackboneServerInterface (only)
+        // * target_port: listen_port of the server interface, and the port for gateway
+        //                servers listed without one (reticulumPort, else 4242 / testnet 4240)
         // * use_python_rns: use local shared python rnsd (has to provide a gateway interface)
         // * python_rns_if_port: rnsd TCPServerInterface port (if rnsd gateway is a TCPServerInterface)
         String tcpGateways = StringUtils.join(tcpGatewayServers, " ");
@@ -133,6 +134,10 @@ final class RNSConfigWriter {
         // content. (The fallback path below already uses Files.copy REPLACE_EXISTING.)
         Files.deleteIfExists(configFile);
         Files.write(configFile, renderedConfig.getBytes(), CREATE, WRITE);
+    }
+
+    private static List<String> gatewayList(String[] servers) {
+        return servers == null ? new java.util.ArrayList<>() : Arrays.stream(servers).collect(Collectors.toList());
     }
 
     private static void copyPackagedDefault(Path configFile) throws IOException {

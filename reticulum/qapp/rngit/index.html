@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rngit</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="bar">
+    <a class="brand" href="#/">rngit</a>
+    <form id="goto" class="goto" autocomplete="off">
+      <input id="goto-name" placeholder="Qortal name or group" aria-label="Qortal name or group">
+      <button type="submit">Open</button>
+    </form>
+    <span id="account" class="account"></span>
+  </header>
+  <nav id="crumbs" class="crumbs" aria-label="breadcrumb"></nav>
+  <main id="view" aria-live="polite"></main>
+  <footer class="foot">Git repositories on QDN, served over Reticulum by Qortal Core.</footer>
+  <script src="app.js"></script>
+</body>
+</html>

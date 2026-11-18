@@ -724,6 +724,13 @@ public class Settings {
 	private boolean reticulumUsePythonRNS = false;
 	/** Specify the port if reticulumUsePythonRNS=true and rnsd has a TCPServerInterface */
 	private int reticulumPythonRNSGatewayPort = 4242;
+	/**
+	 * Reticulum gateway port: listen_port of this node's server interface
+	 * (reticulumHasServerInterface), the port advertised with reticulumAnnounceGateway,
+	 * and the port dialled for gateway entries given without one.
+	 * 0 (default) = 4242, or 4240 on testnet.
+	 */
+	private int reticulumPort = 0;
 	/** Shared IFAC passphrase for backbone interface isolation. Empty string = no passphrase. */
 	private String reticulumPassphrase = "";
 	/** Override network_name in generated config. Empty string = use APP_NAME (qortal/qortaltest). */
@@ -745,6 +752,17 @@ public class Settings {
 	 * or anywhere the local hostname does not match the public DNS entry.
 	 */
 	private String reticulumAnnouncedHost = "";
+
+	/**
+	 * Serve git repositories over Reticulum, compatible with the reference rngit
+	 * node and git-remote-rns. Requires the Reticulum mesh. Off by default.
+	 */
+	private boolean rngitEnabled = false;
+	/**
+	 * Directory holding the rngit node's config file (reference rngit format),
+	 * its repositories identity and, by convention, its repository groups.
+	 */
+	private String rngitConfigPath = "rngit";
 
 	// Constructors
 
@@ -1642,6 +1660,8 @@ public class Settings {
 
 	public int getReticulumPythonRNSGatewayPort() { return this.reticulumPythonRNSGatewayPort; }
 
+	public int getReticulumPort() { return this.reticulumPort; }
+
 	public String getReticulumPassphrase() { return this.reticulumPassphrase; }
 
 	public String getReticulumNetworkName() { return this.reticulumNetworkName; }
@@ -1651,6 +1671,10 @@ public class Settings {
 	public boolean getReticulumAnnounceGateway() { return this.reticulumAnnounceGateway; }
 
 	public String getReticulumAnnouncedHost() { return this.reticulumAnnouncedHost; }
+
+	public boolean isRngitEnabled() { return this.rngitEnabled; }
+
+	public String getRngitConfigPath() { return this.rngitConfigPath; }
 
 	public int getBuildArbitraryResourcesBatchSize() {
 		return buildArbitraryResourcesBatchSize;

@@ -146,7 +146,8 @@ public class ArbitraryDataCacheManager extends Thread {
                         preparedStatement.addBatch();
                     }
 
-                    preparedStatement.executeBatch();
+                    // HSQLDB refuses an empty batch, which is what a new repository has
+                    if (!signatureByData.isEmpty()) preparedStatement.executeBatch();
 
                     LOGGER.info("Updated arbitrary resources with latest signatures");
 

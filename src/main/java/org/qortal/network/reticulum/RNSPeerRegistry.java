@@ -44,6 +44,17 @@ import static org.apache.commons.codec.binary.Hex.encodeHexString;
 @Slf4j
 final class RNSPeerRegistry {
 
+    /**
+     * App name of the peers' destinations ("qortaltest" on testnet), set by RNS before any peer
+     * exists. Kept here rather than read from RNS so the registry does not pull in RNS's static
+     * initialisation, and with it Settings.
+     */
+    private static volatile String appName = RNSCommon.MAINNET_APP_NAME;
+
+    static void setAppName(String name) {
+        appName = name;
+    }
+
     private final Object linkedLock = new Object();
     private final List<ReticulumPeer> linked = new ArrayList<>();          // guarded by linkedLock
     private volatile List<ReticulumPeer> linkedSnapshot = List.of();
@@ -296,6 +307,6 @@ final class RNSPeerRegistry {
     }
 
     private static String aspectName(PeerAspect aspect) {
-        return aspect == PeerAspect.DATA ? RNS.QDN_ASPECT : RNS.CORE_ASPECT;
+        return appName + (aspect == PeerAspect.DATA ? ".qdn" : ".core");
     }
 }

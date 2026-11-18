@@ -11,6 +11,9 @@
 # "reticulumUsePythonRNS": there is a Python shared rnsd on on the node [boolean]
 #                          Note: the rnsd instance must have a gateway interface
 # "reticulumPythonRNSGatewayPort": the port to the desired PythonRNS interface [int]
+# "reticulumPort": gateway port: listen_port of the server interface and the port
+#                  for gateway servers listed without one [int]
+#                  (default: 4242, testnet 4240)
 # "reticulumPassphrase": shared passphrase for IFAC network isolation (optional) [string]
 #                        Must match on backbone server and all client nodes.
 
@@ -60,7 +63,7 @@ interfaces:
     type: BackboneServerInterface
     enabled: true
     listen_ip: 0.0.0.0
-    listen_port: {{ python_rns_if_port }}
+    listen_port: {{ target_port }}
     network_name: {{ qortal_network_name }}
 {%- if passphrase %}
     passphrase: {{ passphrase }}

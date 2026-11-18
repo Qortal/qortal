@@ -27,6 +27,12 @@ if [[ "$@" = *"--testnet"* ]] || [[  "$@" = *"-t"* ]]; then
   api_port=62391
 fi
 
+# An apiPort in settings.json takes precedence
+settings_api_port=$(grep -o '"apiPort"[[:space:]]*:[[:space:]]*[0-9]*' settings.json 2>/dev/null | grep -o '[0-9]*$')
+if [ -n "${settings_api_port}" ]; then
+  api_port=${settings_api_port}
+fi
+
 # Attempt to locate the process ID if we don't have one
 if [ -z "${pid}" ]; then
   pid=$(ps aux | grep '[q]ortal.jar' | head -n 1 | awk '{print $2}')

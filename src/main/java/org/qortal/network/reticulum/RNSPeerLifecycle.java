@@ -119,6 +119,11 @@ final class RNSPeerLifecycle {
         newPeer.setServerIdentity(identity);
         newPeer.setIsInitiator(true);
         newPeer.setMessageMagic(messageMagic);
+        // No announce here, so take the version from an earlier one, if we have heard it
+        String version = versions.get(identity);
+        if (version != null) {
+            newPeer.setPeersVersionString(version);
+        }
         addLinkedPeer(newPeer);
         log.info("{}: proactively connecting to known peer {} via cached identity",
                 aspect, encodeHexString(destinationHash));

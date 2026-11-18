@@ -14,10 +14,12 @@ import lombok.Getter;
 import org.qortal.network.Peer;
 import org.qortal.network.message.*;
 import org.qortal.repository.DataException;
+import org.qortal.rngit.RngitServer;
 import org.qortal.settings.Settings;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Paths;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.nonNull;
@@ -42,10 +44,17 @@ public class RNS {
 
     private Reticulum reticulum;
     static final String APP_NAME = Settings.getInstance().isTestNet() ? RNSCommon.TESTNET_APP_NAME: RNSCommon.MAINNET_APP_NAME;
-    static final Integer TARGET_PORT = Settings.getInstance().isTestNet() ? RNSCommon.TESTNET_IF_TCP_PORT: RNSCommon.MAINNET_IF_TCP_PORT;
+    static final Integer TARGET_PORT = Settings.getInstance().getReticulumPort() > 0
+            ? Settings.getInstance().getReticulumPort()
+            : Settings.getInstance().isTestNet() ? RNSCommon.TESTNET_IF_TCP_PORT: RNSCommon.MAINNET_IF_TCP_PORT;
     static final String defaultConfigPath = Settings.getInstance().isTestNet() ? RNSCommon.defaultRNSConfigPathTestnet: RNSCommon.defaultRNSConfigPath;
-    static final String CORE_ASPECT = "qortal.core";
-    static final String QDN_ASPECT  = "qortal.qdn";
+    // Full names of baseDestination/dataDestination, so they follow APP_NAME: hard-coded
+    // "qortal.*" names never matched a testnet node's "qortaltest.*" announces.
+    static final String CORE_ASPECT = APP_NAME + ".core";
+    static final String QDN_ASPECT  = APP_NAME + ".qdn";
+    static {
+        RNSPeerRegistry.setAppName(APP_NAME);
+    }
     private final int MIN_DESIRED_CORE_PEERS = Settings.getInstance().getReticulumMinDesiredCorePeers();
     private final int MIN_DESIRED_DATA_PEERS = Settings.getInstance().getReticulumMinDesiredDataPeers();
 
@@ -57,6 +66,8 @@ public class RNS {
     @Getter private Destination dataDestination;
     @Getter private volatile boolean isShuttingDown = false;
     private volatile boolean meshStarted = false;   // exported via isMeshStarted()
+    /** Optional rngit repository node; null unless enabled and started. */
+    private RngitServer rngitServer;
 
     // Persisted destination hashes of peers we have talked to, one store per aspect, so a restart
     // reconnects immediately instead of waiting for announces. See KnownPeerStore for why the
@@ -231,6 +242,26 @@ public class RNS {
 
         this.meshStarted = true;
         log.info("RNS mesh started, baseDestination: {}", encodeHexString(baseDestination.getHash()));
+
+        startRngit();
+    }
+
+    /**
+     * The rngit repository node shares this Reticulum instance but has its own
+     * identity and destination. A failure leaves the mesh running without it.
+     */
+    private void startRngit() {
+        if (!Settings.getInstance().isRngitEnabled()) {
+            return;
+        }
+        try {
+            RngitServer server = new RngitServer(Paths.get(Settings.getInstance().getRngitConfigPath()));
+            server.setVersion(Controller.getInstance().getVersionString());
+            server.start();
+            this.rngitServer = server;
+        } catch (Exception e) {
+            log.error("Could not start the rngit repository node", e);
+        }
     }
 
     /** One runner per aspect; everything that differs between the two is an argument here. */
@@ -248,6 +279,11 @@ public class RNS {
         Transport.getInstance().registerAnnounceHandler(new RNSAnnounceHandler(
                 aspectFilter, aspect, minDesiredPeers, registry, gatewayManager,
                 announcedVersions, getMessageMagic(), peers::addLinkedPeer));
+    }
+
+    /** The rngit repository node, or null when it is not enabled or did not start. */
+    public RngitServer getRngitServer() {
+        return rngitServer;
     }
 
     public boolean isMeshStarted() {
@@ -277,6 +313,9 @@ public class RNS {
 
     public void shutdown() {
         this.isShuttingDown = true;
+        if (this.rngitServer != null) {
+            this.rngitServer.shutdown();
+        }
         // Controller calls this unconditionally, so it must tolerate a mesh that never started
         // (no Reticulum stack, or start() refused): the destinations are null in that case, but
         // the executors were still created by the constructor and must be closed either way.
