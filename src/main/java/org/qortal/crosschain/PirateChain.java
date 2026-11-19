@@ -847,7 +847,49 @@ public class PirateChain extends Bitcoiny {
 		}
 	}
 
-	public String fundP2SH(String entropy58, String receivingAddress, long amount,
+	public String prepareTrade(org.qortal.api.model.crosschain.PirateChainTradePreparationRequest preparation)
+            throws ForeignBlockchainException {
+        PirateChainWalletController controller = PirateChainWalletController.getInstance();
+        controller.beginWalletUse(preparation.entropy58, false, true, true);
+        try {
+            controller.getCurrentWallet().unlock();
+            JSONObject args = tradePreparationArguments(preparation, controller.getCurrentWallet().getWalletAddress());
+            JSONObject response = parseTradePreparationResponse(LiteWalletJni.execute("tradepreparation", args.toString()));
+            if (preparation.approvedQuote != null)
+                controller.getCurrentWallet().clearTransactionHistoryCache();
+            return response.toString();
+        } finally {
+            controller.endWalletUse();
+        }
+    }
+
+    static JSONObject tradePreparationArguments(org.qortal.api.model.crosschain.PirateChainTradePreparationRequest preparation,
+            String ownedSourceAddress) {
+        JSONObject args = new JSONObject();
+        args.put("input", ownedSourceAddress);
+        args.put("required_amount", preparation.requiredAmount);
+        if (preparation.approvedQuote != null) {
+            args.put("approved_quote", preparation.approvedQuote);
+            args.put("max_fee", preparation.maxFee);
+        }
+        return args;
+    }
+
+    static JSONObject parseTradePreparationResponse(String response) throws ForeignBlockchainException {
+        try {
+            JSONObject result = new JSONObject(response);
+            if (result.has("error"))
+                throw new ForeignBlockchainException(result.optString("error"));
+            String status = result.optString("status");
+            if (!Arrays.asList("ready", "needsPreparation", "pending", "insufficient").contains(status))
+                throw new ForeignBlockchainException("ARRR trade preparation requires an updated native wallet library");
+            return result;
+        } catch (org.json.JSONException e) {
+            throw new ForeignBlockchainException("Invalid ARRR trade preparation response");
+        }
+    }
+
+    public String fundP2SH(String entropy58, String receivingAddress, long amount,
 			String redeemScript58) throws ForeignBlockchainException {
 
 		PirateChainWalletController walletController = PirateChainWalletController.getInstance();

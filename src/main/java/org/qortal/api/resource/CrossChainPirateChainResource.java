@@ -17,6 +17,7 @@ import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.Security;
 import org.qortal.api.model.crosschain.PirateChainBalance;
 import org.qortal.api.model.crosschain.PirateChainSendRequest;
+import org.qortal.api.model.crosschain.PirateChainTradePreparationRequest;
 import org.qortal.api.model.crosschain.PirateChainSpendability;
 import org.qortal.api.model.crosschain.ForeignCoinStatus;
 import org.qortal.controller.PirateChainWalletController;
@@ -129,6 +130,28 @@ public class CrossChainPirateChainResource {
 		} catch (ForeignBlockchainException e) {
 			this.logError("height", e);
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE);
+		}
+	}
+
+	@POST
+	@Path("/tradepreparation")
+	@Produces(MediaType.APPLICATION_JSON)
+	@Operation(summary = "Quotes or explicitly approves owned Sapling preparation for ARRR cross-chain trades",
+		description = "An absent approvedQuote queries only. Approval must match the current native quote and fee. Pending attempts reuse their saved signed transaction. Requires JNI 0.3.11 or later.")
+	@SecurityRequirement(name = "apiKey")
+	@ApiErrors({ ApiError.INVALID_CRITERIA, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE })
+	public String prepareTrade(@HeaderParam(Security.API_KEY_HEADER) String apiKey,
+			PirateChainTradePreparationRequest preparation) {
+		Security.checkApiCallAllowed(request);
+		if (preparation == null || preparation.requiredAmount <= 0 || preparation.entropy58 == null
+				|| (preparation.approvedQuote == null) != (preparation.maxFee == null)
+				|| (preparation.maxFee != null && preparation.maxFee != PirateChain.getFundingFee())
+				|| (preparation.approvedQuote != null && !preparation.approvedQuote.matches("[0-9a-f]{64}")))
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+		try {
+			return PirateChain.getInstance().prepareTrade(preparation);
+		} catch (ForeignBlockchainException e) {
+			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE, e.getMessage());
 		}
 	}
 
