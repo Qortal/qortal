@@ -63,6 +63,21 @@ spends; do not treat them as deterministic unit tests or run them against funded
 wallets. Use the controlled regressions above. Existing repository-backed ACCT
 tests can be selected separately for persisted state/AT lifecycle regression.
 
+### Verification record — 2026-11-19
+
+Source `22d847e9ff5912fb4361c2ac7e1dfa92189eeae0` was integrated on
+`qdn-performance` after `b109da5f6a3263e081d0ec20d1d22ca185cadb06`, preserving
+the concurrent exact-amount and ARRR JNI publication changes. Java 11 Maven
+`package` passed across 19 selected suites: 202 tests, 193 executed successfully,
+nine expected witness-capability skips, zero failures/errors. This included the
+five ACCT v3 lifecycle suites, all five coin wallet fixtures, API/security tests,
+Electrum protocol/failover tests, and the concurrent amount/history regressions.
+
+All 18 new feature tests also passed with the actual shaded JAR first on the
+classpath. Its Git metadata matched the source commit; 21 relevant packaged
+classes matched the compiled classes byte for byte. The build used an isolated
+worktree and did not replace existing release artifact aliases or deploy a node.
+
 ## Remaining work and limits
 
 This increment does not claim arbitrary fork compatibility or a new production
