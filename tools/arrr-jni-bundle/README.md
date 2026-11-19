@@ -1,5 +1,27 @@
 # ARRR JNI build landing folder
 
+## JNI 0.3.11 preparation bundle
+
+The reviewed five-platform bundle for approved Ironwood-to-owned-Sapling
+preparation is `stashi-qortal-jni-0.3.11-928fc7a9c09c.zip`, built from
+`crowetic/Stashi-Wallet` commit `928fc7a9c09c3778033b590dbb3ce421eed3a843`
+([native build](https://github.com/crowetic/Stashi-Wallet/actions/runs/44623761387)).
+The stager and publisher pin the verified ZIP checksum. Existing older ZIPs
+and staged directories are retained for reference.
+
+From this repository, publish this exact archive with:
+
+```bash
+./tools/prep-and-publish-arrr-wallet.sh ./tools/arrr-jni-bundle/stashi-qortal-jni-0.3.11-928fc7a9c09c.zip
+```
+
+Accept `PirateChainWallet` and the new generated identifier unless deliberately
+using another owner-controlled publication. Sign only at the local private-key
+prompt. After confirmation, give the public transaction signature to the Core
+maintainer so the new pin and final testing JAR can be verified and built.
+Core's existing JNI 0.3.10 default stays selected until that step; publishing
+alone does not change it. The matching new Hub is also required for preparation.
+
 This folder is the landing point for Stashi Qortal JNI builds used by Option A
 and Option B QDN publishing. Built files are gitignored; download and copy them
 here manually. The scripts do not download builds or update their SHA256 pins.
@@ -21,7 +43,7 @@ here manually. The scripts do not download builds or update their SHA256 pins.
    the currently staged build:
 
    ```bash
-   (cd tools/arrr-jni-bundle && sha256sum -c stashi-qortal-jni-0.3.10-72a423ae845c.zip.sha256)
+   (cd tools/arrr-jni-bundle && sha256sum -c stashi-qortal-jni-0.3.11-928fc7a9c09c.zip.sha256)
    ```
 
    Use the new build's sidecar filename when staging a later build. Continue only
@@ -152,5 +174,6 @@ JNI 0.3.10 publication (block 2801592):
 43RNbBfLneEZNMF8w1x8w2ZNzKMEBaQYKEm7K8PdgVW3XohqaVYdvsXP2AoZuqxWYUftexwVaBB1X6mnetMJnF6V
 ```
 
-Remove an older explicit signature override or replace it with this value.
-There is no need to publish the same candidate again to test this JAR.
+This confirmed signature supplies JNI 0.3.10 support; it does not provide the
+new preparation command. Keep it selected until the new JNI 0.3.11 publication
+has been confirmed, verified and pinned in the final Core testing JAR.

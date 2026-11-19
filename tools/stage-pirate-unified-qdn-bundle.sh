@@ -9,8 +9,8 @@ set -euo pipefail
 script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 DEFAULT_BUNDLE_DIR="$script_directory/arrr-jni-bundle"
 
-readonly EXPECTED_SHA256='1951430ac1f67eb5398de220f4f81422f1fbb26c4aea50558c7b0a3f657abb56'
-readonly RELEASE_URL='https://github.com/crowetic/Stashi-Wallet/actions/runs/44418950383'
+readonly EXPECTED_SHA256='8f23a3131c6c4bcac4959cba1462420e211659dfd8bb83452eecfd0c0f7edecb'
+readonly RELEASE_URL='https://github.com/crowetic/Stashi-Wallet/actions/runs/44623761387'
 
 usage() {
 	cat <<'EOF'
@@ -29,8 +29,8 @@ Platforms: linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64, windows-x86
 Use "all" to stage the five-library cross-platform production bundle.
 With explicit arguments, an omitted platform defaults to the publishing host.
 
-The artifact must be the Qortal JNI 0.3.10 combined archive from
-crowetic/Stashi-Wallet 72a423ae845c (based on upstream Stashi v1.2.6),
+The artifact must be the Qortal JNI 0.3.11 combined archive from
+crowetic/Stashi-Wallet 928fc7a9c09c (based on upstream Stashi v1.2.6),
 with the SHA-256 pinned in this script. The output directory must not exist.
 EOF
 }
@@ -156,9 +156,9 @@ done
 	printf '%s\n' "bundle-kind: $bundle_kind"
 	printf '%s\n' "release-url: $RELEASE_URL"
 	printf '%s\n' "artifact-sha256: $EXPECTED_SHA256"
-	printf '%s\n' 'jni-version: 0.3.10'
+	printf '%s\n' 'jni-version: 0.3.11'
 	printf '%s\n' 'upstream-release: v1.2.6'
-	printf '%s\n' 'source-commit: 72a423ae845cef2ae638fd490f63936f01bde9e8'
+	printf '%s\n' 'source-commit: 928fc7a9c09c3778033b590dbb3ce421eed3a843'
 	printf '%s\n' "platform: $platform"
 	for library in "${libraries[@]}"; do
 		printf '%s\n' "native-library: $library"

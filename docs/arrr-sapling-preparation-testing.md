@@ -30,14 +30,16 @@ intents to retry a trade.
 
 ## Build and delivery
 
-1. Push native owner `crowetic/Stashi-Wallet` main and run
-   `.github/workflows/qortal-jni.yml` on that exact commit. Require all tests and
-   all five platform build/smoke jobs to pass. Retain the combined archive and
-   provenance/checksum files.
-2. Verify the bundle with the existing native packaging tools. Update Core's
-   `tools/stage-pirate-unified-qdn-bundle.sh` pinned SHA-256 and workflow URL to
-   that verified archive, and update the 0.3.10 labels in the publication wrapper
-   to 0.3.11. Do not guess a hash or bypass the existing guard.
+1. The five-platform JNI 0.3.11 bundle is built from owner
+   `crowetic/Stashi-Wallet` commit `928fc7a9c09c3778033b590dbb3ce421eed3a843`
+   in workflow [44623761387](https://github.com/crowetic/Stashi-Wallet/actions/runs/44623761387).
+   Its Apple Silicon job uses macOS 26 with a macOS 11 minimum target after
+   repeated macOS 15 runner-capacity failures. All five native build/smoke
+   checks and provenance requirements remain mandatory.
+2. The reviewed archive is
+   `tools/arrr-jni-bundle/stashi-qortal-jni-0.3.11-928fc7a9c09c.zip`.
+   Both staging and publication scripts pin its verified SHA-256. Retain the
+   provenance/checksum files; do not guess a hash or bypass either guard.
 3. Run `./tools/prep-and-publish-arrr-wallet.sh` for that staged archive. The
    owner signs locally. Wait for confirmation and verify all published files.
    Set the new native signature only after verification, then rebuild Core.

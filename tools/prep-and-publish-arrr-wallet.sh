@@ -33,7 +33,7 @@ QDN_OUTPUT_DIR      Parent for saved bundles and transaction files
                      respecting XDG_STATE_HOME)
 
 Only the combined archive pinned in stage-pirate-unified-qdn-bundle.sh is
-accepted. JNI 0.3.10 is based on upstream Stashi v1.2.6, with Qortal fixes.
+accepted. JNI 0.3.11 is based on upstream Stashi v1.2.6, with Qortal fixes.
 EOF
 }
 
@@ -83,7 +83,7 @@ done
 output_parent=${QDN_OUTPUT_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/qortal/arrr-publications}
 mkdir -p -- "$output_parent"
 umask 077
-publication_directory=$(mktemp -d "$output_parent/qortal-jni-0.3.10-XXXXXX")
+publication_directory=$(mktemp -d "$output_parent/qortal-jni-0.3.11-XXXXXX")
 publication_directory=$(cd -- "$publication_directory" && pwd -P)
 printf 'Publication files: %s\n' "$publication_directory"
 # Keep staging and transaction files even if signing or submission fails.
@@ -92,7 +92,7 @@ printf 'Publication files: %s\n' "$publication_directory"
 
 read -r -p 'Registered QDN name [PirateChainWallet]: ' publication_name
 publication_name=${publication_name:-PirateChainWallet}
-default_identifier="LiteWalletJNI-v0.3.10-test-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+default_identifier="LiteWalletJNI-v0.3.11-test-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 read -r -p "New QDN identifier [$default_identifier]: " identifier
 identifier=${identifier:-$default_identifier}
 

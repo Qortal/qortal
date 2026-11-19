@@ -107,7 +107,7 @@ else:
         stale = bundles / 'stashi-qortal-jni-0.3.9-stale.zip'
         stale.write_bytes(b'Not the newest reviewed archive')
         os.utime(stale, (1, 1))
-        shutil.copyfile(self.archive, bundles / 'stashi-qortal-jni-0.3.10-fixture.zip')
+        shutil.copyfile(self.archive, bundles / 'stashi-qortal-jni-0.3.11-fixture.zip')
         result = self.run_helper(answers='A name with spaces\nnew test id\n5ABC\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.calls()
@@ -120,7 +120,7 @@ else:
         self.assertEqual({file.name for file in bundle.iterdir()},
                          set(LIBRARIES) | {'MANIFEST.txt', 'LICENSE-qortal-jni.txt', 'qortal-handoff.md'})
         manifest = (bundle / 'MANIFEST.txt').read_text()
-        self.assertIn('jni-version: 0.3.10', manifest)
+        self.assertIn('jni-version: 0.3.11', manifest)
         self.assertIn('upstream-release: v1.2.6', manifest)
         for name, value in [('unsigned.base58', '3ABC'), ('signed.base58', '4ABC'),
                             ('signature.txt', '6ABC')]:
