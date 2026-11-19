@@ -151,6 +151,7 @@ public class CrossChainPirateChainResource {
 		try {
 			return PirateChain.getInstance().prepareTrade(preparation);
 		} catch (ForeignBlockchainException e) {
+			this.logError("tradepreparation", e);
 			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE, e.getMessage());
 		}
 	}
