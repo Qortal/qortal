@@ -9,24 +9,45 @@ The resulting `target/qortal-qdn-arrr-xmr-testing.jar` includes those ARRR/Core 
 | Can test now | Not implemented by this Core JAR |
 | --- | --- |
 | Existing ARRR wallet/trade recovery, using the selected QDN JNI publication | Core XMR chain scanning, balances and history |
-| Hub XMR account keys and ordinary Qortal backup recovery | Core XMR payments, transaction broadcast and QORT/XMR swaps |
+| Hub XMR account keys and ordinary Qortal backup recovery | Core XMR payments, transaction broadcast and QORT/XMR cross-chain trades |
 | Mainnet versus stagenet selection and permissioned public XMR addresses | An XMR wallet tile or complete wallet flow in Q-Wallets |
 | Offline XMR primitives, local WASM feasibility and wallet compatibility regressions | A public Monero daemon fleet or Core XMR RPC connector |
 
 Use a new unfunded Qortal account for the account/recovery checks below. Follow [Monero stagenet testing](monero-stagenet-testing.md) with the matching Hub for wallet acceptance; this JAR supplies the network hint. The shipped synthetic fixtures are public and must never receive funds.
 
+## Wallet amount precision
+
+Wallet history uses the shared Electrum parser for BTC, LTC, DOGE, DGB and RVN.
+The previous JAR included the raw/witness reader and slow-response fixes, but
+its separate verbose-history parser could still throw `Rounding necessary`.
+This release accepts exact integer/decimal JSON values and recovers ambiguous
+or insufficiently precise amounts from transaction bytes. The existing complete
+wire decoder verifies those bytes; identity, output count and scripts must also
+match. Embedded hex avoids another request, with one raw RPC when absent.
+Amounts are never rounded into history, and failures are not cached.
+
+The same exact conversion guards the legacy ARRR provider. ARRR local history
+now rejects fractional, overflowing or imprecise atomic values in both native
+history formats. QORT API amount conversion also rejects overflow instead of
+silently truncating it. XMR retains its separate exact 12-decimal conversion.
+These changes add no database migration or consensus change.
+
+The new native library also supports [owned Sapling preparation](arrr-sapling-preparation-testing.md)
+with matching Hub `xmr-support` commit `7dd8c07c6f31cd64af1625f1b1948a7715b4d6f2`
+or newer. All eight published files match the verified five-platform bundle.
+
 ## Core artifact and installation
 
 The JAR's companion `.build.json` and `.sha256` files identify its exact source commit, tests and checksum. Check the receipt rather than identifying it only by the `6.1.9` base version. ARRR native libraries are deliberately absent from the JAR: Core retrieves the selected immutable publication from QDN and loads its platform library from disk. Retain the previous ARRR QDN signature and wallet cache for rollback; do not repack native libraries into the JAR.
 
-This test build selects the confirmed JNI 0.3.10 publication by default:
+This test build selects the confirmed JNI 0.3.11 publication by default:
 
 ```text
-43RNbBfLneEZNMF8w1x8w2ZNzKMEBaQYKEm7K8PdgVW3XohqaVYdvsXP2AoZuqxWYUftexwVaBB1X6mnetMJnF6V
+2wr3xfLyLqtX93Ev3GraiJhnP9UDyyEGmCEUcaN1kWcZMjUMfyRhoDXUSYfunXJhWLdEwf8VZVD2ZhS91czpEHiZ
 ```
 
-It is `PirateChainWallet` / `LiteWalletJNI-v0.3.10-test-20261119T001117Z-1167005`,
-confirmed at Qortal block **2801592**. An explicit
+It is `PirateChainWallet` / `LiteWalletJNI-v0.3.11-test-20261119T225818Z-2544011`,
+confirmed at Qortal block **2802716**. An explicit
 `pirateChainWalletQdnSignature` setting still wins: remove an older override or
 replace it with this signature to exercise the new native fix. Restart the JVM
 to load it. The [test announcement](qdn-arrr-xmr-test-announcement.txt) is ready
@@ -72,8 +93,8 @@ Retain the current signature, native bundle and JAR for rollback. Neither this
 native change nor the `qdn-performance` build adds a database migration.
 
 Test Sapling funding, mixed-pool funding, change spending, redemption and an
-expired-contract refund on the updated test node. Ironwood-only funding should
-fail early without creating a transaction. Automated selection, serialization
+expired-contract refund on the updated test node. Direct Ironwood-only contract funding still fails early. With the matching Hub,
+use the separately approved owned Sapling preparation before funding. Automated selection, serialization
 and error-contract checks do not establish that a live funded refund succeeded.
 
 ## Run the matching Hub

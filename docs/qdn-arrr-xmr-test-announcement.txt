@@ -1,53 +1,61 @@
 Combined QDN / ARRR / XMR testing JAR
 
-The new qdn-performance testing build combines QDN cache performance changes,
-Pirate wallet/trade recovery fixes, and support for the matching Hub's latest
-XMR stagenet testing. This is a testing build, not a production release.
+The qdn-performance testing build combines QDN cache performance changes,
+Pirate wallet/trade recovery, approved owned-Sapling preparation and support
+for the matching Hub's XMR stagenet testing. This is a testing build.
 
 Artifact: qortal-qdn-arrr-xmr-testing.jar
-Verify its companion .sha256 file and retain the .build.json receipt.
+The companion .build.json identifies the exact commit, verification and hashes.
+The generated qortal-qdn-arrr-xmr-testing-announcement.txt beside the artifact
+contains the cloud announcement with its final version and checksums.
 
-The ARRR wallet default now selects the confirmed five-platform JNI 0.3.10
-publication, including Sapling-compatible contract funding and Sapling change
-for subsequent trades:
+New wallet-history correction: the previous test JAR retained an unsafe verbose
+Electrum decimal conversion, separate from the earlier raw/witness reader fix.
+BTC, LTC, DOGE, DGB and RVN now share exact numeric conversion, with verified
+wire-output recovery when the JSON value lacks atomic precision. Ordinary exact
+replies need no extra request. Recovery checks transaction ID, output count,
+scripts and complete transaction bytes. It does not round monetary values.
+ARRR history rejects fractional/overflowing atomic amounts; both QORT API amount
+conversions reject overflow. XMR retains its exact 12-decimal amount handling.
 
-43RNbBfLneEZNMF8w1x8w2ZNzKMEBaQYKEm7K8PdgVW3XohqaVYdvsXP2AoZuqxWYUftexwVaBB1X6mnetMJnF6V
+ARRR now selects the confirmed five-platform JNI 0.3.11 publication:
+
+2wr3xfLyLqtX93Ev3GraiJhnP9UDyyEGmCEUcaN1kWcZMjUMfyRhoDXUSYfunXJhWLdEwf8VZVD2ZhS91czpEHiZ
 
 QDN name: PirateChainWallet
-Identifier: LiteWalletJNI-v0.3.10-test-20261119T001117Z-1167005
-Confirmed Qortal block: 2801592
+Identifier: LiteWalletJNI-v0.3.11-test-20261119T225818Z-2544011
+Confirmed Qortal block: 2802716
+All eight published files match the verified staged bundle.
 
 Core downloads the native library from QDN. Remove any older explicit
 pirateChainWalletQdnSignature override, or replace it with the signature above,
 and restart Core. No additional publication is required.
 
-For XMR stagenet testing, use the matching current Hub xmr-support build and
-add "moneroNetwork": "STAGENET" to the test Core's existing settings. Keep
-Qortal "isTestNet" false or absent. This selects Monero stagenet while keeping
-Qortal on mainnet. Monero network names now accept either case, and invalid
-explicit names stop startup instead of silently falling back to mainnet. Monero
-defaults still follow Qortal isTestNet when moneroNetwork is absent. Restart
-Core after a settings change and check /admin/info reports moneroNetwork
-"stagenet" before connecting the wallet.
-XMR wallet operations live in Hub; this JAR does not activate QORT/XMR
-cross-chain trades. Use stagenet coins for XMR tests.
+Use matching Hub xmr-support commit 7dd8c07c6f31cd64af1625f1b1948a7715b4d6f2
+or newer for ARRR preparation. If Ironwood funds need preparation, Hub requests
+separate approval for an owned Sapling self-payment costing 0.0001 ARRR. It
+moves the source key group's currently spendable Ironwood balance minus that
+fee. The self-payment remains even if the intended trade fails or is cancelled.
+Hub waits for confirmed, scanned eligibility before contract funding. Pending
+retries/restarts reuse the saved transaction; declining starts no trade.
+See arrr-sapling-preparation-testing.md for acceptance and recovery details.
+Continue Q-Wallets TESTING 1.4.0-xmr.2 and Q-Trade 0.0.3-test.4.
 
-There is no new database migration in this build. Retain the previous JAR,
-settings and native signature/cache. To roll back, stop Core and restore the
-previous JAR/native selection, remove the optional moneroNetwork override,
-and keep the current repository, wallet and trade recovery data.
+For XMR stagenet testing, use the matching Hub and add
+"moneroNetwork": "STAGENET" to the existing test Core settings. Keep Qortal
+"isTestNet" false or absent. Network names accept either case; invalid explicit
+names stop startup. After restarting, /admin/info should report Qortal mainnet
+and moneroNetwork "stagenet". Use XMR stagenet coins. This does not activate
+QORT/XMR cross-chain trades.
 
-Verification: 226 selected Core tests, with zero failures/errors and six
-existing skips; 14 offline publication tests; 65 native Rust and 13 packaging
-tests; all five native platform build/smoke checks passed. Native dependency
-audit/deny checks still fail on inherited dependencies; none were suppressed.
+No new database migration or reindexing is introduced. The separate database
+index/query improvements are not included. Retain the previous JAR, Hub,
+settings and native selection. For rollback, stop Core and restore the previous
+software/native selection while keeping current repository, wallet, pending
+preparation and trade recovery records. Do not delete pending transaction
+records to force another payment.
 
-ARRR contract funding still requires a spendable Sapling note in the source
-key group. Ironwood-only funding now fails before broadcast. Existing ambiguous
-funding intents are retained. A real funded trade, repeat funding, redemption
-and expired-contract refund still need acceptance testing. The original QDN
-stall and an actual funded ARRR refund have not been proven resolved.
-
-Please report the exact Core/Hub build, selected native signature, failed
-operation, timestamp and relevant logs when testing. Keep all private keys,
-wallet seeds and API keys out of reports.
+Live funded ARRR refund acceptance and the original long-running QDN stall
+remain unverified. Native dependency audit/deny checks still report inherited
+issues. Please report exact versions, timestamps, public AT/trade addresses
+and relevant logs, without private keys, seeds or API keys.

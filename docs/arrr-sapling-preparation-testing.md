@@ -2,9 +2,17 @@
 
 The `qdn-performance` Core exposes authenticated POST
 `/crosschain/arrr/tradepreparation` for matching Hub `xmr-support` and native
-JNI 0.3.11. The existing 0.3.10 QDN signature remains the default until a new
-five-platform native bundle is built, verified, published and confirmed. A JAR
-update alone therefore does not enable Ironwood-only trade preparation.
+JNI 0.3.11. The default five-platform publication is confirmed at Qortal block
+2802716. All eight published files match the verified staged bundle:
+
+```text
+2wr3xfLyLqtX93Ev3GraiJhnP9UDyyEGmCEUcaN1kWcZMjUMfyRhoDXUSYfunXJhWLdEwf8VZVD2ZhS91czpEHiZ
+```
+
+Its identifier is `LiteWalletJNI-v0.3.11-test-20261119T225818Z-2544011` under
+`PirateChainWallet`. Remove an older `pirateChainWalletQdnSignature` override
+or replace it with this signature, then restart Core. Use the matching Hub;
+a JAR update alone does not add the preparation approval interface.
 
 Hub uses Core's trade data and integer `/crosschain/arrr/tradefees` quote. It
 queries preparation after the normal buy approval, keeping entropy inside Hub
@@ -40,15 +48,15 @@ intents to retry a trade.
    `tools/arrr-jni-bundle/stashi-qortal-jni-0.3.11-928fc7a9c09c.zip`.
    Both staging and publication scripts pin its verified SHA-256. Retain the
    provenance/checksum files; do not guess a hash or bypass either guard.
-3. Run `./tools/prep-and-publish-arrr-wallet.sh` for that staged archive. The
-   owner signs locally. Wait for confirmation and verify all published files.
-   Set the new native signature only after verification, then rebuild Core.
+3. The owner published that archive; confirmation and byte-for-byte checks of
+   all eight QDN files are complete. Core now pins the signature above. No
+   additional native build or publication is required for this release.
 4. Build matching Hub with `./build-appimage.sh`; require a successful Docker
    receipt in `electron/dist/desktop-build.json`. A renderer build or `cap sync`
    alone does not update an existing AppImage.
 5. Build Core using `mvn -DskipTests package`, retaining version and checksum
-   receipts. Do not announce the existing default 0.3.10 library as supporting
-   this feature, or publish an incomplete platform bundle.
+   receipts. Verify the packaged default selects 0.3.11; the previous 0.3.10
+   library does not support this preparation flow.
 
 ## Acceptance and rollback
 
