@@ -3,6 +3,8 @@ package org.qortal.crosschain;
 import pirate.wallet.sdk.rpc.CompactFormats.CompactBlock;
 import com.google.common.hash.HashCode;
 import com.google.common.primitives.Bytes;
+import org.bitcoinj.core.Transaction;
+import org.bitcoinj.core.TransactionOutput;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.json.simple.JSONArray;
@@ -14,7 +16,6 @@ import org.qortal.crypto.Crypto;
 import org.qortal.utils.BitTwiddling;
 
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.text.DecimalFormat;
@@ -505,12 +506,13 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 				inputs.add(new BitcoinyTransaction.Input(scriptSig, sequence, outputTxHash, outputVout));
 			}
 
+			List<Long> outputValues = transactionOutputValues(txHash, transactionJson, (JSONArray) outputsObj);
 			List<BitcoinyTransaction.Output> outputs = new ArrayList<>();
 			for (Object outputObj : (JSONArray) outputsObj) {
 				JSONObject outputJson = (JSONObject) outputObj;
 
 				String scriptPubKey = (String) ((JSONObject) outputJson.get("scriptPubKey")).get("hex");
-				long value = BigDecimal.valueOf((Double) outputJson.get("value")).setScale(8).unscaledValue().longValue();
+				long value = outputValues.get(outputs.size());
 
 				// address too, if present in the "addresses" array
 				List<String> addresses = null;
@@ -561,6 +563,50 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		this.connections.remove(serverResponse.getElectrumServer());
 		serverResponse.getElectrumServer().closeServer(this.getClass().getSimpleName(), "Unexpected JSON format from ElectrumX blockchain.transaction.get RPC");
 		return getTransaction(txHash);
+	}
+
+	/**
+	 * JSON numbers can be integers, or doubles with fractional-satoshi artifacts.
+	 * Keep exact decimal replies cheap. If precision is insufficient, recover all
+	 * output amounts from verified transaction bytes instead of rounding money.
+	 */
+	private List<Long> transactionOutputValues(String txHash, JSONObject transactionJson, JSONArray outputsJson)
+			throws ForeignBlockchainException {
+		List<Long> values = new ArrayList<>(outputsJson.size());
+		for (Object outputObj : outputsJson) {
+			try {
+				values.add(BitcoinyAmounts.atomicUnits(((JSONObject) outputObj).get("value")));
+			} catch (ArithmeticException e) {
+				return rawTransactionOutputValues(txHash, transactionJson, outputsJson);
+			} catch (IllegalArgumentException e) {
+				throw new ForeignBlockchainException.NetworkException("Invalid transaction output amount from ElectrumX");
+			}
+		}
+		return values;
+	}
+
+	private List<Long> rawTransactionOutputValues(String txHash, JSONObject transactionJson, JSONArray outputsJson)
+			throws ForeignBlockchainException {
+		try {
+			Object hex = transactionJson.get("hex");
+			byte[] bytes = hex instanceof String ? HashCode.fromString((String) hex).asBytes() : getRawTransaction(txHash);
+			Transaction transaction = this.blockchain.deserializeTransaction(bytes);
+			if (!transaction.getTxId().toString().equalsIgnoreCase(txHash)
+					|| transaction.getOutputs().size() != outputsJson.size())
+				throw new ForeignBlockchainException.NetworkException("Raw transaction identity/output count mismatch from ElectrumX");
+			List<Long> values = new ArrayList<>(outputsJson.size());
+			for (int index = 0; index < outputsJson.size(); ++index) {
+				TransactionOutput output = transaction.getOutput(index);
+				JSONObject script = (JSONObject) ((JSONObject) outputsJson.get(index)).get("scriptPubKey");
+				if (!HashCode.fromBytes(output.getScriptBytes()).toString().equalsIgnoreCase((String) script.get("hex"))
+						|| output.getValue().value < 0)
+					throw new ForeignBlockchainException.NetworkException("Raw transaction output mismatch from ElectrumX");
+				values.add(output.getValue().value);
+			}
+			return values;
+		} catch (RuntimeException e) {
+			throw new ForeignBlockchainException.NetworkException("Invalid raw transaction output data from ElectrumX");
+		}
 	}
 
 	/**

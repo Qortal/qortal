@@ -18,7 +18,6 @@ import org.qortal.api.resource.CrossChainUtils;
 import org.qortal.settings.Settings;
 import org.qortal.transform.TransformationException;
 
-import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -558,7 +557,12 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 				JSONObject outputJson = (JSONObject) outputObj;
 
 				String scriptPubKey = (String) ((JSONObject) outputJson.get("scriptPubKey")).get("hex");
-				long value = BigDecimal.valueOf((Double) outputJson.get("value")).setScale(8).unscaledValue().longValue();
+				long value;
+				try {
+					value = BitcoinyAmounts.atomicUnits(outputJson.get("value"));
+				} catch (ArithmeticException | IllegalArgumentException e) {
+					throw new ForeignBlockchainException.NetworkException("Invalid or imprecise Pirate transaction output amount");
+				}
 
 				// address too, if present in the "addresses" array
 				List<String> addresses = null;

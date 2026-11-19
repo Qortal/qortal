@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.ArrayList;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -19,8 +21,49 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class PirateTransactionHistoryTests extends Common {
+
+    @Test
+    public void unifiedHistoryRejectsFractionalAndOverflowingAtomicAmounts() throws Exception {
+        for (Object invalid : List.of(new BigDecimal("1.5"), new BigInteger("9223372036854775808"), 9007199254740992.0)) {
+            for (String field : List.of("amount", "fee", "timestamp")) {
+                JSONObject entry = transaction("invalid", 1700000000L, "25", "1", null).put(field, invalid);
+                try {
+                    PirateTransactionHistory.parseUnified(new JSONArray().put(entry), new JSONArray(), "zs-wallet");
+                    fail("Must reject inexact/overflowing atomic " + field);
+                } catch (ForeignBlockchainException expected) {
+                    assertTrue(expected.getMessage().contains(field));
+                }
+            }
+        }
+    }
+
+    @Test
+    public void qortalHistoryRejectsFractionalAmountsAndRecipientValues() throws Exception {
+        JSONObject entry = new JSONObject().put("txid", "invalid").put("datetime", 1700000000L)
+                .put("amount", new BigDecimal("1.5"));
+        try {
+            PirateTransactionHistory.parseQortal(new JSONArray().put(entry), "zs-wallet", 10000L);
+            fail("Must not truncate an atomic amount");
+        } catch (ForeignBlockchainException expected) { }
+        JSONObject recipient = new JSONObject().put("address", "zs-recipient").put("value", new BigDecimal("2.5"));
+        entry.put("amount", 25L).put("outgoing_metadata", new JSONArray().put(recipient));
+        try {
+            PirateTransactionHistory.parseQortal(new JSONArray().put(entry), "zs-wallet", 10000L);
+            fail("Must not truncate a recipient's atomic amount");
+        } catch (ForeignBlockchainException expected) { }
+    }
+
+    @Test
+    public void unifiedHistoryPreservesLargeSignedIntegerAmounts() throws Exception {
+        long amount = -9007199254740993L; // Beyond double's consecutive integer precision.
+        JSONObject entry = transaction("exact", 1700000000L, "0", "1", null).put("amount", amount);
+        List<SimpleTransaction> result = PirateTransactionHistory.parseUnified(
+                new JSONArray().put(entry), new JSONArray(), "zs-wallet");
+        assertEquals(amount, result.get(0).getTotalAmount());
+    }
 
     @Test
     public void unifiedLocalHistoryMapsAmountsAndKnownIncomingAddresses() throws ForeignBlockchainException {

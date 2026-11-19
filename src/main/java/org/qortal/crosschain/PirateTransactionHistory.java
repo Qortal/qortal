@@ -3,6 +3,7 @@ package org.qortal.crosschain;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -148,11 +149,11 @@ final class PirateTransactionHistory {
             }
 
             String txId = transactionJson.getString("txid");
-            long timestamp = transactionJson.getLong("datetime");
+            long timestamp = requireLong(transactionJson, "datetime", "listtransactions");
             boolean hasAmount = transactionJson.has("amount");
-            long amount = transactionJson.optLong("amount", 0L);
+            long amount = hasAmount ? requireLong(transactionJson, "amount", "listtransactions") : 0L;
             boolean hasFee = transactionJson.has("fee");
-            long fee = transactionJson.optLong("fee", 0L);
+            long fee = hasFee ? requireLong(transactionJson, "fee", "listtransactions") : 0L;
             String memo = null;
             List<SimpleTransaction.Input> inputs = new ArrayList<>();
             List<SimpleTransaction.Output> outputs = new ArrayList<>();
@@ -172,7 +173,7 @@ final class PirateTransactionHistory {
                 for (int j = 0; j < incomingMetadatas.length(); j++) {
                     JSONObject incomingMetadata = incomingMetadatas.getJSONObject(j);
                     if (incomingMetadata.has("value")) {
-                        long value = incomingMetadata.getLong("value");
+                        long value = requireLong(incomingMetadata, "value", "listtransactions");
                         computedAmount += value;
                         if (incomingMetadata.has("address")) {
                             inputs.add(new SimpleTransaction.Input("[PRIVATE]", value, false));
@@ -190,7 +191,7 @@ final class PirateTransactionHistory {
                 for (int j = 0; j < outgoingMetadatas.length(); j++) {
                     JSONObject outgoingMetadata = outgoingMetadatas.getJSONObject(j);
                     if (outgoingMetadata.has("value")) {
-                        long value = outgoingMetadata.getLong("value");
+                        long value = requireLong(outgoingMetadata, "value", "listtransactions");
                         computedAmount -= value;
                         outgoingCount++;
                         if (outgoingMetadata.has("address")) {
@@ -335,10 +336,14 @@ final class PirateTransactionHistory {
         Object value = json.get(field);
         try {
             if (value instanceof Number) {
-                return ((Number) value).longValue();
+                double precision = value instanceof Float ? Math.ulp((Float) value)
+                        : value instanceof Double ? Math.ulp((Double) value) : 0;
+                if (precision >= 1)
+                    throw new ArithmeticException("JSON number lacks atomic-unit precision");
+                return new BigDecimal(value.toString()).longValueExact();
             }
             return Long.parseLong(value.toString());
-        } catch (NumberFormatException e) {
+        } catch (ArithmeticException | NumberFormatException e) {
             throw new ForeignBlockchainException("Pirate Unified " + command + " returned invalid " + field);
         }
     }
