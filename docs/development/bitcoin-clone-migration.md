@@ -69,7 +69,8 @@ Source `22d847e9ff5912fb4361c2ac7e1dfa92189eeae0` was integrated on
 `qdn-performance` after `b109da5f6a3263e081d0ec20d1d22ca185cadb06`, preserving
 the concurrent exact-amount and ARRR JNI publication changes. Java 11 Maven
 `package` passed across 19 selected suites: 202 tests, 193 executed successfully,
-nine expected witness-capability skips, zero failures/errors. This included the
+nine expected skips (eight witness cases and one Bitcoin supply-limit fixture),
+zero failures/errors. This included the
 five ACCT v3 lifecycle suites, all five coin wallet fixtures, API/security tests,
 Electrum protocol/failover tests, and the concurrent amount/history regressions.
 
