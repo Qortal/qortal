@@ -660,8 +660,10 @@ Ironwood to supplement it, and returns contract change to Sapling so a later
 trade can use it. Ironwood-only sources fail before broadcast. See
 [Pirate funding compatibility](arrr-xmr-testing.md#pirate-contract-funding-compatibility).
 It adds no database migration and preserves the indexed redeem/refund commands.
-The default Core QDN signature is unchanged: a JAR swap alone does not install
-this native correction.
+The `qdn-performance` test JAR now selects the owner's confirmed publication
+below by default. An explicit old `pirateChainWalletQdnSignature` override still
+takes precedence; remove it or select the new signature, then restart Core.
+The native binary is fetched from QDN, rather than embedded in the JAR.
 
 | Item | Verified identity |
 | --- | --- |
@@ -670,6 +672,8 @@ this native correction.
 | Archive | `stashi-qortal-jni-0.3.10-72a423ae845c.zip` |
 | SHA-256 | `1951430ac1f67eb5398de220f4f81422f1fbb26c4aea50558c7b0a3f657abb56` |
 | Build | [Five-platform workflow](https://github.com/crowetic/Stashi-Wallet/actions/runs/44418950383) |
+| QDN signature | `43RNbBfLneEZNMF8w1x8w2ZNzKMEBaQYKEm7K8PdgVW3XohqaVYdvsXP2AoZuqxWYUftexwVaBB1X6mnetMJnF6V` |
+| Publication | `PirateChainWallet` / `LiteWalletJNI-v0.3.10-test-20261119T001117Z-1167005`, confirmed block `2801592` |
 
 The native workflow passes 65 Rust regressions, 13 packaging/version tests and
 five platform JNI smoke tests. This remains a **test candidate**: the inherited
@@ -904,8 +908,8 @@ request.
 Use a separate Qortal working directory and a separate `settings.json`; if it
 runs alongside a production node, use different API and P2P ports. At minimum,
 give it separate repository, data, temporary-data, and wallet paths. Add the
-confirmed JNI 0.3.10 test transaction signature, replacing the placeholder before
-starting the node:
+confirmed JNI 0.3.10 test transaction signature (also the default in the new
+`qdn-performance` JAR):
 
 ```json
 {
@@ -917,7 +921,7 @@ starting the node:
   "listenPort": 12492,
   "listenDataPort": 12494,
   "uPnPEnabled": false,
-  "pirateChainWalletQdnSignature": "<confirmed-jni-0.3.10-test-signature>",
+  "pirateChainWalletQdnSignature": "43RNbBfLneEZNMF8w1x8w2ZNzKMEBaQYKEm7K8PdgVW3XohqaVYdvsXP2AoZuqxWYUftexwVaBB1X6mnetMJnF6V",
   "pirateChainWalletUnified": true,
   "pirateChainWalletDebugLogging": true
 }

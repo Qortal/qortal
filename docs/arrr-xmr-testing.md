@@ -17,7 +17,20 @@ Use a new unfunded Qortal account for the account/recovery checks below. Follow 
 
 ## Core artifact and installation
 
-The JAR's companion `.build.json` and `.sha256` files identify its exact source commit, tests and checksum. Check the receipt rather than identifying it only by the `6.1.9` base version. ARRR native libraries are deliberately absent from the JAR: Core retrieves the selected immutable publication from QDN and loads its platform library from disk. Retain the previous ARRR QDN signature and wallet cache for rollback. The funding fix below requires selecting the new verified native publication; do not repack native libraries into the JAR.
+The JAR's companion `.build.json` and `.sha256` files identify its exact source commit, tests and checksum. Check the receipt rather than identifying it only by the `6.1.9` base version. ARRR native libraries are deliberately absent from the JAR: Core retrieves the selected immutable publication from QDN and loads its platform library from disk. Retain the previous ARRR QDN signature and wallet cache for rollback; do not repack native libraries into the JAR.
+
+This test build selects the confirmed JNI 0.3.10 publication by default:
+
+```text
+43RNbBfLneEZNMF8w1x8w2ZNzKMEBaQYKEm7K8PdgVW3XohqaVYdvsXP2AoZuqxWYUftexwVaBB1X6mnetMJnF6V
+```
+
+It is `PirateChainWallet` / `LiteWalletJNI-v0.3.10-test-20261119T001117Z-1167005`,
+confirmed at Qortal block **2801592**. An explicit
+`pirateChainWalletQdnSignature` setting still wins: remove an older override or
+replace it with this signature to exercise the new native fix. Restart the JVM
+to load it. The [test announcement](qdn-arrr-xmr-test-announcement.txt) is ready
+to accompany the JAR and its checksum/receipt.
 
 For an owner-operated test node:
 
@@ -51,10 +64,10 @@ no spendable Sapling note in the source key group, it returns a clear
 that early rejection. Broadcast and transport failures still retain the
 duplicate-funding quarantine; this update does not clear existing intents.
 
-**The JAR alone cannot install this fix.** Stage and verify the matching native
-bundle with the pinned [native testing guide](pirate-chain-wallet-library-testing.md#stage-the-jni-0310-funding-candidate),
-then use a distinct test QDN publication and select its confirmed signature only
-as part of an owner-authorized rollout. Restart Core to load the changed library.
+The owner has published the matching native bundle, and this JAR selects the
+confirmed signature above by default. Core must retrieve it from QDN and load
+the platform library on restart; an old explicit signature override prevents
+that selection. See the pinned [native testing guide](pirate-chain-wallet-library-testing.md#stage-the-jni-0310-funding-candidate).
 Retain the current signature, native bundle and JAR for rollback. Neither this
 native change nor the `qdn-performance` build adds a database migration.
 

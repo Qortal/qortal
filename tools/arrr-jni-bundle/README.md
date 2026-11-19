@@ -21,7 +21,7 @@ here manually. The scripts do not download builds or update their SHA256 pins.
    the currently staged build:
 
    ```bash
-   (cd tools/arrr-jni-bundle && sha256sum -c stashi-qortal-jni-0.3.9-bd9b620194d1.zip.sha256)
+   (cd tools/arrr-jni-bundle && sha256sum -c stashi-qortal-jni-0.3.10-72a423ae845c.zip.sha256)
    ```
 
    Use the new build's sidecar filename when staging a later build. Continue only
@@ -98,7 +98,7 @@ The no-argument one-shot flow asks for:
 - **Registered QDN name**, default `PirateChainWallet`: a name registered to
   the owner account whose key you will use.
 - **New QDN identifier**: accepts a generated timestamped default. Use a new
-  identifier for each immutable publication.
+  identifier for each immutable publication, within QDN's 64 UTF-8 byte limit.
 - **Core API key**, hidden, when it is not supplied by `QORTAL_API_KEY` or
   read from `QORTAL_API_KEY_FILE` (default `~/qortal/apikey.txt`). This is the
   local Core instance's API key, not a wallet key.
@@ -144,3 +144,13 @@ signature:
 Select that signature in Core's `pirateChainWalletQdnSignature` setting and
 restart Core to use the new JNI bundle. Publishing alone does not change
 Core's selected signature.
+
+The current `qdn-performance` test JAR already defaults to the owner's confirmed
+JNI 0.3.10 publication (block 2801592):
+
+```text
+43RNbBfLneEZNMF8w1x8w2ZNzKMEBaQYKEm7K8PdgVW3XohqaVYdvsXP2AoZuqxWYUftexwVaBB1X6mnetMJnF6V
+```
+
+Remove an older explicit signature override or replace it with this value.
+There is no need to publish the same candidate again to test this JAR.

@@ -110,14 +110,14 @@ public class PirateChainWalletController extends Thread {
     private volatile boolean restartRotateServer = true;
 
     /**
-     * The Qortal JNI 0.3.9 cross-platform test bundle, built from Stashi v1.2.6
-     * with indexed P2SH output support (crowetic/Stashi-Wallet bd9b620194d1).
+     * The Qortal JNI 0.3.10 cross-platform test bundle, built from Stashi v1.2.6
+     * with Sapling-compatible P2SH funding and change (crowetic/Stashi-Wallet 72a423ae845c).
      * JNI artifact versions and upstream Stashi release versions are separate.
      * Operators can
      * override it with pirateChainWalletQdnSignature to test a specific,
      * immutable QDN publication without changing production data.
      */
-    public static final String DEFAULT_QDN_WALLET_SIGNATURE = "54jfBCgBHd6DzCY8zArcSkYuonLs15LcqKd35G3hKyyAP7wNPPG2RZNeMtxMqShnq6zaEbjUtcNdoYtC7ERD3fwc";
+    public static final String DEFAULT_QDN_WALLET_SIGNATURE = "43RNbBfLneEZNMF8w1x8w2ZNzKMEBaQYKEm7K8PdgVW3XohqaVYdvsXP2AoZuqxWYUftexwVaBB1X6mnetMJnF6V";
 
     PirateChainWalletController() {
         this.running = Settings.getInstance().isWalletEnabled("ARRR");
@@ -615,9 +615,8 @@ public class PirateChainWalletController extends Thread {
             throw new IllegalArgumentException("Invalid QDN wallet transaction signature");
         }
 
-        // The active production bundle gets a short cache directory. Legacy and
-        // test publications get a full-signature directory so they cannot
-        // overwrite the production bundle.
+        // The default bundle gets a short cache directory. Other publications
+        // get a full-signature directory so they cannot overwrite that bundle.
         if (DEFAULT_QDN_WALLET_SIGNATURE.equals(qdnWalletSignature)) {
             return qdnWalletSignature.substring(0, 8);
         }

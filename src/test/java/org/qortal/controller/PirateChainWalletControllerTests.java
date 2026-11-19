@@ -30,6 +30,10 @@ public class PirateChainWalletControllerTests {
                 PirateChainWalletController.getWalletLibraryCacheKey(productionSignature));
 
         assertEquals(LEGACY_SIGNATURE, PirateChainWalletController.getWalletLibraryCacheKey(LEGACY_SIGNATURE));
+
+        // A retained previous default must stay isolated after a default update.
+        String previousDefault = "54jfBCgBHd6DzCY8zArcSkYuonLs15LcqKd35G3hKyyAP7wNPPG2RZNeMtxMqShnq6zaEbjUtcNdoYtC7ERD3fwc";
+        assertEquals(previousDefault, PirateChainWalletController.getWalletLibraryCacheKey(previousDefault));
     }
 
     @Test
