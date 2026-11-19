@@ -212,8 +212,8 @@ public class Settings {
 
 	// Peer-to-peer related
 	private boolean isTestNet = false;
-	/** Optional wallet network override, e.g. STAGENET for Qortal-mainnet testing. */
-	private MoneroNetwork moneroNetwork;
+	/** Optional wallet network override. Keep raw text so invalid enum names cannot silently become null. */
+	private String moneroNetwork;
 	/** Single node testnet mode */
 	private boolean singleNodeTestnet = false;
 	/** Port number for inbound peer-to-peer connections. */
@@ -854,6 +854,8 @@ public class Settings {
 
 	private void validate() {
 		// Validation goes here
+		getMoneroNetwork();
+
 		if (this.minBlockchainPeers < 1 && !singleNodeTestnet)
 			throwValidationError("minBlockchainPeers must be at least 1");
 
@@ -1059,9 +1061,15 @@ public class Settings {
 	}
 
 	public MoneroNetwork getMoneroNetwork() {
-		if (this.moneroNetwork != null)
-			return this.moneroNetwork;
-		return this.isTestNet ? MoneroNetwork.STAGENET : MoneroNetwork.MAINNET;
+		if (this.moneroNetwork == null)
+			return this.isTestNet ? MoneroNetwork.STAGENET : MoneroNetwork.MAINNET;
+
+		try {
+			return MoneroNetwork.valueOf(this.moneroNetwork.trim().toUpperCase(Locale.ROOT));
+		} catch (IllegalArgumentException e) {
+			String message = "moneroNetwork must be one of: " + EnumUtils.getNames(MoneroNetwork.class, ", ");
+			throw new RuntimeException(message, new UnmarshalException(message));
+		}
 	}
 
 	public boolean isSingleNodeTestnet() {

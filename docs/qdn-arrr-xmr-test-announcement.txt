@@ -24,15 +24,20 @@ and restart Core. No additional publication is required.
 For XMR stagenet testing, use the matching current Hub xmr-support build and
 add "moneroNetwork": "STAGENET" to the test Core's existing settings. Keep
 Qortal "isTestNet" false or absent. This selects Monero stagenet while keeping
-Qortal on mainnet. XMR wallet operations live in Hub; this JAR does not activate
-QORT/XMR swaps. Use stagenet coins for XMR tests.
+Qortal on mainnet. Monero network names now accept either case, and invalid
+explicit names stop startup instead of silently falling back to mainnet. Monero
+defaults still follow Qortal isTestNet when moneroNetwork is absent. Restart
+Core after a settings change and check /admin/info reports moneroNetwork
+"stagenet" before connecting the wallet.
+XMR wallet operations live in Hub; this JAR does not activate QORT/XMR
+cross-chain trades. Use stagenet coins for XMR tests.
 
 There is no new database migration in this build. Retain the previous JAR,
 settings and native signature/cache. To roll back, stop Core and restore the
 previous JAR/native selection, remove the optional moneroNetwork override,
 and keep the current repository, wallet and trade recovery data.
 
-Verification: 222 selected Core tests, with zero failures/errors and six
+Verification: 226 selected Core tests, with zero failures/errors and six
 existing skips; 14 offline publication tests; 65 native Rust and 13 packaging
 tests; all five native platform build/smoke checks passed. Native dependency
 audit/deny checks still fail on inherited dependencies; none were suppressed.

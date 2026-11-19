@@ -8,6 +8,15 @@ restart the owner-operated test Core through its normal lifecycle after retainin
 the prior JAR/settings and a consistent backup. No live configuration is changed
 by this source task.
 
+An explicit Monero network overrides the default pairing with Qortal `isTestNet`.
+Both `STAGENET` and `stagenet` are accepted; names are case-insensitive and
+surrounding whitespace is ignored. An invalid explicit value stops Core startup
+with a settings error.
+Earlier builds, including `6.1.9-e2f1eae`, require uppercase `STAGENET`: lowercase
+values can silently select mainnet. Restart Core after changing the setting;
+reopening Hub alone does not reload it. Before connecting the XMR wallet, verify
+that `/admin/info` reports `isTestNet: false` and `moneroNetwork: "stagenet"`.
+
 The matching XMR Hub honors `moneroNetwork` and shows a stagenet wallet even on
 Qortal mainnet. Old Hubs ignore the hint and must be replaced for this test.
 The Q-App cannot supply a different network. Private keys, scans and signing
@@ -30,4 +39,5 @@ the build. Keep mainnet funds out of this first wallet acceptance round.
 
 A new Monero trading AT is separate work. Do not add a placeholder hash to
 `DeployAtTransaction.APPROVED_CODE_HASHES`, disable its activation guard, or
-advertise QORT/XMR swaps merely because this wallet-network selector is present.
+advertise QORT/XMR cross-chain trades merely because this wallet-network selector
+is present.
