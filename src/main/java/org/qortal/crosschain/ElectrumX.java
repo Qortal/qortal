@@ -162,6 +162,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 	private final String netId;
 	private final String expectedGenesisHash;
+	private final java.util.function.Predicate<ChainableServer> destinationPolicy;
 	private final Map<Server.ConnectionType, Integer> defaultPorts = new EnumMap<>(Server.ConnectionType.class);
 	private Bitcoiny blockchain;
 
@@ -197,8 +198,15 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	// Constructors
 
 	public ElectrumX(String netId, String genesisHash, Collection<Server> initialServerList, Map<Server.ConnectionType, Integer> defaultPorts) {
+		this(netId, genesisHash, initialServerList, defaultPorts, null);
+	}
+
+	/** A fixed-destination policy disables peer discovery and applies before every connection/probe. */
+	public ElectrumX(String netId, String genesisHash, Collection<Server> initialServerList,
+			Map<Server.ConnectionType, Integer> defaultPorts, java.util.function.Predicate<ChainableServer> destinationPolicy) {
 		this.netId = netId;
 		this.expectedGenesisHash = genesisHash;
+		this.destinationPolicy = destinationPolicy;
 		this.servers.addAll(initialServerList);
 		this.defaultPorts.putAll(defaultPorts);
 
@@ -689,6 +697,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	 */
 	private Set<Server> serverPeersSubscribe() {
 		Set<Server> newServers = new HashSet<>();
+		if (this.destinationPolicy != null) return newServers;
 
 		List<ElectrumServer> electrumServers = acquireServers();
 
@@ -963,6 +972,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	}
 
 	private void probeServer(ChainableServer server) {
+		if (this.destinationPolicy != null && !this.destinationPolicy.test(server)) return;
 		ElectrumServer electrumServer = null;
 		try {
 			SocketAddress endpoint = new InetSocketAddress(server.getHostName(), server.getPort());
@@ -1256,13 +1266,17 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	}
 
 	private Optional<ChainableServerConnection> makeConnection(ChainableServer server, String requestedBy) {
+		if (this.destinationPolicy != null && !this.destinationPolicy.test(server))
+			return Optional.of(this.recorder.recordConnection(server, requestedBy, false, false, "Destination not configured"));
 		LOGGER.debug(() -> String.format("Connecting to %s %s", server, this.blockchain.currencyCode));
 
+		ElectrumServer electrumServer = null;
+		boolean accepted = false;
 		try {
 			SocketAddress endpoint = new InetSocketAddress(server.getHostName(), server.getPort());
 			int timeout = 5000; // ms
 
-			ElectrumServer electrumServer = ElectrumServer.createInstance(server, endpoint, timeout, this.recorder);
+			electrumServer = ElectrumServer.createInstance(server, endpoint, timeout, this.recorder);
 			electrumServer.setClientName(randomClientName());
 
 			// All connections need to start with a version negotiation
@@ -1300,6 +1314,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 			LOGGER.debug(() -> String.format("Connected to %s %s", server, this.blockchain.currencyCode));
 			this.connections.add(electrumServer);
 			this.availableConnections.add(electrumServer);
+			accepted = true;
 			return Optional.of( this.recorder.recordConnection( server, requestedBy, true, true, EMPTY) );
 		} catch (IOException | ForeignBlockchainException | ClassCastException | NullPointerException e) {
 			// Didn't work, try another server...
@@ -1308,6 +1323,9 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		} catch( Exception e ) {
 			LOGGER.error(e.getMessage(), e);
 			return Optional.empty();
+		} finally {
+			if (!accepted && electrumServer != null)
+				electrumServer.closeServer(requestedBy, "Rejected Electrum handshake");
 		}
 	}
 

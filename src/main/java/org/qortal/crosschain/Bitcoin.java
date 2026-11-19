@@ -17,7 +17,7 @@ import java.util.EnumMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class Bitcoin extends Bitcoiny {
+public class Bitcoin extends BitcoinClone {
 
 	public static final String CURRENCY_CODE = "BTC";
 
@@ -201,7 +201,7 @@ public class Bitcoin extends Bitcoiny {
 	// Constructors and instance
 
 	private Bitcoin(BitcoinNet bitcoinNet, BitcoinyBlockchainProvider blockchain, Context bitcoinjContext, String currencyCode) {
-		super(blockchain, bitcoinjContext, currencyCode, DEFAULT_FEE_PER_KB);
+		super(definitionFor(bitcoinNet), blockchain, bitcoinjContext);
 		this.bitcoinNet = bitcoinNet;
 
 		LOGGER.info(() -> String.format("Starting Bitcoin support using %s", this.bitcoinNet.name()));
@@ -220,6 +220,13 @@ public class Bitcoin extends Bitcoiny {
 		}
 
 		return instance;
+	}
+
+	public static BitcoinCloneDefinition definitionFor(BitcoinNet net) {
+		return BitcoinCloneDefinition.builtIn("bitcoin", "Bitcoin", CURRENCY_CODE, net.name(),
+				BitcoinCloneDefinition.Protocol.BITCOIN_WIRE_SHA256D, 0, net.getParams(), net.getGenesisHash(),
+				DEFAULT_FEE_PER_KB.value, net == BitcoinNet.MAIN ? net.getFeeRequired() : NON_MAINNET_FEE,
+				MINIMUM_ORDER_AMOUNT, net.getServers());
 	}
 
 	// Getters & setters

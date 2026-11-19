@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "chains": [
+    {
+      "id": "fixturecoin",
+      "name": "Isolated Bitcoin Regtest Fixture",
+      "symbol": "FIX",
+      "network": "REGTEST",
+      "protocol": "BITCOIN_WIRE_SHA256D",
+      "derivation": "QORTAL_BIP32_MASTER_P2PKH",
+      "bip44CoinType": 1,
+      "enabled": true,
+      "genesisHash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+      "genesisHeader": "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f2002000000",
+      "p2pkhPrefix": 111,
+      "p2shPrefix": 196,
+      "wifPrefix": 239,
+      "xpubVersion": "043587cf",
+      "xprvVersion": "04358394",
+      "bech32Hrp": "bcrt",
+      "networkMagic": 3669344250,
+      "p2pPort": 18444,
+      "coinbaseMaturity": 100,
+      "maxMoneyAtomic": 2100000000000000,
+      "feePerKb": 10000,
+      "minimumRelayFeePerKb": 1000,
+      "dustThreshold": 546,
+      "maxTransactionBytes": 100000,
+      "transactionVersion": 1,
+      "transactionFormat": "BITCOIN_LEGACY_WITH_WITNESS_PARSING",
+      "signatureHash": "BITCOIN_ALL",
+      "headerMode": "ELECTRUM_TRUSTED_80",
+      "capabilities": [
+        "ADDRESS",
+        "BALANCE",
+        "HISTORY",
+        "SIGN",
+        "BROADCAST"
+      ],
+      "electrumServers": [
+        {
+          "host": "127.0.0.1",
+          "transport": "TCP",
+          "port": 50001
+        }
+      ]
+    }
+  ]
+}

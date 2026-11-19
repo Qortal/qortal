@@ -20,7 +20,7 @@ import java.util.EnumMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class Litecoin extends Bitcoiny {
+public class Litecoin extends BitcoinClone {
 
 	public static final String CURRENCY_CODE = "LTC";
 
@@ -157,7 +157,7 @@ public class Litecoin extends Bitcoiny {
 	// Constructors and instance
 
 	private Litecoin(LitecoinNet litecoinNet, BitcoinyBlockchainProvider blockchain, Context bitcoinjContext, String currencyCode) {
-		super(blockchain, bitcoinjContext, currencyCode, DEFAULT_FEE_PER_KB);
+		super(definitionFor(litecoinNet), blockchain, bitcoinjContext);
 		this.litecoinNet = litecoinNet;
 
 		LOGGER.info(() -> String.format("Starting Litecoin support using %s", this.litecoinNet.name()));
@@ -176,6 +176,13 @@ public class Litecoin extends Bitcoiny {
 		}
 
 		return instance;
+	}
+
+	public static BitcoinCloneDefinition definitionFor(LitecoinNet net) {
+		return BitcoinCloneDefinition.builtIn("litecoin", "Litecoin", CURRENCY_CODE, net.name(),
+				BitcoinCloneDefinition.Protocol.LITECOIN_EXISTING, 2, net.getParams(), net.getGenesisHash(),
+				DEFAULT_FEE_PER_KB.value, net == LitecoinNet.MAIN ? net.getFeeRequired() : NON_MAINNET_FEE,
+				MINIMUM_ORDER_AMOUNT, net.getServers());
 	}
 
 	// Getters & setters
