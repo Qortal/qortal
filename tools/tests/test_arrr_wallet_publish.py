@@ -53,7 +53,7 @@ class ArrrPublicationTests(unittest.TestCase):
                         QDN_OUTPUT_DIR=str(self.work / 'saved publications'),
                         CURL_RECORD=str(self.work / 'calls.jsonl'))
         for key in ('BASH_ENV', 'ENV', 'QORTAL_API_KEY', 'QORTAL_API_KEY_FILE',
-                    'QDN_FEE', 'FAIL_STEP', 'INVALID_STEP'):
+                    'QDN_FEE', 'FAIL_STEP', 'INVALID_STEP', 'FAIL_API_ERROR'):
             self.env.pop(key, None)
         fake_curl = self.bin / 'curl'
         fake_curl.write_text(f'#!{shutil.which("python3")}\n' + '''
@@ -68,6 +68,9 @@ if data == '@-':
 with open(os.environ['CURL_RECORD'], 'a') as record:
     record.write(json.dumps(dict(step=step, url=url, args=args, data=data)) + '\\n')
 if os.environ.get('FAIL_STEP') == step:
+    if os.environ.get('FAIL_API_ERROR'):
+        print(json.dumps(dict(error=int(os.environ['FAIL_API_ERROR']),
+                              message='Do not echo privateKey=5ABC or fixture-local-api-key')))
     sys.exit(22)
 if os.environ.get('INVALID_STEP') == step:
     print('not-base58-0')
@@ -137,6 +140,28 @@ else:
         self.assertIn('X-API-KEY: override-key', self.calls()[0]['args'])
         self.assertTrue(self.calls()[0]['url'].endswith('?fee=2000000'))
 
+    def test_generated_default_identifier_fits_qdn_limit_even_with_long_pid(self):
+        # A seven-digit PID exposed the old default's 66-byte identifier.
+        helper = self.tools / 'prep-and-publish-arrr-wallet.sh'
+        helper.write_text(helper.read_text().replace('-$$"', '-1234567890"'))
+        result = self.run_helper(str(self.archive))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        url = self.calls()[0]['url']
+        identifier = url.rsplit('/', 1)[1].split('?', 1)[0]
+        self.assertLessEqual(len(identifier.encode('utf-8')), 64)
+
+    def test_identifier_limit_counts_utf8_bytes_before_calling_core(self):
+        for identifier in ('x' * 65, '\u00e9' * 33):
+            with self.subTest(identifier=identifier):
+                result = self.run_helper(str(self.archive), answers=f'\n{identifier}\n5ABC\n')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('QDN allows at most 64', result.stderr)
+                self.assertEqual(self.calls(), [])
+
+    def test_identifier_at_limit_is_accepted(self):
+        result = self.run_helper(str(self.archive), answers='\n' + 'x' * 64 + '\n5ABC\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_tilde_path_and_manual_key_fallback(self):
         (self.node / 'apikey.txt').unlink()
         result = self.run_helper('~/stashi build/combined JNI.zip',
@@ -181,6 +206,17 @@ else:
         self.assertTrue((self.publication() / 'signed.base58').exists())
         self.assertFalse((self.publication() / 'signature.txt').exists())
         self.assertNotIn('Broadcast accepted', result.stdout)
+
+    def test_sign_error_reports_safe_api_code_without_echoing_response(self):
+        self.env.update(FAIL_STEP='sign', FAIL_API_ERROR='127')
+        result = self.run_helper(str(self.archive))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('API error 127', result.stderr)
+        self.assertIn('identifier length', result.stderr)
+        self.assertNotIn('5ABC', result.stdout + result.stderr)
+        self.assertNotIn('fixture-local-api-key', result.stdout + result.stderr)
+        self.assertEqual([call['step'] for call in self.calls()], ['prepare', 'sign'])
+        self.assertFalse((self.publication() / 'signed.base58').exists())
 
     def test_invalid_unsigned_transaction_never_signs(self):
         self.env['INVALID_STEP'] = 'prepare'

@@ -738,6 +738,15 @@ core code or by the test build.
 
 ### Build, sign, and submit the publication
 
+QDN identifiers must fit in **64 UTF-8 bytes**. The one-shot helper uses a
+short version/timestamp/PID identifier, and preparation rejects longer custom
+identifiers before contacting Core. An older helper generated a 66-byte default
+with a seven-digit PID: Core built the unsigned transaction but signing returned
+HTTP 400 / API error 127. That attempt did not reach submission. Keep the saved
+directory for diagnosis and rerun the corrected one-shot helper with a shorter
+identifier; the old unsigned transaction cannot be signed as-is. Signing errors
+now report the API error code without printing the response or any key material.
+
 `tools/publish-pirate-unified-qdn.sh` validates the staged directory before
 calling Qortal Core and deliberately keeps the publication in two phases. Set
 the local API details and prepare the transaction with the registered **test**

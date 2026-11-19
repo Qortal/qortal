@@ -92,7 +92,7 @@ printf 'Publication files: %s\n' "$publication_directory"
 
 read -r -p 'Registered QDN name [PirateChainWallet]: ' publication_name
 publication_name=${publication_name:-PirateChainWallet}
-default_identifier="LiteWalletJNI-$(date -u +%Y-%m)-qortal-v0.3.10-test-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+default_identifier="LiteWalletJNI-v0.3.10-test-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 read -r -p "New QDN identifier [$default_identifier]: " identifier
 identifier=${identifier:-$default_identifier}
 

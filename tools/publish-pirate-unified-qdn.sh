@@ -233,7 +233,7 @@ api_post() {
 api_post_stdin() {
 	local path=$1
 	local content_type=$2
-	curl --fail --silent --show-error --request POST \
+	curl --fail-with-body --silent --show-error --request POST \
 		-H "X-API-KEY: $QORTAL_API_KEY" \
 		-H "Content-Type: $content_type" \
 		--data-binary @- \
@@ -254,6 +254,9 @@ prepare_transaction() {
 	bundle_directory=$(validate_bundle "$expected_bundle_kind" "$bundle_directory")
 	[[ -n $publication_name ]] || die 'Publication name must not be empty.'
 	[[ -n $identifier ]] || die 'Identifier must not be empty.'
+	local identifier_bytes
+	identifier_bytes=$(printf '%s' "$identifier" | wc -c)
+	(( identifier_bytes <= 64 )) || die "Identifier is $identifier_bytes UTF-8 bytes; QDN allows at most 64. Choose a shorter identifier."
 
 	local encoded_name encoded_identifier raw_unsigned
 	encoded_name=$(url_encode "$publication_name")
@@ -282,7 +285,20 @@ sign_transaction() {
 	sign_request=$(jq -cn --arg privateKey "$private_key" --arg transactionBytes "$raw_unsigned" \
 		'{privateKey: $privateKey, transactionBytes: $transactionBytes}')
 	private_key=''
-	signed_transaction=$(printf '%s' "$sign_request" | api_post_stdin '/transactions/sign' application/json)
+	if ! signed_transaction=$(printf '%s' "$sign_request" | api_post_stdin '/transactions/sign' application/json); then
+		sign_request=''
+		# Print only the numeric API code and our own explanation. A server or proxy
+		# could echo the signing request, so never print its raw response body.
+		local api_error explanation
+		api_error=$(printf '%s' "$signed_transaction" | jq -er '.error | numbers' 2>/dev/null) || api_error=unknown
+		case $api_error in
+			127) explanation='Core could not decode the transaction. Check the identifier length and prepare it again.' ;;
+			128) explanation='Core rejected the private key. Enter the Base58 private key for the QDN name owner.' ;;
+			6) explanation='The signing API is restricted on this node. Use a trusted local or offline signer.' ;;
+			*) explanation='Check the local Core signing endpoint.' ;;
+		esac
+		die "Core signing failed (API error $api_error). $explanation No transaction was submitted; the unsigned file is retained at $input_file"
+	fi
 	sign_request=''
 	[[ $signed_transaction =~ ^[1-9A-HJ-NP-Za-km-z]+$ ]] || die 'Qortal Core did not return a signed Base58 transaction.'
 	write_new_file "$output_file" "$signed_transaction"
