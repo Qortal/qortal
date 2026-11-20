@@ -15,8 +15,10 @@ import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
 import org.qortal.api.resource.CrossChainUtils;
+import org.qortal.crypto.Crypto;
 import org.qortal.settings.Settings;
 import org.qortal.transform.TransformationException;
+import org.qortal.utils.Base58;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -402,7 +404,10 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 			throws ForeignBlockchainException {
 		CompactTxStreamerGrpc.CompactTxStreamerBlockingStub stub = getCompactTxStreamerStub();
 		try {
-			GetAddressUtxosArg getAddressUtxosArg = GetAddressUtxosArg.newBuilder().addAddresses(address).build();
+			String alias = p2shIndexAlias(address);
+			GetAddressUtxosArg.Builder query = GetAddressUtxosArg.newBuilder().addAddresses(address);
+			if (alias != null) query.addAddresses(alias);
+			GetAddressUtxosArg getAddressUtxosArg = query.build();
 			GetAddressUtxosReplyList replyList = stub.getAddressUtxos(getAddressUtxosArg);
 
 			if (!(replyList instanceof GetAddressUtxosReplyList))
@@ -414,7 +419,9 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 				throw new ForeignBlockchainException.NetworkException(
 						"Unexpected output from Pirate Chain getUnspentOutputs gRPC");
 
-			List<UnspentOutput> unspentOutputs = new ArrayList<>();
+			Map<String, UnspentOutput> unspentOutputs = new LinkedHashMap<>();
+			Map<ByteString, BitcoinyTransaction> rawTransactions = new HashMap<>();
+			byte[] contractScript = alias == null ? null : PirateChainHTLC.addressToScriptPubKey(address);
 			for (GetAddressUtxosReply unspent : unspentList) {
 
 				int height = (int) unspent.getHeight();
@@ -429,13 +436,47 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 				byte[] script = unspent.getScript().toByteArray();
 				String addressRes = unspent.getAddress();
 
-				unspentOutputs.add(new UnspentOutput(txHash, outputIndex, height, value, script, addressRes));
+				if (contractScript != null) {
+					// The wrong index bucket can also contain real P2PKH outputs with the same hash.
+					if (!Arrays.equals(script, contractScript)) continue;
+					BitcoinyTransaction transaction = rawTransactions.get(unspent.getTxid());
+					if (transaction == null) {
+						transaction = PirateChainTransaction.read(getRawTransaction(txHash)).transaction;
+						rawTransactions.put(unspent.getTxid(), transaction);
+					}
+					if (outputIndex < 0 || outputIndex >= transaction.outputs.size()
+							|| transaction.outputs.get(outputIndex).value != value || value < 0
+							|| !transaction.outputs.get(outputIndex).scriptPubKey.equals(HashCode.fromBytes(contractScript).toString()))
+						throw new ForeignBlockchainException.NetworkException("Pirate address index disagrees with raw contract output");
+					addressRes = address;
+				}
+				String key = HashCode.fromBytes(txHash) + ":" + outputIndex;
+				UnspentOutput previous = unspentOutputs.putIfAbsent(key,
+						new UnspentOutput(txHash, outputIndex, height, value, script, addressRes));
+				if (previous != null && (previous.height != height || previous.value != value || !Arrays.equals(previous.script, script)))
+					throw new ForeignBlockchainException.NetworkException("Conflicting Pirate address-index outpoint replies");
 			}
 
-			return unspentOutputs;
+			return new ArrayList<>(unspentOutputs.values());
 
 		} catch (io.grpc.StatusRuntimeException e) {
 			throw failedRead(e, stub.getChannel());
+		} catch (TransformationException e) {
+			throw new ForeignBlockchainException("Invalid raw Pirate contract transaction: " + e.getMessage());
+		}
+	}
+
+	/** Some Pirate nodes index script-hash outputs under the public-key-hash bucket. */
+	private static String p2shIndexAlias(String address) {
+		try {
+			byte[] decoded = Base58.decode(address);
+			if (decoded.length != 25 || Byte.toUnsignedInt(decoded[0]) != 85) return null;
+			byte[] payload = Arrays.copyOf(decoded, 21);
+			if (!Arrays.equals(Arrays.copyOfRange(decoded, 21, 25), Arrays.copyOf(Crypto.doubleDigest(payload), 4))) return null;
+			payload[0] = 60;
+			return Base58.encode(com.google.common.primitives.Bytes.concat(payload, Arrays.copyOf(Crypto.doubleDigest(payload), 4)));
+		} catch (NumberFormatException e) {
+			return null; // Leave validation of other address formats to the server.
 		}
 	}
 
@@ -643,20 +684,27 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 			BlockID startBlock = BlockID.newBuilder().setHeight(1).build();
 			BlockRange blockRange = BlockRange.newBuilder().setStart(startBlock).setEnd(endBlock).build();
 
-			TransparentAddressBlockFilter blockFilter = TransparentAddressBlockFilter.newBuilder()
-					.setAddress(address)
-					.setRange(blockRange)
-					.build();
-			Iterator<Service.RawTransaction> transactionIterator = stub
-					.getTaddressTxids(blockFilter);
-
-			// Map from Iterator to List
-			List<RawTransaction> rawTransactions = new ArrayList<>();
-			transactionIterator.forEachRemaining(rawTransactions::add);
+			String alias = p2shIndexAlias(address);
+			List<String> addresses = alias == null ? List.of(address) : List.of(address, alias);
+			Map<ByteString, RawTransaction> rawTransactions = new LinkedHashMap<>();
+			// Always read both buckets: an upgraded/reindexed node can have funding in one
+			// and its spend in the other. An incomplete lookup must fail, never hide a spend.
+			for (String lookup : addresses) {
+				TransparentAddressBlockFilter blockFilter = TransparentAddressBlockFilter.newBuilder()
+						.setAddress(lookup).setRange(blockRange).build();
+				Iterator<Service.RawTransaction> replies = stub.getTaddressTxids(blockFilter);
+				while (replies.hasNext()) {
+					RawTransaction raw = replies.next();
+					if (!includeUnconfirmed && raw.getHeight() == 0) continue;
+					RawTransaction previous = rawTransactions.putIfAbsent(raw.getData(), raw);
+					if (previous != null && previous.getHeight() != raw.getHeight())
+						throw new ForeignBlockchainException.NetworkException("Conflicting Pirate address-index transaction heights");
+				}
+			}
 
 			List<BitcoinyTransaction> transactions = new ArrayList<>();
 
-			for (RawTransaction rawTransaction : rawTransactions) {
+			for (RawTransaction rawTransaction : rawTransactions.values()) {
 
 				Long height = rawTransaction.getHeight();
 				if (!includeUnconfirmed && (height == null || height == 0))
@@ -666,6 +714,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 				byte[] transactionData = rawTransaction.getData().toByteArray();
 				String transactionDataHex = HashCode.fromBytes(transactionData).toString();
 				BitcoinyTransaction bitcoinyTransaction = PirateChain.deserializeRawTransaction(transactionDataHex);
+				if (alias != null && !PirateChainHTLC.involvesContract(bitcoinyTransaction, address)) continue;
 				bitcoinyTransaction.height = height.intValue();
 				transactions.add(bitcoinyTransaction);
 			}

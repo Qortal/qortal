@@ -15,6 +15,16 @@ The resulting `target/qortal-qdn-arrr-xmr-testing.jar` includes those ARRR/Core 
 
 Use a new unfunded Qortal account for the account/recovery checks below. Follow [Monero stagenet testing](monero-stagenet-testing.md) with the matching Hub for wallet acceptance; this JAR supplies the network hint. The shipped synthetic fixtures are public and must never receive funds.
 
+## ARRR address-index compatibility
+
+The Core lightwallet provider now discovers confirmed P2SH funding and spends
+when a Pirate node stores them under the wrong address-index category. It
+merges both buckets, filters the actual contract script, verifies UTXOs against
+raw outputs and rejects conflicting/incomplete replies. See the
+[Musiqo evidence and recovery instructions](arrr-address-index-compatibility.md).
+Update both buyer and seller Core. Existing JNI 0.3.11 and matching frontend
+builds remain compatible; no migration or additional publication is required.
+
 ## Wallet amount precision
 
 Wallet history uses the shared Electrum parser for BTC, LTC, DOGE, DGB and RVN.

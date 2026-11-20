@@ -9,6 +9,15 @@ The companion .build.json identifies the exact commit, verification and hashes.
 The generated qortal-qdn-arrr-xmr-testing-announcement.txt beside the artifact
 contains the cloud announcement with its final version and checksums.
 
+ARRR contract discovery: reads both Pirate address-index categories when a
+server misclassifies P2SH funding or spends. Matches contract scripts, verifies
+raw output values/indexes, merges duplicate and mixed index entries, and fails
+on incomplete/conflicting evidence. This fixes the confirmed Musiqo funding
+being reported as HTLC_UNFUNDED. Update buyer and seller Core; existing JNI
+0.3.11 and matching frontend builds remain compatible. No new native publication
+or migration is required. Live refund and complete trade acceptance remain to
+be tested. See arrr-address-index-compatibility.md.
+
 New wallet-history correction: the previous test JAR retained an unsafe verbose
 Electrum decimal conversion, separate from the earlier raw/witness reader fix.
 BTC, LTC, DOGE, DGB and RVN now share exact numeric conversion, with verified

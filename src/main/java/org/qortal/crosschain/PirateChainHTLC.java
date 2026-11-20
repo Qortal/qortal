@@ -408,7 +408,21 @@ public class PirateChainHTLC {
 		return chunks;
 	}
 
-	private static byte[] addressToScriptPubKey(String p2shAddress) {
+	/** Filter address-index aliases by the actual contract, never by the returned address label. */
+	static boolean involvesContract(BitcoinyTransaction transaction, String address) {
+		String script = HashCode.fromBytes(addressToScriptPubKey(address)).toString();
+		for (BitcoinyTransaction.Output output : transaction.outputs)
+			if (script.equals(output.scriptPubKey)) return true;
+		byte[] hash = addressToRedeemScriptHash(address);
+		for (BitcoinyTransaction.Input input : transaction.inputs) {
+			List<byte[]> chunks = extractScriptSigChunks(HashCode.fromString(input.scriptSig).asBytes());
+			if (!chunks.isEmpty() && Arrays.equals(hash, Crypto.hash160(chunks.get(chunks.size() - 1))))
+				return true;
+		}
+		return false;
+	}
+
+	static byte[] addressToScriptPubKey(String p2shAddress) {
 		// We want the HASH160 part of the P2SH address
 		byte[] p2shAddressBytes = Base58.decode(p2shAddress);
 
