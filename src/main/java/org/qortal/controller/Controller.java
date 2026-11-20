@@ -425,14 +425,6 @@ public class Controller extends Thread {
 			return; // Not System.exit() so that GUI can display error
 		}
 
-		try {
-			org.qortal.crosschain.BitcoinCloneSupport.getRegistry();
-		} catch (Throwable t) {
-			Throwable cause = t instanceof ExceptionInInitializerError && t.getCause() != null ? t.getCause() : t;
-			Gui.getInstance().fatalError("Bitcoin-clone definitions", cause.getMessage());
-			return;
-		}
-
 		final Controller controller = Controller.newInstance(args);
 
 		NETWORK_BLOCK_SUMMARIES_V_2_MESSAGE_SCHEDULER.scheduleAtFixedRate(() -> processNetworkBlockSummariesV2Messages(), 60, 1, TimeUnit.SECONDS);

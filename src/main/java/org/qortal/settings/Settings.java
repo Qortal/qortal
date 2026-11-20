@@ -268,9 +268,6 @@ public class Settings {
     private Map<String, Boolean> wallets = new HashMap<>();
 	private String blockchainConfig = null; // use default from resources
 	private BitcoinNet bitcoinNet = BitcoinNet.MAIN;
-
-	/** Optional local file of strictly validated, opt-in Bitcoin-compatible chain definitions. */
-	private String bitcoinCloneDefinitions = null;
 	private LitecoinNet litecoinNet = LitecoinNet.MAIN;
 	private DogecoinNet dogecoinNet = DogecoinNet.MAIN;
 	private DigibyteNet digibyteNet = DigibyteNet.MAIN;
@@ -1224,8 +1221,6 @@ public class Settings {
 	public BitcoinNet getBitcoinNet() {
 		return this.bitcoinNet;
 	}
-
-	public String getBitcoinCloneDefinitions() { return this.bitcoinCloneDefinitions; }
 
 	public LitecoinNet getLitecoinNet() {
 		return this.litecoinNet;
