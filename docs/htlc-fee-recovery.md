@@ -190,7 +190,7 @@ Live approval and confirmation of an underfunded DGB recovery, a new complete
 ARRR cross-chain trade/refund, concurrent long historical account scans and the
 original long-uptime QDN symptom remain release acceptance work.
 
-The final clean packaged runtime is `6.1.9-7e4a364`, from commit `7e4a364f9`,
+The preceding fee-policy release was `6.1.9-7e4a364`, from commit `7e4a364f9`,
 95,250,206 bytes. The same full selection also completed successfully against
 that shaded JAR; class-loading records verified the production implementation
 came from the packaged artifact. Its SHA-256 is:
@@ -204,3 +204,31 @@ the same legacy funding pair and exact redeemed classification. No live
 installation, service restart, funding, recovery broadcast or cloud upload was
 performed. The owner publishes the checked artifact as `qortal.jar` in the
 existing test share; local testing aliases point to the same checked bytes.
+
+### Packaged HTTP follow-up
+
+The approval media-type and optional-body correction is packaged as
+`6.1.9-b7b05a4`, from commit `b7b05a4dc`, 95,252,511 bytes. It passed 76 focused
+tests with zero failures, errors or skips in a clean source build and again
+against the shaded JAR, with production class loading verified. The tests use
+real Jersey HTTP handling and production reader/OpenAPI registrations. They
+cover the served page/specification, JSON binding on both operations, legacy
+empty bodies and rejection of malformed/non-JSON approvals, alongside existing
+fee, signed recovery, checkpoint and wallet API regressions.
+
+Both Swagger forms were also executed in a headless browser using the packaged
+page and specification on an isolated loopback server. Their generated curl and
+actual requests selected `application/json`; each reached a capture-only handler
+with the exact synthetic approval and returned HTTP 200. These browser checks
+do not claim to broadcast or confirm a live recovery. No new migration, native
+publication, running Core restart or cloud upload was performed.
+
+SHA-256 for this HTTP follow-up:
+
+```text
+9877ccf1a72fb6204e9461c15c33df2f29c05b213d2ee0acbe0f218f142b3d67
+```
+
+The versioned artifact is `target/qortal-qdn-arrr-xmr-b7b05a4dc-testing.jar`;
+the local `qortal-qdn-arrr-xmr-testing.jar` and `qortal-6.1.9.jar` aliases now
+contain the same checked bytes. Prior versioned artifacts remain available.
