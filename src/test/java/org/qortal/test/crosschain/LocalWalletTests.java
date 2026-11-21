@@ -124,7 +124,8 @@ public class LocalWalletTests extends org.qortal.test.common.Common {
             Map<String, Object> first = org.qortal.controller.tradebot.LocalTradeFunding.prepare(repository, LitecoinACCTv3.getInstance(), offer, xpub, receiver, coin);
             Map<String, Object> second = org.qortal.controller.tradebot.LocalTradeFunding.prepare(repository, LitecoinACCTv3.getInstance(), offer, xpub, receiver, coin);
             assertEquals(first, second);
-            assertEquals("100001000", first.get("amount"));
+            assertEquals("100003090", first.get("amount"));
+            assertEquals("3090", first.get("fundingReserve"));
             assertFalse(new ObjectMapper().writeValueAsString(first).contains(f.get("xprv")));
             List<org.qortal.data.crosschain.TradeBotData> entries = repository.getCrossChainRepository().getAllTradeBotData();
             assertEquals(1, entries.size());
@@ -149,6 +150,7 @@ public class LocalWalletTests extends org.qortal.test.common.Common {
         boolean tamper; String broadcast; BitcoinyTransaction transaction;
         FakeProvider(Map<String, String> fixture) { raw = HashCode.fromString(fixture.get("previous")).asBytes(); tx = new Transaction(PARAMS.get("LTC"), raw); }
         public String getNetId() { return "Litecoin-MAIN"; }
+        public long getMinimumRelayFeePerKb() { return 1000L; }
         public int getCurrentHeight() { return 200; }
         public List<TransactionHash> getAddressTransactions(byte[] scriptPubKey, boolean includeUnconfirmed) { reads++; return Arrays.equals(scriptPubKey, tx.getOutput(0).getScriptBytes()) ? List.of(new TransactionHash(100, tx.getTxId().toString())) : List.of(); }
         public List<UnspentOutput> getUnspentOutputs(byte[] scriptPubKey, boolean includeUnconfirmed) { unspentReads++; return Arrays.equals(scriptPubKey, tx.getOutput(0).getScriptBytes()) ? List.of(new UnspentOutput(tx.getTxId().getBytes(), 0, 100, tamper ? 1 : 1000000000)) : List.of(); }

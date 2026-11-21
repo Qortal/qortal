@@ -78,6 +78,7 @@ public class PirateUnifiedHistoricalRestoreTests {
                 assertEquals("Historical sync command was not accepted", "success", syncStarted.getString("result"));
                 awaitNativeSync();
                 assertHistoricalState(walletId);
+                assertNativeSpendGuard(walletId);
             } finally {
                 JSONObject cancelled = object(LiteWalletJni.invokeJson(cancelRequest.toString(), false),
                         "historical sync cancellation");
@@ -133,6 +134,27 @@ public class PirateUnifiedHistoricalRestoreTests {
         JSONArray deposits = localDeposits.getJSONArray("result");
         assertEquals("Local Unified deposits changed the recovered transaction count", 1, deposits.length());
         assertEquals(EXPECTED_ADDRESS, deposits.getJSONObject(0).getString("address"));
+    }
+
+    private static void assertNativeSpendGuard(String walletId) {
+        // This history-only fixture does not supply a validated spending anchor. A verified
+        // balance must not be taken as permission to bypass the native wallet's safety gate.
+        JSONObject readiness = object(LiteWalletJni.invokeJson(new JSONObject()
+                .put("method", "get_spendability_status").put("wallet_id", walletId).toString(), false),
+                "native spendability status");
+        assertTrue(readiness.getBoolean("ok"));
+        assertFalse(readiness.getJSONObject("result").getBoolean("spendable"));
+        assertTrue(readiness.getJSONObject("result").getBoolean("rescan_required"));
+        assertEquals("ERR_RESCAN_REQUIRED", readiness.getJSONObject("result").getString("reason_code"));
+
+        JSONObject build = object(LiteWalletJni.invokeJson(new JSONObject()
+                .put("method", "build_tx").put("wallet_id", walletId)
+                .put("outputs", new JSONArray().put(new JSONObject().put("address", EXPECTED_ADDRESS)
+                        .put("amount", 50_000_000L))).put("fee_opt", 10_000L).toString(), false),
+                "guarded synthetic transaction build");
+        assertFalse("Native guard allowed spending without a validated anchor", build.getBoolean("ok"));
+        assertTrue(build.getString("error").startsWith("ERR_RESCAN_REQUIRED:"));
+        // No signing or broadcasting is attempted; forbidden-RPC assertions remain in force.
     }
 
     private static void awaitNativeSync() throws Exception {

@@ -257,7 +257,7 @@ public class Bitcoin extends Bitcoiny {
 		this.bitcoinNet.setFeeRequired( fee );
 	}
 	/**
- 	* Returns bitcoinj transaction sending <tt>amount</tt> to <tt>recipient</tt> using 20 sat/byte fee.
+	 * Returns bitcoinj transaction sending <tt>amount</tt> to <tt>recipient</tt> using at least 20 atomic units/byte and the configured/network relay fee floors.
  	*
  	* @param xprv58 BIP32 private key
  	* @param recipient P2PKH address
@@ -265,8 +265,9 @@ public class Bitcoin extends Bitcoiny {
  	* @return transaction, or null if insufficient funds
  	*/
 	@Override
-	public Transaction buildSpend(String xprv58, String recipient, long amount) {
-		return buildSpend(xprv58, recipient, amount, 20L);
+	public Transaction buildSpend(String xprv58, String recipient, long amount) throws ForeignBlockchainException {
+		long rate = Math.max(20_000L, BitcoinyFees.perKb(this));
+		return buildSpend(xprv58, recipient, amount, rate / 1000 + (rate % 1000 == 0 ? 0 : 1));
 	}
 
 }

@@ -40,5 +40,6 @@ if [ "$#" -eq 0 ]; then
     set -- -jar /usr/local/qortal/qortal.jar "${SETTINGS_FILE}"
 fi
 
+set -f # Split options on whitespace without expanding JVM wildcards against /qortal.
 # shellcheck disable=SC2086
 exec java ${jvm_memory_args} -Djava.net.preferIPv4Stack=false "$@"

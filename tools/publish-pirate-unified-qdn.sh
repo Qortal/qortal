@@ -8,12 +8,16 @@ set -euo pipefail
 # it locally or offline, then submit the signed transaction. The source ZIP is
 # never published.
 
-readonly EXPECTED_ARTIFACT_SHA256='059781c5a2cdeb8c5d60f1130c4bf3a217822d39438e560bc11633993df0e1e9'
-readonly DEFAULT_IDENTIFIER='LiteWalletJNI-2026-08-unified-v1.1.9-test'
+script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+DEFAULT_BUNDLE_DIR="$script_directory/arrr-jni-bundle"
+
+readonly EXPECTED_ARTIFACT_SHA256='8f23a3131c6c4bcac4959cba1462420e211659dfd8bb83452eecfd0c0f7edecb'
+readonly DEFAULT_IDENTIFIER='LiteWalletJNI-2026-11-qortal-v0.3.11-test'
 
 usage() {
 	cat <<'EOF'
 Usage:
+  tools/publish-pirate-unified-qdn.sh
   tools/publish-pirate-unified-qdn.sh validate <test|release> <bundle-directory>
   tools/publish-pirate-unified-qdn.sh prepare <bundle-directory> <test-name> [identifier] [unsigned-output]
   tools/publish-pirate-unified-qdn.sh prepare-release <bundle-directory> <release-name> <release-identifier> [unsigned-output]
@@ -23,9 +27,18 @@ Usage:
   tools/publish-pirate-unified-qdn.sh publish <bundle-directory> <test-name> [identifier]
   tools/publish-pirate-unified-qdn.sh release <bundle-directory> <release-name> <release-identifier>
 
+With no arguments, uses the newest stashi-qortal-jni-*.zip (by modification
+time) in tools/arrr-jni-bundle/, resolved from the repository regardless of
+the current directory. Drop the downloaded combined build there first.
+Runs prep-and-publish-arrr-wallet.sh to stage all five libraries, prompt for
+the QDN name and identifier, prepare, sign, and submit the publication.
+This one-shot flow submits after signing without a separate confirmation.
+Explicit subcommands and their bundle-directory arguments work as before.
+
 Environment:
   QORTAL_API_URL  Qortal Core API URL (default: http://127.0.0.1:12391)
   QORTAL_API_KEY  API key for the local Qortal Core instance (prompted for if absent)
+  QORTAL_API_KEY_FILE  No-argument flow: key file (default: ~/qortal/apikey.txt)
   QDN_FEE         Fee in QORT atomic units (default: 1000000, i.e. 0.01 QORT)
 
 Commands:
@@ -140,6 +153,8 @@ validate_bundle() {
 		|| die "Invalid expected bundle kind: $expected_bundle_kind"
 	[[ -d $bundle_directory ]] || die "Bundle directory does not exist: $bundle_directory"
 	bundle_directory=$(cd "$bundle_directory" && pwd -P)
+	[[ -z $(find "$bundle_directory" -mindepth 1 ! -type f -print -quit) ]] \
+		|| die 'Bundle must not contain subdirectories, symlinks, or special files.'
 
 	local required_file
 	for required_file in MANIFEST.txt LICENSE-qortal-jni.txt qortal-handoff.md; do
@@ -147,7 +162,7 @@ validate_bundle() {
 	done
 
 	grep -Fqx "artifact-sha256: $EXPECTED_ARTIFACT_SHA256" "$bundle_directory/MANIFEST.txt" \
-		|| die 'Bundle manifest does not identify the pinned Pirate v1.1.9 artifact.'
+		|| die 'Bundle manifest does not identify the pinned Qortal JNI 0.3.11 artifact (Stashi v1.2.6 base).'
 	grep -Fqx "bundle-kind: $expected_bundle_kind" "$bundle_directory/MANIFEST.txt" \
 		|| die "Bundle is not a $expected_bundle_kind bundle."
 
@@ -218,7 +233,7 @@ api_post() {
 api_post_stdin() {
 	local path=$1
 	local content_type=$2
-	curl --fail --silent --show-error --request POST \
+	curl --fail-with-body --silent --show-error --request POST \
 		-H "X-API-KEY: $QORTAL_API_KEY" \
 		-H "Content-Type: $content_type" \
 		--data-binary @- \
@@ -239,6 +254,9 @@ prepare_transaction() {
 	bundle_directory=$(validate_bundle "$expected_bundle_kind" "$bundle_directory")
 	[[ -n $publication_name ]] || die 'Publication name must not be empty.'
 	[[ -n $identifier ]] || die 'Identifier must not be empty.'
+	local identifier_bytes
+	identifier_bytes=$(printf '%s' "$identifier" | wc -c)
+	(( identifier_bytes <= 64 )) || die "Identifier is $identifier_bytes UTF-8 bytes; QDN allows at most 64. Choose a shorter identifier."
 
 	local encoded_name encoded_identifier raw_unsigned
 	encoded_name=$(url_encode "$publication_name")
@@ -267,7 +285,20 @@ sign_transaction() {
 	sign_request=$(jq -cn --arg privateKey "$private_key" --arg transactionBytes "$raw_unsigned" \
 		'{privateKey: $privateKey, transactionBytes: $transactionBytes}')
 	private_key=''
-	signed_transaction=$(printf '%s' "$sign_request" | api_post_stdin '/transactions/sign' application/json)
+	if ! signed_transaction=$(printf '%s' "$sign_request" | api_post_stdin '/transactions/sign' application/json); then
+		sign_request=''
+		# Print only the numeric API code and our own explanation. A server or proxy
+		# could echo the signing request, so never print its raw response body.
+		local api_error explanation
+		api_error=$(printf '%s' "$signed_transaction" | jq -er '.error | numbers' 2>/dev/null) || api_error=unknown
+		case $api_error in
+			127) explanation='Core could not decode the transaction. Check the identifier length and prepare it again.' ;;
+			128) explanation='Core rejected the private key. Enter the Base58 private key for the QDN name owner.' ;;
+			6) explanation='The signing API is restricted on this node. Use a trusted local or offline signer.' ;;
+			*) explanation='Check the local Core signing endpoint.' ;;
+		esac
+		die "Core signing failed (API error $api_error). $explanation No transaction was submitted; the unsigned file is retained at $input_file"
+	fi
 	sign_request=''
 	[[ $signed_transaction =~ ^[1-9A-HJ-NP-Za-km-z]+$ ]] || die 'Qortal Core did not return a signed Base58 transaction.'
 	write_new_file "$output_file" "$signed_transaction"
@@ -311,7 +342,17 @@ verify_transaction() {
 }
 
 main() {
-	(( $# >= 1 )) || { usage >&2; exit 2; }
+	if (( $# == 0 )); then
+		local artifact='' candidate
+		for candidate in "$DEFAULT_BUNDLE_DIR"/stashi-qortal-jni-*.zip; do
+			[[ -f $candidate ]] || continue
+			if [[ -z $artifact || $candidate -nt $artifact ]]; then
+				artifact=$candidate
+			fi
+		done
+		[[ -n $artifact ]] || die "No combined JNI ZIP found. Drop the built stashi-qortal-jni-<version>-<commit>.zip into $DEFAULT_BUNDLE_DIR/ first."
+		exec "$script_directory/prep-and-publish-arrr-wallet.sh" "$artifact"
+	fi
 	local command=$1
 	shift
 

@@ -47,6 +47,7 @@ public class PirateWallet {
     private final boolean unifiedWallet;
     private String serverUri;
     private String seedPhrase;
+    private Integer initializedBirthday;
     private volatile String walletAddress;
     private final TransactionHistoryCache transactionHistoryCache = new TransactionHistoryCache();
     private boolean nativeEndpointPoolConfigured;
@@ -168,9 +169,12 @@ public class PirateWallet {
                     LOGGER.info("Pirate Unified Wallet height unavailable after init (height={})", ourHeight);
                     return false;
                 }
-                if (!this.isNullSeedWallet && birthday > 1 && ourHeight < birthday) {
-                    LOGGER.warn("Pirate Unified Wallet initialized below birthday {} (height {}).",
-                            birthday, ourHeight);
+                int effectiveBirthday = this.initializedBirthday == null ? birthday : this.initializedBirthday;
+                // The unscanned checkpoint is immediately BEFORE the first block to scan.
+                // Reopening a cancelled scan at birthday-1 is valid, not an init failure.
+                if (!this.isNullSeedWallet && effectiveBirthday > 1 && ourHeight < (long) effectiveBirthday - 1) {
+                    LOGGER.warn("Pirate Unified Wallet initialized below its birthday checkpoint {} (height {}).",
+                            effectiveBirthday - 1, ourHeight);
                     return false;
                 }
             } else {
@@ -373,6 +377,26 @@ public class PirateWallet {
         }
 
         this.seedPhrase = outputSeedPhrase;
+        if (this.unifiedWallet) {
+            JSONObject initialized = parseJsonObject(outputSeedResponse, "initfromseed wallet ID");
+            String walletId = initialized == null ? null : initialized.optString("wallet_id", null);
+            JSONObject registry = parseJsonObject(LiteWalletJni.invokeJson("{\"method\":\"list_wallets\"}", false), "list_wallets");
+            // initfromseed echoes the requested birthday in JNI 0.3.11, even
+            // when reopening an existing registry. Read that wallet's metadata.
+            if (walletId == null || registry == null || !registry.optBoolean("ok", false)
+                    || !(registry.opt("result") instanceof org.json.JSONArray)) return false;
+            org.json.JSONArray wallets = registry.getJSONArray("result");
+            this.initializedBirthday = null;
+            for (int i = 0; i < wallets.length(); ++i) {
+                JSONObject metadata = wallets.getJSONObject(i);
+                if (!walletId.equals(metadata.optString("id", null))) continue;
+                long actualBirthday = metadata.getLong("birthday_height");
+                if (actualBirthday < 1 || actualBirthday > Integer.MAX_VALUE) return false;
+                this.initializedBirthday = (int) actualBirthday;
+                break;
+            }
+            if (this.initializedBirthday == null) return false;
+        }
         return true;
     }
 
@@ -1104,7 +1128,17 @@ public class PirateWallet {
             return false;
         }
 
-        // Assume synchronized if within 2 blocks of the chain tip
+        if (this.unifiedWallet) {
+            long lag = (long) chainTip - height;
+            boolean synchronizedNow = height > 0 && chainTip > 0 && Math.abs(lag) <= 2;
+            if (!synchronizedNow) {
+                LOGGER.info("Pirate Unified wallet needs sync (walletHeight={}, liveChainHeight={}, lag={})",
+                        height, chainTip, lag);
+            }
+            return synchronizedNow;
+        }
+
+        // Preserve the legacy client's height comparison.
         return height >= (chainTip - 2);
     }
 
@@ -1204,6 +1238,26 @@ public class PirateWallet {
     }
 
     public Integer getChainTip() {
+        if (this.unifiedWallet) {
+            // Unified JNI's info.latest_block_height can be the target of its
+            // last completed sync. Comparing two cached heights can suppress
+            // incremental sync forever and construct already-expired sends.
+            try {
+                BitcoinyBlockchainProvider provider = PirateChain.getInstance().getBlockchainProvider();
+                int height = provider.getCurrentHeight();
+                // A failed query can rotate the Java endpoint. The controller
+                // must align the native wallet before trusting the new server.
+                if (!this.usesServer(provider.getCurrentServer())) {
+                    LOGGER.info("Pirate Unified wallet endpoint changed while checking live chain height");
+                    return null;
+                }
+                return height > 0 ? height : null;
+            } catch (ForeignBlockchainException | RuntimeException e) {
+                LOGGER.info("Unable to verify Pirate Unified wallet live chain height: {}", e.getMessage());
+                return null;
+            }
+        }
+
         String response = LiteWalletJni.execute("info", "");
         JSONObject json = parseJsonObject(response, "info");
         if (json != null && json.has("latest_block_height")) {
@@ -1256,22 +1310,34 @@ public class PirateWallet {
     }
 
     public String getWalletAddress() {
+        if (this.unifiedWallet) {
+            // Ask for the active pool's address without exporting spending keys.
+            // Re-read it after sync so a cached Sapling address cannot mask the
+            // switch to Ironwood when the activation height becomes known.
+            JSONObject activeWallet = parseJsonObject(
+                    LiteWalletJni.invokeJson("{\"method\":\"get_active_wallet\"}", false),
+                    "get_active_wallet");
+            if (activeWallet == null || !activeWallet.optBoolean("ok", false)
+                    || !(activeWallet.opt("result") instanceof String)) {
+                return null;
+            }
+            String walletId = activeWallet.optString("result", null);
+            if (walletId == null || walletId.isBlank()) {
+                return null;
+            }
+            JSONObject request = new JSONObject()
+                    .put("method", "current_receive_address")
+                    .put("wallet_id", walletId);
+            String address = PirateWallet.getUnifiedReceiveAddress(LiteWalletJni.invokeJson(request.toString(), false));
+            if (address == null) {
+                LOGGER.info("Unable to obtain active Unified Wallet receiving address");
+            }
+            return address;
+        }
+
         String cachedAddress = this.walletAddress;
         if (cachedAddress != null) {
             return cachedAddress;
-        }
-
-        if (this.unifiedWallet) {
-            // The Unified Wallet's export command returns the active address and
-            // its matching key material. Do not pick the first balance address:
-            // after Ironwood activation that could be an older Sapling address.
-            String address = PirateWallet.getUnifiedExportAddress(LiteWalletJni.execute("export", ""));
-            if (address == null) {
-                LOGGER.info("Unable to obtain active Unified Wallet address from export");
-            } else {
-                this.walletAddress = address;
-            }
-            return address;
         }
 
         // Get balance, which also contains wallet addresses
@@ -1295,21 +1361,18 @@ public class PirateWallet {
         return address;
     }
 
-    static String getUnifiedExportAddress(String response) {
+    static String getUnifiedReceiveAddress(String response) {
         if (response == null || response.trim().isEmpty()) {
             return null;
         }
 
         try {
-            JSONArray entries = new JSONArray(response);
-            if (entries.isEmpty()) {
+            JSONObject json = new JSONObject(response);
+            if (!json.optBoolean("ok", false) || !(json.opt("result") instanceof String)) {
                 return null;
             }
-            JSONObject firstEntry = entries.getJSONObject(0);
-            if (!firstEntry.has("address") || firstEntry.isNull("address")) {
-                return null;
-            }
-            return firstEntry.getString("address");
+            String address = json.getString("result");
+            return PirateChainAddress.isValid(address) ? address : null;
         } catch (JSONException e) {
             return null;
         }

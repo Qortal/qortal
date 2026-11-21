@@ -6,7 +6,7 @@ set -euo pipefail
 # - Builds a changelog from GitHub compare between previous tag and current tag
 # - Escapes @ in commit messages to avoid accidental mentions (e.g. @Override)
 # - Intentionally @mentions real contributor logins in a dedicated section
-# - Packages qortal/ directory into qortal.zip and computes hashes
+# - Stages the runtime files into qortal.zip and computes hashes
 #
 # Usage:
 #   ./release.sh 6.1.0
@@ -14,7 +14,6 @@ set -euo pipefail
 # Optional env:
 #   GH_TOKEN=...     # strongly recommended to avoid GitHub API rate limits
 #   REPO=Qortal/qortal
-#   BRANCH=master
 #   WORKING_QORTAL_DIR=./qortal
 # -----------------------------------------------------------------------------
 
@@ -25,7 +24,6 @@ if [[ -z "${VERSION}" ]]; then
 fi
 
 REPO="${REPO:-Qortal/qortal}"
-BRANCH="${BRANCH:-master}"
 WORKING_QORTAL_DIR="${WORKING_QORTAL_DIR:-./qortal}"
 
 TAG="v${VERSION}"
@@ -35,8 +33,8 @@ need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "Missing dependency: $1";
 for c in bash curl jq git sed awk sort find touch md5sum sha1sum sha256sum 7z; do need_cmd "$c"; done
 
 # ---- tmp workspace ----------------------------------------------------------
-TMPDIR="$(mktemp -d)"
-cleanup() { rm -rf "$TMPDIR"; }
+RELEASE_TMP="$(mktemp -d)"
+cleanup() { rm -rf "$RELEASE_TMP"; }
 trap cleanup EXIT
 
 # ---- github api helpers -----------------------------------------------------
@@ -61,7 +59,7 @@ gh_api() {
 # Works if tags are like v6.1.0, v6.0.9, etc.
 get_prev_tag() {
   local repo_url="https://github.com/${REPO}.git"
-  local tags_file="${TMPDIR}/tags.txt"
+  local tags_file="${RELEASE_TMP}/tags.txt"
 
   git ls-remote --tags --refs "$repo_url" 'v*' \
     | awk -F'/' '{print $NF}' \
@@ -143,8 +141,8 @@ CHANGELOG_MD="$(
 
 # ---- latest commit timestamp for file timestamping --------------------------
 LATEST_COMMIT_TS="$(
-  gh_api "https://api.github.com/repos/${REPO}/commits?sha=${BRANCH}&per_page=1" \
-    | jq -r '.[0].commit.committer.date'
+  gh_api "https://api.github.com/repos/${REPO}/commits/${TAG}" \
+    | jq -r '.commit.committer.date'
 )"
 if [[ -z "$LATEST_COMMIT_TS" || "$LATEST_COMMIT_TS" == "null" ]]; then
   echo "Error: unable to fetch latest commit timestamp"
@@ -182,18 +180,20 @@ if [[ ! -f "$JAR_FILE" ]]; then
 
   if [[ "$choice" == "1" ]]; then
     need_cmd mvn
-    BUILD_DIR="${TMPDIR}/qortal-build"
-    echo "Cloning ${REPO} (${BRANCH}) and compiling..."
-    git clone --depth 1 --branch "$BRANCH" "https://github.com/${REPO}.git" "$BUILD_DIR"
+    BUILD_DIR="${RELEASE_TMP}/qortal-build"
+    echo "Cloning ${REPO} (${TAG}) and compiling..."
+    git clone --depth 1 --branch "$TAG" "https://github.com/${REPO}.git" "$BUILD_DIR"
     (
       cd "$BUILD_DIR"
       mvn clean package
     )
-    BUILT_JAR="$(find "${BUILD_DIR}/target" -maxdepth 1 -type f -name 'qortal-*.jar' | sort | tail -n1 || true)"
-    if [[ -z "$BUILT_JAR" || ! -f "$BUILT_JAR" ]]; then
-      echo "Error: compile completed but no target/qortal-*.jar was found."
+    shopt -s nullglob
+    BUILT_JARS=("${BUILD_DIR}/target/"qortal-*.jar)
+    if (( ${#BUILT_JARS[@]} != 1 )); then
+      echo 'Error: expected exactly one target/qortal-*.jar.'
       exit 1
     fi
+    BUILT_JAR=${BUILT_JARS[0]}
     cp "$BUILT_JAR" "$JAR_FILE"
     echo "Copied compiled jar to ${JAR_FILE}"
   elif [[ "$choice" == "2" ]]; then
@@ -226,12 +226,7 @@ download_required_file() {
 
   if [[ "$file" == "settings.json" ]]; then
     cat > "$target_path" <<'EOF'
-{
-  "balanceRecorderEnabled": true,
-  "apiWhitelistEnabled": false,
-  "allowConnectionsWithOlderPeerVersions": false,
-  "apiRestricted": false
-}
+{}
 EOF
     return
   fi
@@ -240,7 +235,7 @@ EOF
     remote_path="tools/${file}"
   fi
 
-  curl -fsSL "https://raw.githubusercontent.com/${REPO}/refs/heads/${BRANCH}/${remote_path}" -o "$target_path"
+  curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/${remote_path}" -o "$target_path"
   if [[ "$file" == "qort" || "$file" == "start.sh" || "$file" == "stop.sh" ]]; then
     chmod +x "$target_path"
   fi
@@ -285,22 +280,22 @@ else
   EXE_MD5="<INPUT>"; EXE_SHA1="<INPUT>"; EXE_SHA256="<INPUT>"
 fi
 
-# ---- apply commit timestamp to files in working dir -------------------------
-echo "Applying commit timestamp (${LATEST_COMMIT_TS}) to files in ${WORKING_QORTAL_DIR}..."
-# keep qortal.exe out of the directory while timestamping if present
-if [[ -f "$EXE_FILE" ]]; then
-  mv -f "$EXE_FILE" "${WORKING_QORTAL_DIR}/" || true
-fi
-find "$WORKING_QORTAL_DIR" -type f -exec touch -d "$LATEST_COMMIT_TS" {} \;
-if [[ -f "${WORKING_QORTAL_DIR}/qortal.exe" ]]; then
-  mv -f "${WORKING_QORTAL_DIR}/qortal.exe" "$EXE_FILE" || true
-fi
+# Stage only runtime files. Never recursively zip a working/running Core,
+# which can contain wallet storage, API keys, databases and unrelated files.
+RELEASE_DIR="${RELEASE_TMP}/bundle/qortal"
+mkdir -p "$RELEASE_DIR"
+for file in qortal.jar log4j2.properties start.sh stop.sh qort; do
+  cp "${WORKING_QORTAL_DIR}/${file}" "$RELEASE_DIR/$file"
+done
+printf '{}\n' > "$RELEASE_DIR/settings.json"
+chmod +x "$RELEASE_DIR/start.sh" "$RELEASE_DIR/stop.sh" "$RELEASE_DIR/qort"
+find "${RELEASE_TMP}/bundle" -exec touch -d "$LATEST_COMMIT_TS" {} \;
 
 # ---- create zip -------------------------------------------------------------
 ZIP_FILE="./qortal.zip"
 echo "Packing ${ZIP_FILE}..."
-rm -f "$ZIP_FILE"
-7z a -r -tzip "$ZIP_FILE" "${WORKING_QORTAL_DIR}/" -stl
+(cd "${RELEASE_TMP}/bundle"; 7z a -r -tzip "${RELEASE_TMP}/qortal.zip" qortal/ -stl)
+mv -f "${RELEASE_TMP}/qortal.zip" "$ZIP_FILE"
 
 calculate_hashes "$ZIP_FILE"
 ZIP_MD5="$MD5"; ZIP_SHA1="$SHA1"; ZIP_SHA256="$SHA256"
@@ -356,7 +351,7 @@ Bare minimum runtime bundle:
 - \`settings.json\`
 
 All timestamps set to: \`${LATEST_COMMIT_TS}\`  
-Packed via: \`7z a -r -tzip qortal.zip ${WORKING_QORTAL_DIR}/\`
+Packed from a temporary \`qortal/\` directory containing only the files listed above.
 
 \`MD5: ${ZIP_MD5}\`  
 \`SHA1: ${ZIP_SHA1}\`  

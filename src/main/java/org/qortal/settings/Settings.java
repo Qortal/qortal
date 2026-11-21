@@ -29,6 +29,7 @@ import org.eclipse.persistence.jaxb.UnmarshallerProperties;
 import org.qortal.block.BlockChain;
 import org.qortal.controller.arbitrary.ArbitraryDataStorageManager.StoragePolicy;
 import org.qortal.crosschain.Bitcoin.BitcoinNet;
+import org.qortal.crosschain.monero.MoneroNetwork;
 import org.qortal.crosschain.Digibyte.DigibyteNet;
 import org.qortal.crosschain.Dogecoin.DogecoinNet;
 import org.qortal.crosschain.Litecoin.*;
@@ -211,6 +212,8 @@ public class Settings {
 
 	// Peer-to-peer related
 	private boolean isTestNet = false;
+	/** Optional wallet network override. Keep raw text so invalid enum names cannot silently become null. */
+	private String moneroNetwork;
 	/** Single node testnet mode */
 	private boolean singleNodeTestnet = false;
 	/** Port number for inbound peer-to-peer connections. */
@@ -405,7 +408,8 @@ public class Settings {
 	/** Storage policy to indicate which data should be hosted */
 	private String storagePolicy = "FOLLOWED_OR_VIEWED";
 
-	/** Whether to allow data outside of the storage policy to be relayed between other peers */
+	/** Whether to relay data outside of the storage policy between other peers.
+	 * File discovery and background metadata fetching remain enabled independently. */
 	private boolean relayModeEnabled = true;
 
 	/** Whether to remember which data was originally uploaded using this node.
@@ -850,6 +854,8 @@ public class Settings {
 
 	private void validate() {
 		// Validation goes here
+		getMoneroNetwork();
+
 		if (this.minBlockchainPeers < 1 && !singleNodeTestnet)
 			throwValidationError("minBlockchainPeers must be at least 1");
 
@@ -1052,6 +1058,18 @@ public class Settings {
 
 	public boolean isTestNet() {
 		return this.isTestNet;
+	}
+
+	public MoneroNetwork getMoneroNetwork() {
+		if (this.moneroNetwork == null)
+			return this.isTestNet ? MoneroNetwork.STAGENET : MoneroNetwork.MAINNET;
+
+		try {
+			return MoneroNetwork.valueOf(this.moneroNetwork.trim().toUpperCase(Locale.ROOT));
+		} catch (IllegalArgumentException e) {
+			String message = "moneroNetwork must be one of: " + EnumUtils.getNames(MoneroNetwork.class, ", ");
+			throw new RuntimeException(message, new UnmarshalException(message));
+		}
 	}
 
 	public boolean isSingleNodeTestnet() {

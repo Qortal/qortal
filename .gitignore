@@ -2,6 +2,8 @@
 /lists/
 /bin/
 /target/
+/codegraph-cache/
+__pycache__/
 /qortal-backup/
 /log.txt.*
 /arbitrary*
@@ -37,5 +39,6 @@ qdn-unified-wallet*
 /LiteWalletJNI-*-publish/
 /LiteWalletJNI-*-release/
 /pirate-unified-wallet-qortal-jni-artifacts-*.zip
+/stashi-qortal-jni-*.zip
 qortal.log
 *.gz

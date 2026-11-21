@@ -3,19 +3,67 @@ package org.qortal.crosschain;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
+import org.qortal.test.common.Common;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.ArrayList;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
-public class PirateTransactionHistoryTests {
+public class PirateTransactionHistoryTests extends Common {
+
+    @Test
+    public void unifiedHistoryRejectsFractionalAndOverflowingAtomicAmounts() throws Exception {
+        for (Object invalid : List.of(new BigDecimal("1.5"), new BigInteger("9223372036854775808"), 9007199254740992.0)) {
+            for (String field : List.of("amount", "fee", "timestamp")) {
+                JSONObject entry = transaction("invalid", 1700000000L, "25", "1", null).put(field, invalid);
+                try {
+                    PirateTransactionHistory.parseUnified(new JSONArray().put(entry), new JSONArray(), "zs-wallet");
+                    fail("Must reject inexact/overflowing atomic " + field);
+                } catch (ForeignBlockchainException expected) {
+                    assertTrue(expected.getMessage().contains(field));
+                }
+            }
+        }
+    }
+
+    @Test
+    public void qortalHistoryRejectsFractionalAmountsAndRecipientValues() throws Exception {
+        JSONObject entry = new JSONObject().put("txid", "invalid").put("datetime", 1700000000L)
+                .put("amount", new BigDecimal("1.5"));
+        try {
+            PirateTransactionHistory.parseQortal(new JSONArray().put(entry), "zs-wallet", 10000L);
+            fail("Must not truncate an atomic amount");
+        } catch (ForeignBlockchainException expected) { }
+        JSONObject recipient = new JSONObject().put("address", "zs-recipient").put("value", new BigDecimal("2.5"));
+        entry.put("amount", 25L).put("outgoing_metadata", new JSONArray().put(recipient));
+        try {
+            PirateTransactionHistory.parseQortal(new JSONArray().put(entry), "zs-wallet", 10000L);
+            fail("Must not truncate a recipient's atomic amount");
+        } catch (ForeignBlockchainException expected) { }
+    }
+
+    @Test
+    public void unifiedHistoryPreservesLargeSignedIntegerAmounts() throws Exception {
+        long amount = -9007199254740993L; // Beyond double's consecutive integer precision.
+        JSONObject entry = transaction("exact", 1700000000L, "0", "1", null).put("amount", amount);
+        List<SimpleTransaction> result = PirateTransactionHistory.parseUnified(
+                new JSONArray().put(entry), new JSONArray(), "zs-wallet");
+        assertEquals(amount, result.get(0).getTotalAmount());
+    }
 
     @Test
     public void unifiedLocalHistoryMapsAmountsAndKnownIncomingAddresses() throws ForeignBlockchainException {
@@ -193,6 +241,62 @@ public class PirateTransactionHistoryTests {
         return new SimpleTransaction(txId, 1L, -25L, 1L,
                 Collections.emptyList(),
                 List.of(new SimpleTransaction.Output("[UNKNOWN]", 25L, false)), null);
+    }
+
+    @Test
+    public void failedRecipientDoesNotStarveUntriedOlderTransactionsAfterCooldown() {
+        PirateChain.RecipientEnrichmentCache cache = new PirateChain.RecipientEnrichmentCache(10);
+        List<SimpleTransaction> transactions = List.of(unresolvedTransaction("unrecoverable-newest"),
+                unresolvedTransaction("recoverable-older"));
+        assertEquals("unrecoverable-newest", cache.claimNext(transactions, 100L));
+        cache.failed("unrecoverable-newest", 200L);
+        // A slow native lookup can exceed the cooldown before the next claim.
+        assertEquals("recoverable-older", cache.claimNext(transactions, 201L));
+    }
+
+    @Test(timeout = 10000)
+    public void enrichmentBatchContinuesAfterFailureAndStopsAtItsBudget() throws Exception {
+        PirateChain.RecipientEnrichmentCache cache = new PirateChain.RecipientEnrichmentCache(10);
+        List<SimpleTransaction> transactions = new ArrayList<>();
+        for (int i = 0; i < 8; ++i) transactions.add(unresolvedTransaction("transaction-" + i));
+        List<String> attempted = Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch batch = new CountDownLatch(4);
+        ScheduledThreadPoolExecutor scheduler = new ScheduledThreadPoolExecutor(1);
+        try {
+            cache.scheduleBatch(scheduler, transactions, txId -> {
+                attempted.add(txId);
+                try {
+                    if (txId.equals("transaction-0")) throw new IllegalStateException("unavailable");
+                    cache.completed(txId, new PirateTransactionHistory.RecoveredRecipients(txId,
+                            List.of(new SimpleTransaction.Output("zs-recovered-" + txId, 25L, false)), null));
+                } finally {
+                    batch.countDown();
+                }
+            }, 4, 0L, TimeUnit.MILLISECONDS);
+            assertTrue("A failed first lookup must not stop recovery", batch.await(5, TimeUnit.SECONDS));
+            scheduler.shutdown();
+            assertTrue(scheduler.awaitTermination(2, TimeUnit.SECONDS));
+            assertEquals(List.of("transaction-0", "transaction-1", "transaction-2", "transaction-3"), attempted);
+            List<SimpleTransaction> enriched = cache.overlay(transactions);
+            assertEquals("[UNKNOWN]", enriched.get(0).getOutputs().get(0).getAddress());
+            assertEquals("zs-recovered-transaction-3", enriched.get(3).getOutputs().get(0).getAddress());
+            assertEquals("transaction-4", cache.claimNext(transactions, System.currentTimeMillis()));
+        } finally {
+            scheduler.shutdownNow();
+            assertTrue(scheduler.awaitTermination(2, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void rejectedEnrichmentSchedulingReleasesItsClaim() {
+        PirateChain.RecipientEnrichmentCache cache = new PirateChain.RecipientEnrichmentCache(10);
+        List<SimpleTransaction> transactions = List.of(unresolvedTransaction("first"));
+        ScheduledThreadPoolExecutor scheduler = new ScheduledThreadPoolExecutor(1);
+        scheduler.shutdown();
+        cache.scheduleBatch(scheduler, transactions, txId -> {
+            throw new AssertionError("Rejected work must not run");
+        }, 4, 0L, TimeUnit.MILLISECONDS);
+        assertEquals("first", cache.claimNext(transactions, 100L));
     }
 
     private static JSONObject transaction(String txid, long timestamp, String amount, String fee, String memo) {

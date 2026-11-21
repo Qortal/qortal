@@ -272,11 +272,14 @@ public class TradeBot implements Listener {
 		return TradeBotUtils.startResponseMultiple(repository, acct, crossChainTradeDataList, receiveAddress, foreignKey, bitcoiny);
 	}
 
-	public boolean deleteEntry(Repository repository, byte[] tradePrivateKey) throws DataException {
+	public synchronized boolean deleteEntry(Repository repository, byte[] tradePrivateKey) throws DataException {
+		repository.discardChanges();
 		TradeBotData tradeBotData = repository.getCrossChainRepository().getTradeBotData(tradePrivateKey);
 		if (tradeBotData == null)
 			// Can't delete what we don't have!
 			return false;
+		HtlcRecoveryState recovery = HtlcRecoveryState.decode(tradeBotData.getLastTransactionSignature());
+		if (recovery != null && !recovery.confirmed) return false;
 
 		boolean canDelete = false;
 
@@ -334,11 +337,14 @@ public class TradeBot implements Listener {
 						continue;
 					}
 
-					acctTradeBot.progress(repository, tradeBotData);
+					if (!BitcoinyHtlcRecovery.holdPending(repository, tradeBotData))
+						acctTradeBot.progress(repository, tradeBotData);
 				} catch (DataException e) {
 					LOGGER.error("Couldn't run trade bot due to repository issue", e);
 				} catch (ForeignBlockchainException e) {
-					LOGGER.warn(() -> String.format("Foreign blockchain issue processing trade-bot entry for AT %s: %s", tradeBotData.getAtAddress(), e.getMessage()));
+					if (e instanceof BitcoinyHtlcFees.ApprovalRequiredException)
+						BitcoinyHtlcRecovery.logApprovalRequired(LOGGER, tradeBotData, (BitcoinyHtlcFees.ApprovalRequiredException) e);
+					else LOGGER.warn(() -> String.format("Foreign blockchain issue processing trade-bot entry for AT %s: %s", tradeBotData.getAtAddress(), e.getMessage()));
 				}
 
 			broadcastPresenceTimestamps();

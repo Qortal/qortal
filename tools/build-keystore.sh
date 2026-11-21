@@ -25,23 +25,28 @@ done
 
 if [ -z "${srcdir}" ]; then
 	echo "Can't find Let's Encrypt folder for ${domain}"
-	exit
+	exit 1
 fi
 
 # key & cert
-rm -f "${domain}.p12"
+# Keep the existing keystore until both conversions succeed. Temporary key
+# material is private and removed on failure or success.
+umask 077
+keystore_dir=$(dirname -- "$keystore")
+staging=$(mktemp -d "$keystore_dir/.qortal-keystore.XXXXXX")
+trap 'rm -rf -- "$staging"' EXIT
 openssl pkcs12 \
 	-inkey "${srcdir}/privkey.pem" -in "${srcdir}/fullchain.pem" \
-	-export -out "${domain}.p12" -passout pass:"${pass}" \
+	-export -out "$staging/cert.p12" -passout pass:"${pass}" \
 	-name "${domain}"
 
-rm -f "${keystore}"
 keytool -importkeystore -noprompt \
-	-srckeystore "${domain}.p12" -srcstoretype PKCS12 -srcstorepass "${pass}" \
-	-destkeystore "${keystore}" -deststorepass "${pass}" -destkeypass "${pass}" \
+	-srckeystore "$staging/cert.p12" -srcstoretype PKCS12 -srcstorepass "${pass}" \
+	-destkeystore "$staging/keystore" -deststorepass "${pass}" -destkeypass "${pass}" \
 	-alias "${domain}"
+mv -f -- "$staging/keystore" "$keystore"
 
-printf "Built keystore: ${keystore}, with password: ${pass}\nFor settings.json:\n"
+printf 'Built keystore: %s, with password: %s\nFor settings.json:\n' "$keystore" "$pass"
 
 printf "\tsslKeystorePathname: \"%s\",\n" "${keystore}"
 printf "\tsslKeystorePassword: \"%s\",\n" "${pass}"

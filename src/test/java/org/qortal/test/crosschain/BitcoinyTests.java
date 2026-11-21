@@ -85,7 +85,7 @@ public abstract class BitcoinyTests extends Common {
 	}
 
 	@Test
-	public void testBuildSpend() {
+	public void testBuildSpend() throws ForeignBlockchainException {
 		String xprv58 = getDeterministicKey58();
 
 		String recipient = getRecipient();

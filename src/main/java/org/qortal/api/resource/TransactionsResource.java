@@ -518,7 +518,7 @@ public class TransactionsResource {
 		Long amount = null;
 		if (amountString != null && !amountString.isEmpty()) {
 			try {
-				amount = new BigDecimal(amountString).setScale(8).unscaledValue().longValue();
+				amount = new BigDecimal(amountString).movePointRight(8).longValueExact();
 			} catch (NumberFormatException | ArithmeticException e) {
 				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
 			}

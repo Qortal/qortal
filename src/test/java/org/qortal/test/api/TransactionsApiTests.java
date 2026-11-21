@@ -2,6 +2,8 @@ package org.qortal.test.api;
 
 import org.junit.Before;
 import org.junit.Test;
+import org.qortal.api.ApiError;
+import org.qortal.api.ApiException;
 import org.qortal.api.resource.TransactionsResource;
 import org.qortal.api.resource.TransactionsResource.ConfirmationStatus;
 import org.qortal.test.common.ApiCommon;
@@ -11,6 +13,8 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 
 public class TransactionsApiTests extends ApiCommon {
 
@@ -24,6 +28,19 @@ public class TransactionsApiTests extends ApiCommon {
 	@Test
 	public void test() {
 		assertNotNull(this.transactionsResource);
+	}
+
+	@Test
+	public void paymentSearchRejectsFractionalUnitsAndOverflow() {
+		for (String amount : List.of("0.000000001", "92233720368.54775808", "-92233720368.54775809")) {
+			try {
+				this.transactionsResource.getPaymentsBetweenAddresses(aliceAddress, null, amount,
+						null, null, ConfirmationStatus.CONFIRMED, null, null, null);
+				fail("Invalid amount must not reach the repository query");
+			} catch (ApiException e) {
+				assertEquals(ApiError.INVALID_CRITERIA.getCode(), e.error);
+			}
+		}
 	}
 
 	@Test

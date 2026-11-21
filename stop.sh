@@ -1,80 +1,87 @@
 #!/usr/bin/env bash
 
-# Check for color support
-if [ -t 1 ]; then
-	ncolors=$( tput colors )
-	if [ -n "${ncolors}" -a "${ncolors}" -ge 8 ]; then
-		if normal="$( tput sgr0 )"; then
-			# use terminfo names
-			red="$( tput setaf 1 )"
-			green="$( tput setaf 2)"
-		else
-			# use termcap names for FreeBSD compat
-			normal="$( tput me )"
-			red="$( tput AF 1 )"
-			green="$( tput AF 2)"
-		fi
-	fi
-fi
-
-# Track the pid if we can find it
-read pid 2>/dev/null <run.pid
-is_pid_valid=$?
-
-# Swap out the API port if the --testnet (or -t) argument is specified
+# Run from the Core's working directory. Never guess a PID from another node.
 api_port=12391
-if [[ "$@" = *"--testnet"* ]] || [[  "$@" = *"-t"* ]]; then
-  api_port=62391
+timeout=${QORTAL_STOP_TIMEOUT:-120}
+usage() { echo "Usage: $0 [-t|--testnet] [--port PORT] [--timeout SECONDS]"; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+while (( $# )); do
+  case $1 in
+    -t|--testnet) api_port=62391; shift ;;
+    --port|--timeout)
+      (( $# >= 2 )) || { usage >&2; exit 2; }
+      if [[ $1 == --port ]]; then api_port=$2; else timeout=$2; fi
+      shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
+[[ $api_port =~ ^[1-9][0-9]{0,4}$ ]] && (( 10#$api_port <= 65535 )) || die 'Invalid API port'
+[[ $timeout =~ ^[1-9][0-9]{0,5}$ ]] || die 'Timeout must be a positive number of seconds'
+timeout=$((10#$timeout))
+
+pid=
+if [[ -e run.pid ]]; then
+  pid=$(cat run.pid) || die 'Cannot read run.pid'
+  [[ $pid =~ ^[1-9][0-9]{0,9}$ ]] && (( pid > 1 && pid <= 2147483647 )) || die 'Invalid run.pid; refusing to signal a process'
+fi
+process_state() { ps -p "$pid" -o stat= 2>/dev/null; }
+running() {
+  local state
+  state=$(process_state) || return 1
+  state=${state//[[:space:]]/}
+  [[ -n $state && $state != Z* ]]
+}
+same_core() {
+  local args process_cwd
+  args=$(ps -p "$pid" -o args= 2>/dev/null) || return 1
+  [[ $args =~ (^|/)java[[:space:]] && $args =~ [[:space:]]-jar[[:space:]]+([^[:space:]]*/)?qortal\.jar([[:space:]]|$) ]] || return 1
+  # On Linux, a stale PID file must not stop another Core installation.
+  if [[ -d /proc/$pid ]]; then
+    process_cwd=$(readlink "/proc/$pid/cwd") || return 1
+    [[ $process_cwd == "$(pwd -P)" ]] || return 1
+  fi
+}
+if [[ -n $pid ]] && running; then
+  same_core || die "PID $pid does not identify Qortal in this directory; refusing to stop it"
+elif [[ -n $pid ]]; then
+  pid=
 fi
 
-# Attempt to locate the process ID if we don't have one
-if [ -z "${pid}" ]; then
-  pid=$(ps aux | grep '[q]ortal.jar' | head -n 1 | awk '{print $2}')
-  is_pid_valid=$?
+apikey=
+if [[ -f apikey.txt ]]; then
+  apikey=$(cat apikey.txt) || die 'Cannot read apikey.txt'
+  apikey=${apikey%$'\r'}
+  [[ $apikey != *$'\n'* && $apikey != *$'\r'* ]] || die 'API key must contain a single line'
 fi
-
-# Locate the API key if it exists
-apikey=$(cat apikey.txt)
-success=0
-
-# Try and stop via the API
-if [ -n "$apikey" ]; then
-  echo "Stopping Qortal via API..."
-  if curl --url "http://localhost:${api_port}/admin/stop?apiKey=$apikey" 1>/dev/null 2>&1; then
-    success=1
+success=false
+if [[ -n $apikey ]]; then
+  echo 'Stopping Qortal via API...'
+  if curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
+      --header "X-API-KEY: $apikey" \
+      --url "http://127.0.0.1:$api_port/admin/stop" >/dev/null; then
+    success=true
   fi
 fi
-
-# Try to kill process with SIGTERM
-if [ "$success" -ne 1 ] && [ -n "$pid" ]; then
-  echo "Stopping Qortal process $pid..."
-  if kill -15 "${pid}"; then
-    success=1
+if ! "$success" && [[ -n $pid ]]; then
+  if running; then
+    same_core || die 'Process identity changed; refusing to signal it'
+    echo "Stopping Qortal process $pid..."
+    kill -TERM "$pid" || die "Could not stop process $pid"
   fi
+  success=true
 fi
-
-# Warn and exit if still no success
-if [ "$success" -ne 1 ]; then
-  if [ -n "$pid" ]; then
-    echo "${red}Stop command failed - not running with process id ${pid}?${normal}"
-  else
-    echo "${red}Stop command failed - not running?${normal}"
-  fi
-  exit 1
+"$success" || die 'Stop failed: no successful API request or verified Core PID'
+if [[ -z $pid ]]; then
+  echo 'Shutdown requested via API; no verified PID is available to monitor completion'
+  exit 0
 fi
-
-if [ "$success" -eq 1 ]; then
-  echo "Qortal node should be shutting down"
-  if [ "${is_pid_valid}" -eq 0 ]; then
-    echo -n "Monitoring for Qortal node to end"
-    while s=`ps -p $pid -o stat=` && [[ "$s" && "$s" != 'Z' ]]; do
-      echo -n .
-      sleep 1
-    done
-    echo
-    echo "${green}Qortal ended gracefully${normal}"
-    rm -f run.pid
-  fi
-fi
-
-exit 0
+echo "Waiting up to $timeout seconds for Qortal process $pid..."
+deadline=$((SECONDS + timeout))
+while running; do
+  same_core || die 'Process identity changed while waiting; run.pid retained'
+  (( SECONDS < deadline )) || die "Qortal is still running after $timeout seconds; inspect the logs/thread dumps. run.pid retained."
+  sleep 1
+done
+if [[ $(cat run.pid 2>/dev/null) == "$pid" ]]; then rm -f run.pid; fi
+echo 'Qortal stopped'

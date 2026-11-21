@@ -12,7 +12,7 @@ public class AmountTypeAdapter extends XmlAdapter<String, Long> {
 		if (input == null)
 			return null;
 
-		return new BigDecimal(input).setScale(8).unscaledValue().longValue();
+		return new BigDecimal(input).movePointRight(8).longValueExact();
 	}
 
 	@Override

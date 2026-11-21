@@ -1,69 +1,39 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-set -e
-
-# Optional git tag?
-if [ $# -ge 1 ]; then
-	git_tag="$1"
-	shift
-fi
-
+(( $# <= 1 )) || { echo "Usage: $0 [git-tag]" >&2; exit 2; }
 saved_pwd=$PWD
+git_dir=$(git rev-parse --show-toplevel)
+cd "$git_dir"
+project=$(perl -ne 'if (m/<artifactId>([\w.-]+)<\/artifactId>/) { print $1; exit }' pom.xml)
+[[ -n $project ]] || { echo 'Unable to determine project name' >&2; exit 1; }
+git_tag=${1:-$(git tag --points-at HEAD)}
+[[ -n $git_tag && $git_tag != *$'\n'* ]] || {
+  echo 'Specify one release tag (or tag HEAD) before packaging' >&2; exit 1;
+}
+shopt -s nullglob
+jars=(target/"$project"*.jar)
+(( ${#jars[@]} == 1 )) || { echo "Expected exactly one target/$project*.jar" >&2; exit 1; }
+[[ -r ${jars[0]} ]] || { echo 'Built JAR is not readable' >&2; exit 1; }
 
-# Check we are within a git repo
-git_dir=$( git rev-parse --show-toplevel )
-if [ -z "${git_dir}" ]; then
-	echo "Cannot determine top-level directory for git repo"
-	exit 1
-fi
-
-# Change to git top-level
-cd ${git_dir}
-
-# Check we are in 'master' branch
-# branch_name=$( git symbolic-ref -q HEAD ) || echo "Cannot determine branch name" && exit 1
-# branch_name=${branch_name##refs/heads/}
-# echo "Current git branch: ${branch_name}"
-# if [ "${branch_name}" != "master" ]; then
-# 	echo "Unexpected current branch '${branch_name}' - expecting 'master'"
-# 	exit 1
-# fi
-
-# Determine project name
-project=$( perl -n -e 'if (m/<artifactId>(\w+)<.artifactId>/) { print $1; exit }' pom.xml $)
-if [ -z "${project}" ]; then
-	echo "Unable to determine project name from pom.xml?"
-	exit 1
-fi
-
-# Extract git tag
-if [ -z "${git_tag}" ]; then
-	git_tag=$( git tag --points-at HEAD )
-	if [ -z "${git_tag}" ]; then
-		echo "Unable to extract git tag"
-		exit 1
-	fi
-fi
-
-build_dir=/tmp/${project}
-commit_ts=$( git show --no-patch --format=%cI )
-
-/bin/rm -fr ${build_dir}
-mkdir -p ${build_dir}
-
-cp target/${project}*.jar ${build_dir}/${project}.jar
-
-git show HEAD:log4j2.properties > ${build_dir}/log4j2.properties
-
-git show HEAD:start.sh > ${build_dir}/start.sh
-git show HEAD:stop.sh > ${build_dir}/stop.sh
-
-chmod +x ${build_dir}/start.sh
-chmod +x ${build_dir}/stop.sh
-
-printf "{\n}\n" > ${build_dir}/settings.json
-
-gtouch -d ${commit_ts%%+??:??} ${build_dir} ${build_dir}/*
-
-rm -f ${saved_pwd}/${project}.zip
-(cd ${build_dir}/..; 7z a -r -tzip ${saved_pwd}/${project}.zip ${project}/)
+# Keep a unique staging directory and replace the output only after success.
+workspace=$(mktemp -d "${TMPDIR:-/tmp}/qortal-release.XXXXXX")
+archive=$(mktemp -d "$saved_pwd/.qortal-archive.XXXXXX")
+trap 'rm -rf -- "$workspace" "$archive"' EXIT
+build_dir=$workspace/$project
+mkdir "$build_dir"
+cp -- "${jars[0]}" "$build_dir/$project.jar"
+for file in log4j2.properties start.sh stop.sh; do
+  git show "HEAD:$file" > "$build_dir/$file"
+done
+git show HEAD:tools/qort > "$build_dir/qort"
+chmod +x "$build_dir/start.sh" "$build_dir/stop.sh" "$build_dir/qort"
+printf '{}\n' > "$build_dir/settings.json"
+# POSIX touch -t avoids requiring GNU gtouch and preserves the actual instant.
+commit_ts=$(git show --no-patch --format=%ct HEAD)
+if timestamp=$(date -u -d "@$commit_ts" +%Y%m%d%H%M.%S 2>/dev/null); then :
+else timestamp=$(date -u -r "$commit_ts" +%Y%m%d%H%M.%S); fi
+TZ=UTC touch -t "$timestamp" "$build_dir" "$build_dir"/*
+(cd "$workspace"; 7z a -r -tzip "$archive/$project.zip" "$project/" -stl)
+mv -f -- "$archive/$project.zip" "$saved_pwd/$project.zip"
+printf 'Built %s\n' "$saved_pwd/$project.zip"

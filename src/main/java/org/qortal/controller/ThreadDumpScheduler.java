@@ -11,6 +11,8 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
+import java.lang.management.LockInfo;
+import java.lang.management.MonitorInfo;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
 import java.text.SimpleDateFormat;
@@ -153,7 +155,7 @@ public class ThreadDumpScheduler {
                     writer.write(String.valueOf(percentage));
                     writer.write( "% CPU Usage Time Relative To Total Time" );
                     writer.newLine();
-                    writer.write(threadInfo.toString());
+                    writer.write(formatThreadInfo(threadInfo));
                     writer.newLine();
                     writer.newLine();
                 }
@@ -165,6 +167,56 @@ public class ThreadDumpScheduler {
         } catch (Exception e) {
             LOGGER.error(e.getMessage(), e);
         }
+    }
+
+    /** ThreadInfo.toString() stops after eight frames, hiding the callers involved in a stall. */
+    static String formatThreadInfo(ThreadInfo threadInfo) {
+        StringBuilder dump = new StringBuilder(2048);
+        dump.append('"').append(threadInfo.getThreadName()).append("\" Id=")
+                .append(threadInfo.getThreadId()).append(' ').append(threadInfo.getThreadState());
+        if (threadInfo.getLockInfo() != null) {
+            dump.append(" on ").append(threadInfo.getLockInfo());
+        }
+        if (threadInfo.getLockOwnerName() != null) {
+            dump.append(" owned by \"").append(threadInfo.getLockOwnerName())
+                    .append("\" Id=").append(threadInfo.getLockOwnerId());
+        }
+        if (threadInfo.isSuspended()) dump.append(" (suspended)");
+        if (threadInfo.isInNative()) dump.append(" (in native)");
+        dump.append('\n');
+
+        StackTraceElement[] stack = threadInfo.getStackTrace();
+        MonitorInfo[] monitors = threadInfo.getLockedMonitors();
+        for (int i = 0; i < stack.length; ++i) {
+            dump.append("\tat ").append(stack[i]).append('\n');
+            if (i == 0 && threadInfo.getLockInfo() != null) {
+                switch (threadInfo.getThreadState()) {
+                    case BLOCKED:
+                        dump.append("\t-  blocked on ").append(threadInfo.getLockInfo()).append('\n');
+                        break;
+                    case WAITING:
+                    case TIMED_WAITING:
+                        dump.append("\t-  waiting on ").append(threadInfo.getLockInfo()).append('\n');
+                        break;
+                    default:
+                        break;
+                }
+            }
+            for (MonitorInfo monitor : monitors) {
+                if (monitor.getLockedStackDepth() == i) {
+                    dump.append("\t-  locked ").append(monitor).append('\n');
+                }
+            }
+        }
+
+        LockInfo[] synchronizers = threadInfo.getLockedSynchronizers();
+        if (synchronizers.length > 0) {
+            dump.append("\n\tNumber of locked synchronizers = ").append(synchronizers.length).append('\n');
+            for (LockInfo synchronizer : synchronizers) {
+                dump.append("\t- ").append(synchronizer).append('\n');
+            }
+        }
+        return dump.toString();
     }
 
     public void shutdown() {

@@ -54,7 +54,7 @@ public final class LocalTradeFunding {
         // Refund keys MUST be durable before a client is allowed to fund an HTLC.
         repository.saveChanges();
         TradeBot.backupTradeBotData(repository, List.of(data));
-        long fee = coin.getP2shFee((data.getLockTimeA() - offer.tradeTimeout * 60L) * 1000L);
+        long fee = BitcoinyHtlcFees.fundingReserve(coin, (data.getLockTimeA() - offer.tradeTimeout * 60L) * 1000L);
         byte[] script = BitcoinyHTLC.buildScript(data.getTradeForeignPublicKeyHash(), data.getLockTimeA(), offer.creatorForeignPKH, data.getHashOfSecret());
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("atAddress", offer.qortalAtAddress);
@@ -81,7 +81,8 @@ public final class LocalTradeFunding {
             return;
         }
         byte[] script = BitcoinyHTLC.buildScript(data.getTradeForeignPublicKeyHash(), data.getLockTimeA(), offer.creatorForeignPKH, data.getHashOfSecret());
-        long amount = Math.addExact(data.getForeignAmount(), coin.getP2shFee((data.getLockTimeA() - offer.tradeTimeout * 60L) * 1000L));
+        // A later fee-policy change must not hide an already confirmed deposit.
+        long amount = data.getForeignAmount();
         BitcoinyHTLC.Status status = BitcoinyHTLC.determineHtlcStatus(coin.getBlockchainProvider(), coin.deriveP2shAddress(script), amount);
         if (status != BitcoinyHTLC.Status.FUNDED) return;
         byte[] message = CrossChainUtils.buildOfferMessage(data.getTradeForeignPublicKeyHash(), data.getHashOfSecret(), data.getLockTimeA());
