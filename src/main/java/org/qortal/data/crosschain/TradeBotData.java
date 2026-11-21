@@ -61,8 +61,9 @@ public class TradeBotData {
 
 	// Null means the original reserve is unknown (legacy trades).
 	private Long fundingFee;
+	// -1 explicitly means unknown; older records defaulted to 0 without a txid.
 	private int fundingOutputIndex = 0;
-	// Display-order txid; null means the funding outpoint has not been established.
+	// Display-order txid; an acknowledged transaction can be known before its output index.
 	private String fundingTxid;
 
 	// Could be Bitcoin or Qortal...
@@ -230,7 +231,7 @@ public class TradeBotData {
 	}
 
 	public void setFundingOutputIndex(int fundingOutputIndex) {
-		if (fundingOutputIndex < 0) throw new IllegalArgumentException("Negative funding output index");
+		if (fundingOutputIndex < -1) throw new IllegalArgumentException("Invalid funding output index");
 		this.fundingOutputIndex = fundingOutputIndex;
 	}
 

@@ -19,12 +19,58 @@ branch. General database-query/index optimizations remain separate.
 | 9 | Native publication fixture has an outdated artifact SHA | Updated the valid fixture to the publisher's pinned SHA. Nested-directory and symlink cases also assert their specific rejection reason, so an unrelated preflight failure cannot mask them. All fifteen script checks and fourteen publication-workflow checks pass. |
 | 10 | Combined guide denies an existing schema migration | Corrected the combined and native guides: 53→54 introduced the funding fee/index; this follow-up adds 54→55 for the transaction ID and deletion records. Both are additive recovery changes and require no blockchain reindex. Rollback guidance distinguishes data compatibility from missing safeguards in an older executable. |
 
-The acknowledged-funding path also refreshes the best-effort JSON snapshot after
-committing the funding pair. A failed snapshot cannot roll back committed recovery
-state. Regression coverage still deliberately uses a stale pre-funding snapshot
-to test restart safety.
+### Follow-up review of `27919bf19`
 
-## Validation
+The second review correctly identified three remaining paths under findings 2
+and 4. The earlier assessment below describes the first review's validation;
+it did not establish that these paths were safe.
+
+- Funding now commits the acknowledged transaction ID before the first output
+  lookup. An index of `-1` explicitly means unknown. Recovery retries that exact
+  transaction and cannot substitute a different address-history deposit. Tests
+  reopen the real HSQLDB repository and run the Controller startup importer after
+  an indexing delay and a simulated exit during the first lookup. Both retain
+  the ID, then recover output 2 without repeating funding. JSON round trips also
+  retain the partial acknowledgement; uppercase native IDs are normalized.
+- While waiting for an offer message, the seller skips redeemed or pending-spend
+  candidates and continues checking later messages. These script-only checks
+  cannot mark an open offer `BOB_DONE`. Existing redemption recovery still
+  requires the exact funding pair, script and three confirmations. A regression
+  checks both spend statuses alone and ahead of a valid funded candidate.
+- Audit selection and cooldown cleanup now share one eligibility predicate.
+  An old confirmed marker without a verified funding pair remains eligible and
+  keeps its cooldown. The new regression combines an ambiguous old confirmed
+  record and a recoverable record over thirty minute-spaced tips in both scan
+  orders, alongside the existing six-record/missing-AT regression.
+
+The existing schema-55 integer field stores `-1`; no new migration is needed.
+An older executable that rejects negative output indexes cannot read an
+unknown-index funding record from this build. Keep a compatible recovery
+executable and the current data while such records are unresolved; do not roll
+back by replacing them with a pre-funding snapshot.
+
+The acknowledged-funding path refreshes the best-effort JSON snapshot after its
+state update. A failed snapshot cannot roll back the independently committed ID.
+Regression coverage deliberately keeps a stale pre-funding snapshot in the
+simulated-exit case to test actual startup reconciliation.
+
+## Validation of the second review
+
+All **170 selected Java tests passed with zero failures, errors or skips**, using
+Java 11. Coverage includes the three reported paths, actual startup and HSQLDB
+round trips, ARRR parsing/outpoint and wallet preparation checks, Bitcoin-family
+fee recovery, and recovery HTTP APIs. Native-wallet and live-server acceptance
+tests were not part of this run.
+
+All five new regression cases also failed against the actual previous
+`b7b05a4dc` testing JAR and passed against the corrected source classes. The old
+JAR lost the acknowledged ID in both indexing-delay cases, starved the later
+record, and closed the open seller offer; it also rejected the new unknown-index
+representation. The probe reported the production class source in both runs.
+This second review changes source and tests; it does not replace the testing JAR
+or establish live funded acceptance.
+
+## Validation of the first review
 
 The final selected Maven regression run completed **427 tests: zero failures,
 zero errors and nine existing skips**. This covers startup/import/export, real
@@ -80,9 +126,9 @@ deletions or checkpoints absent from that backup. Authenticated manual import is
 explicitly allowed to replace rows and clear deletion records. Neither operation
 is the ordinary restart path.
 
-All ten supplied findings are addressed in this follow-up. No remaining blocker
-from that list was found in the final diff and selected regressions. Maintainer
-re-review of the recovery changes remains appropriate before merging. Successful
+The original assessment that all ten findings were fully addressed was too broad:
+the second review exposed the three paths documented above, now corrected.
+Maintainer re-review of the recovery changes remains appropriate before merging. Successful
 live funded ARRR completion and refund acceptance remain unverified, and these
 tests do not resolve the original long-uptime QDN symptom by themselves. No new
 XMR trading protocol or AT implementation is introduced here.

@@ -398,6 +398,85 @@ public class PirateChainRefundTests extends Common {
         verify(acct, atLeastOnce()).populateTradeData(repository, at);
         noBroadcast();
     }
+    @Test public void ambiguousConfirmedLegacyRecordCannotStarveALaterRecoverableRecord() throws Exception {
+        for (boolean reverse : List.of(false, true)) {
+            PirateChainACCTv3TradeBot fresh = freshBot();
+            TradeBotData ambiguous = trade(1), recoverable = trade(2);
+            for (TradeBotData candidate : List.of(ambiguous, recoverable)) {
+                candidate.setState("ALICE_REFUNDED"); candidate.setStateValue(110);
+            }
+            ambiguous.setLastTransactionSignature(new PirateChainRefundState(0, 1L, TXID, true).encode());
+            htlc.when(() -> PirateChainHTLC.countFundingOutputs(any(), eq("b-1"), anyLong())).thenReturn(2);
+            List<TradeBotData> records = reverse ? List.of(recoverable, ambiguous) : List.of(ambiguous, recoverable);
+            when(cross.getAllTradeBotData()).thenReturn(records);
+            PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+            when(acct.populateTradeData(repository, at)).thenReturn(data);
+            try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
+                accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+                for (int minute = 0; minute < 30; minute++) {
+                    clock.when(NTP::getTime).thenReturn(1_000_000L + minute * 60_001L);
+                    for (TradeBotData candidate : records) fresh.progress(repository, candidate);
+                }
+            }
+            assertEquals("ALICE_REFUNDED", ambiguous.getState()); assertFalse(ambiguous.hasFundingOutpoint());
+            assertTrue(PirateChainRefundState.isConfirmed(ambiguous.getLastTransactionSignature()));
+            assertEquals("ALICE_REFUNDING_A", recoverable.getState()); assertTrue(recoverable.hasFundingOutpoint());
+        }
+        htlc.verify(() -> PirateChainHTLC.countFundingOutputs(any(), eq("b-1"), anyLong()), times(2));
+        noBroadcast();
+    }
+
+    @Test public void spentOfferCandidatesDoNotCompleteSellerOrHideALaterFundedCandidate() throws Exception {
+        for (BitcoinyHTLC.Status spent : List.of(BitcoinyHTLC.Status.REDEEM_IN_PROGRESS, BitcoinyHTLC.Status.REDEEMED)) {
+            TradeBotData seller = seller(3, SAPLING);
+            seller.setState("BOB_WAITING_FOR_MESSAGE"); seller.setStateValue(15);
+            when(at.getIsFinished()).thenReturn(false); data.mode = AcctMode.OFFERING;
+            MessageRepository messages = mock(MessageRepository.class);
+            when(repository.getMessageRepository()).thenReturn(messages);
+            var first = mock(org.qortal.data.transaction.MessageTransactionData.class);
+            var second = mock(org.qortal.data.transaction.MessageTransactionData.class);
+            for (var message : List.of(first, second)) {
+                byte[] partner = new byte[33]; partner[0] = (byte) (message == first ? 1 : 2);
+                when(message.getData()).thenReturn(org.qortal.api.resource.CrossChainUtils.buildOfferMessage(partner, new byte[20], 2000));
+                when(message.getTimestamp()).thenReturn(1_000_000L);
+                when(message.getCreatorPublicKey()).thenReturn(new byte[32]);
+            }
+            when(messages.getMessagesByParticipants(any(), any(), any(), any(), any())).thenReturn(List.of(first));
+            when(messages.exists(any(), any(), any())).thenReturn(true); // Later candidate's lock message already sent.
+            htlc.when(() -> PirateChainHTLC.determineHtlcStatus(any(), eq("b-1"), anyLong())).thenReturn(spent);
+            htlc.when(() -> PirateChainHTLC.determineHtlcStatus(any(), eq("b-2"), anyLong())).thenReturn(BitcoinyHTLC.Status.FUNDED);
+            PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+            when(acct.populateTradeData(repository, at)).thenReturn(data);
+            try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class, CALLS_REAL_METHODS);
+                 MockedStatic<TradeBot> bots = mockStatic(TradeBot.class, CALLS_REAL_METHODS)) {
+                accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+                bots.when(TradeBot::getInstance).thenReturn(mock(TradeBot.class));
+                PirateChainACCTv3TradeBot fresh = freshBot();
+                fresh.progress(repository, seller);
+                assertEquals("BOB_WAITING_FOR_MESSAGE", seller.getState());
+                verify(cross, never()).save(seller);
+                when(messages.getMessagesByParticipants(any(), any(), any(), any(), any())).thenReturn(List.of(first, second));
+                fresh.progress(repository, seller);
+                assertEquals("BOB_WAITING_FOR_AT_REDEEM", seller.getState());
+            }
+        }
+    }
+
+    @Test public void partialAcknowledgementNeverBindsAnotherTransaction() throws Exception {
+        TradeBotData attempt = trade(1); attempt.setFundingTxid("33".repeat(32)); attempt.setFundingOutputIndex(-1);
+        htlc.when(() -> PirateChainHTLC.getFundingOutput(any(), eq(attempt.getFundingTxid()), anyString(), anyLong()))
+                .thenReturn(funding(2, 10000L)); // Deliberately wrong transaction returned by the boundary fixture.
+        try {
+            bot.refund(repository, attempt, at, data); fail("Must retain the acknowledged transaction ID");
+        } catch (ForeignBlockchainException expected) {
+            assertTrue(expected.getMessage().contains("outpoint changed"));
+        }
+        assertEquals("33".repeat(32), attempt.getFundingTxid()); assertEquals(-1, attempt.getFundingOutputIndex());
+        assertFalse(attempt.hasFundingOutpoint());
+        htlc.verify(() -> PirateChainHTLC.countFundingOutputs(any(), anyString(), anyLong()), never());
+        noBroadcast();
+    }
+
     @Test public void refundAllContinuesAfterOneWalletFails() throws Exception {
         TradeBotData malformed = trade(3);
         var pub = TradeBotData.class.getDeclaredField("tradeForeignPublicKey"); pub.setAccessible(true); pub.set(malformed, null);

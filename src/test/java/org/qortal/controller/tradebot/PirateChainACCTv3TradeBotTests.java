@@ -95,7 +95,7 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 		PirateChain pirate = mock(PirateChain.class);
 		when(pirate.getP2shFee(any())).thenReturn(20000L);
 		when(pirate.deriveP2shAddress(any())).thenReturn("funding-address");
-		when(pirate.fundP2SH(anyString(), anyString(), anyLong(), anyString())).thenReturn("11".repeat(32));
+		when(pirate.fundP2SH(anyString(), anyString(), anyLong(), anyString())).thenReturn("AB".repeat(32));
 		try (Repository repository = RepositoryManager.getRepository();
 			 MockedStatic<PirateChain> pirates = mockStatic(PirateChain.class);
 			 MockedStatic<PirateChainHTLC> htlc = mockStatic(PirateChainHTLC.class, CALLS_REAL_METHODS);
@@ -103,7 +103,7 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 			pirates.when(PirateChain::getInstance).thenReturn(pirate);
 			clock.when(NTP::getTime).thenReturn(1000000L);
 			htlc.when(() -> PirateChainHTLC.getFundingOutput(any(), anyString(), anyString(), anyLong()))
-					.thenReturn(new UnspentOutput(com.google.common.hash.HashCode.fromString("11".repeat(32)).asBytes(), 2, 0, 100020000L));
+					.thenReturn(new UnspentOutput(com.google.common.hash.HashCode.fromString("ab".repeat(32)).asBytes(), 2, 0, 100020000L));
 			Repository spy = spy(repository);
 			MessageRepository messages = mock(MessageRepository.class);
 			doReturn(messages).when(spy).getMessageRepository();
@@ -116,12 +116,96 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 					PirateChainACCTv3.getInstance(), data, Base58.encode(new byte[32]), Common.getTestAccount(repository, "alice").getAddress()));
 			TradeBotData saved = repository.getCrossChainRepository().getAllTradeBotData().get(0);
 			assertEquals(Long.valueOf(20000L), saved.getFundingFee()); assertEquals(2, saved.getFundingOutputIndex());
-			assertEquals("11".repeat(32), saved.getFundingTxid());
+			assertEquals("ab".repeat(32), saved.getFundingTxid());
 			verify(pirate).fundP2SH(anyString(), anyString(), eq(100020000L), anyString());
 			JSONObject backup = new JSONObject(Files.readString(backupDirectory.resolve("TradeBotStates.json")));
 			assertEquals(20000L, backup.getJSONArray("data").getJSONObject(0).getLong("fundingFee"));
-			assertEquals("11".repeat(32), backup.getJSONArray("data").getJSONObject(0).getString("fundingTxid"));
+			assertEquals("ab".repeat(32), backup.getJSONArray("data").getJSONObject(0).getString("fundingTxid"));
 			repository.discardChanges(); // The Mockito spy shares the connection, but copies the dirty flag.
+		}
+	}
+
+	@Test
+	public void acknowledgedFundingSurvivesAnIndexingDelayAndStartup() throws Exception {
+		acknowledgedFundingSurvivesRestart(false);
+	}
+
+	@Test
+	public void acknowledgedFundingIsCommittedBeforeTheFirstOutputLookup() throws Exception {
+		acknowledgedFundingSurvivesRestart(true);
+	}
+
+	private void acknowledgedFundingSurvivesRestart(boolean crashDuringLookup) throws Exception {
+		String txid = "0123456789abcdef".repeat(4);
+		PirateChain pirate = mock(PirateChain.class);
+		when(pirate.getP2shFee(any())).thenReturn(20000L);
+		when(pirate.deriveP2shAddress(any())).thenReturn("funding-address");
+		when(pirate.deriveP2shAddressBPrefix(any())).thenReturn("funding-address");
+		when(pirate.getMedianBlockTime()).thenReturn(5001);
+		when(pirate.fundP2SH(anyString(), anyString(), anyLong(), anyString())).thenReturn(txid);
+		try (MockedStatic<PirateChain> pirates = mockStatic(PirateChain.class);
+			 MockedStatic<PirateChainHTLC> htlc = mockStatic(PirateChainHTLC.class, CALLS_REAL_METHODS);
+			 MockedStatic<NTP> clock = mockStatic(NTP.class)) {
+			pirates.when(PirateChain::getInstance).thenReturn(pirate);
+			clock.when(NTP::getTime).thenReturn(1000000L);
+			htlc.when(() -> PirateChainHTLC.getFundingOutput(any(), eq(txid), anyString(), anyLong())).thenAnswer(call -> {
+				try (Repository reopened = RepositoryManager.getRepository()) {
+					TradeBotData committed = reopened.getCrossChainRepository().getAllTradeBotData().get(0);
+					assertEquals(txid, committed.getFundingTxid());
+					assertEquals(-1, committed.getFundingOutputIndex());
+					assertFalse(committed.hasFundingOutpoint());
+				}
+				if (crashDuringLookup) throw new AssertionError("Simulated process exit before output lookup");
+				throw new org.qortal.crosschain.ForeignBlockchainException("Temporary indexing delay");
+			});
+			try (Repository repository = RepositoryManager.getRepository()) {
+				Repository spy = spy(repository);
+				MessageRepository messages = mock(MessageRepository.class);
+				doReturn(messages).when(spy).getMessageRepository();
+				when(messages.exists(any(), any(), any())).thenReturn(true);
+				CrossChainTradeData data = new CrossChainTradeData();
+				data.qortalAtAddress = Common.getTestAccount(repository, "bob").getAddress();
+				data.creatorForeignPKH = new byte[33]; data.tradeTimeout = 60;
+				data.qortAmount = 100000000L; data.expectedForeignAmount = 100000000L;
+				try {
+					assertEquals(AcctTradeBot.ResponseResult.OK, PirateChainACCTv3TradeBot.getInstance().startResponse(spy, null,
+							PirateChainACCTv3.getInstance(), data, Base58.encode(new byte[32]), Common.getTestAccount(repository, "alice").getAddress()));
+					assertFalse(crashDuringLookup);
+				} catch (AssertionError exit) {
+					if (!"Simulated process exit before output lookup".equals(exit.getMessage())) throw exit;
+					assertTrue(crashDuringLookup);
+				} finally {
+					repository.discardChanges(); // Spy shares the connection but copies its dirty flag.
+				}
+			}
+			var startup = org.qortal.controller.Controller.class.getDeclaredMethod("importRepositoryData");
+			startup.setAccessible(true); startup.invoke(null);
+			try (Repository reopened = RepositoryManager.getRepository()) {
+				TradeBotData restored = reopened.getCrossChainRepository().getAllTradeBotData().get(0);
+				assertEquals(crashDuringLookup ? "ALICE_WAITING_FOR_FUNDING" : "ALICE_WAITING_FOR_AT_LOCK", restored.getState());
+				assertEquals(txid, restored.getFundingTxid()); assertEquals(-1, restored.getFundingOutputIndex());
+				TradeBotData backup = TradeBotData.fromJson(restored.toJson());
+				assertEquals(txid, backup.getFundingTxid()); assertEquals(-1, backup.getFundingOutputIndex());
+				assertFalse(backup.hasFundingOutpoint());
+				byte[] hash = com.google.common.hash.HashCode.fromString(txid).asBytes();
+				com.google.common.primitives.Bytes.reverse(hash);
+				htlc.when(() -> PirateChainHTLC.getFundingOutput(any(), eq(txid), anyString(), anyLong()))
+						.thenReturn(new UnspentOutput(hash, 2, 0, 100020000L));
+				htlc.when(() -> PirateChainHTLC.determineHtlcStatus(any(), anyString(), anyLong(), eq(3), eq(txid), eq(2)))
+						.thenReturn(org.qortal.crosschain.BitcoinyHTLC.Status.REFUNDED);
+				clock.when(NTP::getTime).thenReturn(5_000_000L);
+				var at = mock(org.qortal.data.at.ATData.class); when(at.getIsFinished()).thenReturn(true);
+				CrossChainTradeData data = new CrossChainTradeData();
+				data.mode = org.qortal.crosschain.AcctMode.REFUNDED; data.expectedForeignAmount = 100000000L;
+				data.creatorForeignPKH = new byte[33];
+				assertFalse(PirateChainACCTv3TradeBot.getInstance().refund(reopened, restored, at, data));
+				assertTrue(restored.hasFundingOutpoint()); assertEquals(txid, restored.getFundingTxid());
+				assertEquals(2, restored.getFundingOutputIndex()); assertEquals("ALICE_REFUNDED", restored.getState());
+				htlc.verify(() -> PirateChainHTLC.countFundingOutputs(any(), anyString(), anyLong()), never());
+				htlc.verify(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong()), never());
+				htlc.verify(() -> PirateChainHTLC.recoverSpentFundingOutput(any(), anyString(), anyLong()), never());
+			}
+			verify(pirate, times(1)).fundP2SH(anyString(), anyString(), anyLong(), anyString());
 		}
 	}
 
