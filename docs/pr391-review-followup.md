@@ -67,8 +67,31 @@ All five new regression cases also failed against the actual previous
 JAR lost the acknowledged ID in both indexing-delay cases, starved the later
 record, and closed the open seller offer; it also rejected the new unknown-index
 representation. The probe reported the production class source in both runs.
-This second review changes source and tests; it does not replace the testing JAR
-or establish live funded acceptance.
+The source review initially left the testing JAR unchanged. The subsequent
+pre-release package is documented below; neither establishes live funded
+acceptance.
+
+### Packaged pre-release
+
+Runtime commit `d0398d13a` was packaged from a clean detached checkout using
+Java 11 and the Maven Git plugin's native-Git option for worktree metadata.
+The resulting `6.1.9-d0398d1` shaded JAR completed **510 selected tests with zero
+failures and nine existing witness-related assumption skips**. Class-origin
+checks verified the actual JAR for the recovery implementation, HTTP approval
+reader, settings and Controller. The native wallet pin remains JNI 0.3.11; no
+native or Hub rebuild is required.
+
+Artifact: `qortal-qdn-arrr-xmr-d0398d13a-testing.jar`, 95,201,382 bytes.
+SHA-256:
+
+```text
+2348e22004ee206a944e97c9fa3882e4d793e5eb2abe74fe6688030c973c4ab0
+```
+
+The local stable JAR aliases and companion announcement/checksum/build-receipt
+files now identify this artifact. This prepares the files for the owner's cloud
+upload; it does not install the JAR on a running node. The new unknown-index
+compatibility constraint above still applies.
 
 ## Validation of the first review
 

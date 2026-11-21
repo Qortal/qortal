@@ -9,6 +9,13 @@ The companion .build.json identifies the exact commit, verification and hashes.
 The generated qortal-qdn-arrr-xmr-testing-announcement.txt beside the artifact
 contains the cloud announcement with its final version and checksums.
 
+PR #391 recovery follow-up: ARRR commits an acknowledged funding transaction ID
+before looking up its output. An unknown output index is represented as -1;
+restart recovery retries the saved transaction without funding again or binding
+another deposit. Sellers skip old spent offer candidates instead of closing an
+open offer, and unresolved legacy confirmed-marker records retain their audit
+cooldown so later recoverable records can progress.
+
 ARRR contract discovery: reads both Pirate address-index categories when a
 server misclassifies P2SH funding or spends. Matches contract scripts, verifies
 raw output values/indexes, merges duplicate and mixed index entries, and fails
@@ -57,12 +64,15 @@ names stop startup. After restarting, /admin/info should report Qortal mainnet
 and moneroNetwork "stagenet". Use XMR stagenet coins. This does not activate
 QORT/XMR cross-chain trades.
 
-No new database migration or reindexing is introduced. The separate database
-index/query improvements are not included. Retain the previous JAR, Hub,
-settings and native selection. For rollback, stop Core and restore the previous
-software/native selection while keeping current repository, wallet, pending
-preparation and trade recovery records. Do not delete pending transaction
-records to force another payment.
+This follow-up adds no migration beyond recovery schema 55 and requires no
+blockchain reindex. Upgrades from older builds can still apply the existing
+53-to-54 and 54-to-55 recovery migrations. The separate general database
+index/query improvements are not included. Keep current repository, wallet,
+pending preparation and trade recovery data. For rollback, stop Core first and
+use an executable compatible with every current recovery record. Older builds
+reject the new -1 unknown-index value; retain this build while such records are
+unresolved. Never replace current data with a pre-funding snapshot or delete
+pending transaction records to force another payment.
 
 Live funded ARRR refund acceptance and the original long-running QDN stall
 remain unverified. Native dependency audit/deny checks still report inherited
