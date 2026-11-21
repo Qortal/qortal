@@ -194,7 +194,10 @@ public class CrossChainHtlcResource {
 	@ApiErrors({ApiError.INVALID_CRITERIA, ApiError.INVALID_ADDRESS, ApiError.ADDRESS_UNKNOWN})
 	@SecurityRequirement(name = "apiKey")
 	public boolean redeemHtlc(@HeaderParam(Security.API_KEY_HEADER) String apiKey, @PathParam("ataddress") String atAddress,
-			@io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Optional approval from the matching recovery preview") HtlcRecoveryApproval approval) {
+			@io.swagger.v3.oas.annotations.parameters.RequestBody(
+					description = "Optional approval from the matching recovery preview. Review a fresh quote before submitting its tradeAddress, quoteId and expiresAt. Omit the body for normal recovery without an extra fee deduction.",
+					required = false,
+					content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = HtlcRecoveryApproval.class))) HtlcRecoveryApproval approval) {
 		Security.checkApiCallAllowed(request);
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
@@ -301,7 +304,10 @@ public class CrossChainHtlcResource {
 	@ApiErrors({ApiError.INVALID_CRITERIA, ApiError.INVALID_ADDRESS, ApiError.ADDRESS_UNKNOWN})
 	@SecurityRequirement(name = "apiKey")
 	public boolean refundHtlc(@HeaderParam(Security.API_KEY_HEADER) String apiKey, @PathParam("ataddress") String atAddress,
-			@io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Optional approval from the matching recovery preview") HtlcRecoveryApproval approval) {
+			@io.swagger.v3.oas.annotations.parameters.RequestBody(
+					description = "Optional approval from the matching recovery preview. Review a fresh quote before submitting its tradeAddress, quoteId and expiresAt. Omit the body for normal recovery without an extra fee deduction.",
+					required = false,
+					content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = HtlcRecoveryApproval.class))) HtlcRecoveryApproval approval) {
 		Security.checkApiCallAllowed(request);
 
 		try (final Repository repository = RepositoryManager.getRepository()) {

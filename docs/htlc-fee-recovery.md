@@ -84,6 +84,52 @@ but is not separately approved by these A-contract endpoints. Do not use an
 A-contract approval to authorize another contract. If the fee exceeds all value
 in an output, this single-input recovery cannot spend it.
 
+### HTTP content type and curl
+
+The API documentation page at `/api-documentation/` offers `application/json`
+for both per-AT approval bodies. A nonempty body with `Content-Type: */*` or
+`text/plain` is rejected with HTTP 415 before recovery runs. Empty-body calls
+remain optional, including callers that previously used `text/plain`.
+Malformed JSON, a literal `null` approval, fractional expiry and trailing JSON
+are rejected with HTTP 400; they cannot silently become normal recovery calls.
+
+For direct curl use, set the public AT/trade addresses and enter the API key
+without adding its value to shell history. These commands require `jq`:
+
+```bash
+CORE_URL=http://localhost:12391
+AT_ADDRESS='<AT from the recovery log>'
+TRADE_ADDRESS='<trade address from the recovery log>'
+read -r -s -p 'Core API key: ' QORTAL_API_KEY
+printf '\n'
+
+curl --fail-with-body --silent --show-error --get \
+  "$CORE_URL/crosschain/htlc/redeem/$AT_ADDRESS/quote" \
+  -H "X-API-KEY: $QORTAL_API_KEY" -H 'Accept: application/json' \
+  --data-urlencode "tradeAddress=$TRADE_ADDRESS" \
+  -o qortal-redeem-quote.json
+jq . qortal-redeem-quote.json
+```
+
+Review that single quote's destination, outpoint, fee, additional deduction and
+net payout. Only if accepted, run the following within its five-minute expiry:
+
+```bash
+jq -e 'if type == "array" and length == 1 then .[0] |
+  {tradeAddress, quoteId, expiresAt} else error("Expected exactly one quote") end' \
+  qortal-redeem-quote.json > qortal-redeem-approval.json &&
+curl --fail-with-body --silent --show-error \
+  -X POST "$CORE_URL/crosschain/htlc/redeem/$AT_ADDRESS" \
+  -H "X-API-KEY: $QORTAL_API_KEY" -H 'Accept: text/plain' \
+  -H 'Content-Type: application/json' \
+  --data-binary @qortal-redeem-approval.json
+```
+
+An expired or changed quote requires fetching and reviewing a new one. For an
+owned buyer refund, use `refund` in both URLs and separate refund quote/approval
+files. Never use a redeem quote for a refund. A `true` response acknowledges
+submission; verify the resulting transaction and confirmations in Core's logs.
+
 ## Pending broadcasts and restarts
 
 Before the first broadcast, Core commits the exact funding pair, original reserve
