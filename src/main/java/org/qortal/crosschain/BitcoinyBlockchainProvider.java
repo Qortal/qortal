@@ -17,6 +17,11 @@ public abstract class BitcoinyBlockchainProvider {
 	public static final boolean EXCLUDE_UNCONFIRMED = false;
 	public static final String EMPTY = "";
 
+	/** Current relay floor in atomic units per 1000 bytes. Unavailable policy must not become zero. */
+	public long getMinimumRelayFeePerKb() throws ForeignBlockchainException {
+		throw new ForeignBlockchainException("Network relay fee is unavailable for this provider");
+	}
+
 	/** Sets the blockchain using this provider instance */
 	public abstract void setBlockchain(Bitcoiny blockchain);
 

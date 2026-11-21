@@ -217,6 +217,18 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		return this.netId;
 	}
 
+	@Override
+	public long getMinimumRelayFeePerKb() throws ForeignBlockchainException {
+		Object response = this.rpc("blockchain.relayfee").getResponse();
+		try {
+			long fee = BitcoinyAmounts.atomicUnits(response);
+			if (fee < 0) throw new IllegalArgumentException("Negative relay fee");
+			return fee;
+		} catch (IllegalArgumentException | ArithmeticException e) {
+			throw new ForeignBlockchainException("Invalid network relay fee response");
+		}
+	}
+
 	/**
 	 * Returns current blockchain height.
 	 * <p>

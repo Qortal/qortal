@@ -339,21 +339,21 @@ public class CrossChainBitcoinResource {
 		if (!bitcoin.isValidDeterministicKey(bitcoinSendRequest.xprv58))
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_PRIVATE_KEY);
 
-		Transaction spendTransaction = bitcoin.buildSpend(bitcoinSendRequest.xprv58,
+		try {
+			Transaction spendTransaction = bitcoin.buildSpend(bitcoinSendRequest.xprv58,
 				bitcoinSendRequest.receivingAddress,
 				bitcoinSendRequest.bitcoinAmount,
 				bitcoinSendRequest.feePerByte);
 
-		if (spendTransaction == null)
-			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_BALANCE_ISSUE);
+			if (spendTransaction == null)
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_BALANCE_ISSUE);
 
-		try {
 			bitcoin.broadcastTransaction(spendTransaction);
+			return spendTransaction.getTxId().toString();
 		} catch (ForeignBlockchainException e) {
-			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE);
+			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE, e.getMessage());
 		}
 
-		return spendTransaction.getTxId().toString();
 	}
 
 	@GET
@@ -619,7 +619,7 @@ public class CrossChainBitcoinResource {
 	@Path("/feerequired")
 	@Operation(
 			summary = "The total fee required for unlocking BTC to the trade offer creator.",
-			description = "This is in sats for a transaction that is approximately 300 kB in size.",
+			description = "This is in sats for a transaction that is approximately 309 bytes in size.",
 			responses = {
 					@ApiResponse(
 							content = @Content(
@@ -633,14 +633,18 @@ public class CrossChainBitcoinResource {
 	public String getBitcoinFeeRequired() {
 		Bitcoin bitcoin = Bitcoin.getInstance();
 
-		return String.valueOf(bitcoin.getFeeRequired());
+		try {
+			return String.valueOf(org.qortal.crosschain.BitcoinyHtlcFees.fundingReserve(bitcoin, null));
+		} catch (ForeignBlockchainException e) {
+			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE, e.getMessage());
+		}
 	}
 
 	@POST
 	@Path("/updatefeerequired")
 	@Operation(
 			summary = "The total fee required for unlocking BTC to the trade offer creator.",
-			description = "This is in sats for a transaction that is approximately 300 kB in size.",
+			description = "Configured absolute HTLC spending-fee floor in atomic coin units; the current required reserve can be higher.",
 			requestBody = @RequestBody(
 					required = true,
 					content = @Content(

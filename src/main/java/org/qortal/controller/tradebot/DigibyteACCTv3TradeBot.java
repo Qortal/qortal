@@ -243,7 +243,7 @@ public class DigibyteACCTv3TradeBot implements AcctTradeBot {
 		// Check we have enough funds via xprv58 to fund P2SH to cover expectedForeignAmount
 		long p2shFee;
 		try {
-			p2shFee = Digibyte.getInstance().getP2shFee(now);
+			p2shFee = BitcoinyHtlcFees.fundingReserve(Digibyte.getInstance(), now);
 		} catch (ForeignBlockchainException e) {
 			LOGGER.debug("Couldn't estimate Digibyte fees?");
 			return ResponseResult.NETWORK_ISSUE;
@@ -258,7 +258,9 @@ public class DigibyteACCTv3TradeBot implements AcctTradeBot {
 		String p2shAddress = Digibyte.getInstance().deriveP2shAddress(redeemScriptBytes);
 
 		// Build transaction for funding P2SH-A
-		Transaction p2shFundingTransaction = Digibyte.getInstance().buildSpend(tradeBotData.getForeignKey(), p2shAddress, amountA);
+		Transaction p2shFundingTransaction;
+		try { p2shFundingTransaction = Digibyte.getInstance().buildSpend(tradeBotData.getForeignKey(), p2shAddress, amountA); }
+		catch (ForeignBlockchainException e) { return ResponseResult.NETWORK_ISSUE; }
 		if (p2shFundingTransaction == null) {
 			LOGGER.debug("Unable to build P2SH-A funding transaction - lack of funds?");
 			return ResponseResult.BALANCE_ISSUE;
@@ -488,8 +490,8 @@ public class DigibyteACCTv3TradeBot implements AcctTradeBot {
 			String p2shAddressA = digibyte.deriveP2shAddress(redeemScriptA);
 
 			long feeTimestamp = calcFeeTimestamp(lockTimeA, crossChainTradeData.tradeTimeout);
-			long p2shFee = Digibyte.getInstance().getP2shFee(feeTimestamp);
-			final long minimumAmountA = tradeBotData.getForeignAmount() + p2shFee;
+			// Require a sufficient reserve before committing QORT to a new trade.
+			final long minimumAmountA = Math.addExact(tradeBotData.getForeignAmount(), BitcoinyHtlcFees.fundingReserve(digibyte, feeTimestamp));
 
 			BitcoinyHTLC.Status htlcStatusA = BitcoinyHTLC.determineHtlcStatus(digibyte.getBlockchainProvider(), p2shAddressA, minimumAmountA);
 
@@ -515,6 +517,8 @@ public class DigibyteACCTv3TradeBot implements AcctTradeBot {
 					// Fall-through out of switch...
 					break;
 			}
+
+			BitcoinyHtlcFees.uniqueFunding(digibyte.getUnspentOutputs(p2shAddressA, false), redeemScriptA, minimumAmountA);
 
 			// Good to go - send MESSAGE to AT
 
@@ -587,9 +591,7 @@ public class DigibyteACCTv3TradeBot implements AcctTradeBot {
 			byte[] redeemScriptA = BitcoinyHTLC.buildScript(tradeBotData.getTradeForeignPublicKeyHash(), lockTimeA, crossChainTradeData.creatorForeignPKH, tradeBotData.getHashOfSecret());
 			String p2shAddressA = digibyte.deriveP2shAddress(redeemScriptA);
 
-			long feeTimestamp = calcFeeTimestamp(lockTimeA, crossChainTradeData.tradeTimeout);
-			long p2shFee = Digibyte.getInstance().getP2shFee(feeTimestamp);
-			long minimumAmountA = crossChainTradeData.expectedForeignAmount + p2shFee;
+			long minimumAmountA = crossChainTradeData.expectedForeignAmount;
 
 			BitcoinyHTLC.Status htlcStatusA = BitcoinyHTLC.determineHtlcStatus(digibyte.getBlockchainProvider(), p2shAddressA, minimumAmountA);
 
@@ -733,9 +735,7 @@ public class DigibyteACCTv3TradeBot implements AcctTradeBot {
 		String p2shAddressA = digibyte.deriveP2shAddress(redeemScriptA);
 
 		// Fee for redeem/refund is subtracted from P2SH-A balance.
-		long feeTimestamp = calcFeeTimestamp(lockTimeA, crossChainTradeData.tradeTimeout);
-		long p2shFee = Digibyte.getInstance().getP2shFee(feeTimestamp);
-		long minimumAmountA = crossChainTradeData.expectedForeignAmount + p2shFee;
+		long minimumAmountA = crossChainTradeData.expectedForeignAmount;
 		BitcoinyHTLC.Status htlcStatusA = BitcoinyHTLC.determineHtlcStatus(digibyte.getBlockchainProvider(), p2shAddressA, minimumAmountA);
 
 		switch (htlcStatusA) {
@@ -759,7 +759,7 @@ public class DigibyteACCTv3TradeBot implements AcctTradeBot {
 				ECKey redeemKey = ECKey.fromPrivate(tradeBotData.getTradePrivateKey());
 				List<TransactionOutput> fundingOutputs = digibyte.getUnspentOutputs(p2shAddressA, false);
 
-				Transaction p2shRedeemTransaction = BitcoinyHTLC.buildRedeemTransaction(digibyte.getNetworkParameters(), redeemAmount, redeemKey,
+				Transaction p2shRedeemTransaction = BitcoinyHtlcFees.buildRedeemTransaction(digibyte, redeemAmount, redeemKey,
 						fundingOutputs, redeemScriptA, secretA, receivingAccountInfo);
 
 				digibyte.broadcastTransaction(p2shRedeemTransaction);
@@ -796,9 +796,7 @@ public class DigibyteACCTv3TradeBot implements AcctTradeBot {
 		String p2shAddressA = digibyte.deriveP2shAddress(redeemScriptA);
 
 		// Fee for redeem/refund is subtracted from P2SH-A balance.
-		long feeTimestamp = calcFeeTimestamp(lockTimeA, crossChainTradeData.tradeTimeout);
-		long p2shFee = Digibyte.getInstance().getP2shFee(feeTimestamp);
-		long minimumAmountA = crossChainTradeData.expectedForeignAmount + p2shFee;
+		long minimumAmountA = crossChainTradeData.expectedForeignAmount;
 		BitcoinyHTLC.Status htlcStatusA = BitcoinyHTLC.determineHtlcStatus(digibyte.getBlockchainProvider(), p2shAddressA, minimumAmountA);
 
 		switch (htlcStatusA) {
@@ -827,7 +825,7 @@ public class DigibyteACCTv3TradeBot implements AcctTradeBot {
 				String receiveAddress = digibyte.getUnusedReceiveAddress(tradeBotData.getForeignKey());
 				Address receiving = Address.fromString(digibyte.getNetworkParameters(), receiveAddress);
 
-				Transaction p2shRefundTransaction = BitcoinyHTLC.buildRefundTransaction(digibyte.getNetworkParameters(), refundAmount, refundKey,
+				Transaction p2shRefundTransaction = BitcoinyHtlcFees.buildRefundTransaction(digibyte, refundAmount, refundKey,
 						fundingOutputs, redeemScriptA, lockTimeA, receiving.getHash());
 
 				digibyte.broadcastTransaction(p2shRefundTransaction);

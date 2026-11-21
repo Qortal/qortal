@@ -218,10 +218,11 @@ public abstract class Bitcoiny extends AbstractBitcoinNetParams implements Forei
 	}
 
 	/**
-	 * Returns fixed P2SH spending fee, in sats per 1000bytes, optionally for historic timestamp.
+	 * Returns the configured absolute HTLC spending-fee floor in atomic coin units.
+	 * The current size/rate-aware reserve is calculated by BitcoinyHtlcFees.
 	 *
 	 * @param timestamp optional milliseconds since epoch, or null for 'now'
-	 * @return sats per 1000bytes
+	 * @return atomic coin units
 	 * @throws ForeignBlockchainException if something went wrong
 	 */
 	public abstract long getP2shFee(Long timestamp) throws ForeignBlockchainException;
@@ -533,7 +534,7 @@ public abstract class Bitcoiny extends AbstractBitcoinNetParams implements Forei
 	 * @param feePerByte unscaled fee per byte, or null to use default fees
 	 * @return transaction, or null if insufficient funds
 	 */
-	public Transaction buildSpend(String xprv58, String recipient, long amount, Long feePerByte) {
+	public Transaction buildSpend(String xprv58, String recipient, long amount, Long feePerByte) throws ForeignBlockchainException {
 		Context.propagate(bitcoinjContext);
 
 		Wallet wallet = Wallet.fromSpendingKeyB58(this.params, xprv58, DeterministicHierarchy.BIP32_STANDARDISATION_TIME_SECS);
@@ -542,11 +543,7 @@ public abstract class Bitcoiny extends AbstractBitcoinNetParams implements Forei
 		Address destination = Address.fromString(this.params, recipient);
 		SendRequest sendRequest = SendRequest.to(destination, Coin.valueOf(amount));
 
-		if (feePerByte != null)
-			sendRequest.feePerKb = Coin.valueOf(feePerByte * 1000L); // Note: 1000 not 1024
-		else
-			// Allow override of default for TestNet3, etc.
-			sendRequest.feePerKb = this.getFeePerKb();
+		sendRequest.feePerKb = BitcoinyFees.spendRate(this, feePerByte);
 
 		try {
 			wallet.completeTx(sendRequest);
@@ -566,7 +563,7 @@ public abstract class Bitcoiny extends AbstractBitcoinNetParams implements Forei
 	 *
 	 * @return the completed transaction, ready to broadcast
 	 */
-	public Transaction buildSpendMultiple(String xprv58, Map<String, Long> amountByRecipient, Long feePerByte) {
+	public Transaction buildSpendMultiple(String xprv58, Map<String, Long> amountByRecipient, Long feePerByte) throws ForeignBlockchainException {
 		Context.propagate(bitcoinjContext);
 
 		Wallet wallet = Wallet.fromSpendingKeyB58(this.params, xprv58, DeterministicHierarchy.BIP32_STANDARDISATION_TIME_SECS);
@@ -581,11 +578,7 @@ public abstract class Bitcoiny extends AbstractBitcoinNetParams implements Forei
 
 		SendRequest sendRequest = SendRequest.forTx(transaction);
 
-		if (feePerByte != null)
-			sendRequest.feePerKb = Coin.valueOf(feePerByte * 1000L); // Note: 1000 not 1024
-		else
-			// Allow override of default for TestNet3, etc.
-			sendRequest.feePerKb = this.getFeePerKb();
+		sendRequest.feePerKb = BitcoinyFees.spendRate(this, feePerByte);
 
 		try {
 			wallet.completeTx(sendRequest);
@@ -627,7 +620,7 @@ public abstract class Bitcoiny extends AbstractBitcoinNetParams implements Forei
 	 * @param amount unscaled amount
 	 * @return transaction, or null if insufficient funds
 	 */
-	public Transaction buildSpend(String xprv58, String recipient, long amount) {
+	public Transaction buildSpend(String xprv58, String recipient, long amount) throws ForeignBlockchainException {
 		return buildSpend(xprv58, recipient, amount, null);
 	}
 
@@ -1913,7 +1906,7 @@ public List<SimpleTransaction> getWalletTransactions(String key58) throws Foreig
 
 		// send all the imported coins to the primary receive address
 		SendRequest sendRequest = SendRequest.emptyWallet(firstAddress);
-		sendRequest.feePerKb = this.getFeePerKb();
+		sendRequest.feePerKb = BitcoinyFees.spendRate(this, null);
 
 		try {
 			// allow the wallet to build the send request transaction and broadcast

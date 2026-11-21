@@ -30,6 +30,22 @@ import static org.junit.Assert.*;
 public class ElectrumXResponseTests {
 
 	@Test(timeout = 15000)
+	public void reportedRelayFeeConvertsCoinPerKilobyteExactly() throws Exception {
+		try (Fixture fixture = new Fixture("relay", false)) {
+			assertEquals(100000L, fixture.provider.getMinimumRelayFeePerKb());
+			assertEquals(1, fixture.slow.requests.get());
+		}
+	}
+
+	@Test(timeout = 15000)
+	public void malformedRelayFeeDoesNotFallBackToAnOldFixedFee() throws Exception {
+		try (Fixture fixture = new Fixture("bad-relay", false)) {
+			try { fixture.provider.getMinimumRelayFeePerKb(); fail("Malformed fee accepted"); }
+			catch (ForeignBlockchainException expected) { assertTrue(expected.getMessage().contains("relay fee")); }
+		}
+	}
+
+	@Test(timeout = 15000)
 	public void successfulSlowReplyIsReturnedOnceBeforeRetiringConnection() throws Exception {
 		try (Fixture fixture = new Fixture("valid", true)) {
 			assertEquals(123L, fixture.provider.getConfirmedBalance(new byte[] { 0x51 }));
@@ -161,10 +177,14 @@ public class ElectrumXResponseTests {
 						String line;
 						while ((line = input.readLine()) != null) {
 							JSONObject request = new JSONObject(line);
-							assertEquals("blockchain.scripthash.get_balance", request.getString("method"));
+							assertEquals(reply.contains("relay") ? "blockchain.relayfee" : "blockchain.scripthash.get_balance", request.getString("method"));
 							requests.incrementAndGet();
 							JSONObject response = new JSONObject().put("id", request.get("id")).put("jsonrpc", "2.0");
-							if (reply.equals("valid"))
+							if (reply.equals("relay"))
+								response.put("result", new java.math.BigDecimal("0.001"));
+							else if (reply.equals("bad-relay"))
+								response.put("result", "not-a-number");
+							else if (reply.equals("valid"))
 								response.put("result", new JSONObject().put("confirmed", balance).put("unconfirmed", 0));
 							else if (reply.equals("error"))
 								response.put("error", new JSONObject().put("code", 1)

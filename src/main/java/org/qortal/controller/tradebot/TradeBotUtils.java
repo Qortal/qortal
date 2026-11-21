@@ -7,6 +7,7 @@ import org.qortal.account.PrivateKeyAccount;
 import org.qortal.api.resource.CrossChainUtils;
 import org.qortal.crosschain.ACCT;
 import org.qortal.crosschain.Bitcoiny;
+import org.qortal.crosschain.BitcoinyHtlcFees;
 import org.qortal.crosschain.BitcoinyHTLC;
 import org.qortal.crosschain.ForeignBlockchainException;
 import org.qortal.crypto.Crypto;
@@ -87,7 +88,7 @@ public class TradeBotUtils {
         long now = NTP.getTime();
         long p2shFee;
         try {
-            p2shFee = bitcoiny.getP2shFee(now);
+            p2shFee = BitcoinyHtlcFees.fundingReserve(bitcoiny, now);
         } catch (ForeignBlockchainException e) {
             LOGGER.debug("Couldn't estimate blockchain transaction fees?");
             return AcctTradeBot.ResponseResult.NETWORK_ISSUE;
@@ -155,7 +156,9 @@ public class TradeBotUtils {
         TradeBot.backupTradeBotData(repository, dataToProcess.stream().map( data -> data.tradeBotData).collect(Collectors.toList()));
 
         // Build transaction for funding P2SH-A
-        Transaction p2shFundingTransaction = bitcoiny.buildSpendMultiple(foreignKey, valueByP2shAddress, null);
+        Transaction p2shFundingTransaction;
+        try { p2shFundingTransaction = bitcoiny.buildSpendMultiple(foreignKey, valueByP2shAddress, null); }
+        catch (ForeignBlockchainException e) { return AcctTradeBot.ResponseResult.NETWORK_ISSUE; }
         if (p2shFundingTransaction == null) {
             LOGGER.debug("Unable to build P2SH-A funding transaction - lack of funds?");
             return AcctTradeBot.ResponseResult.BALANCE_ISSUE;

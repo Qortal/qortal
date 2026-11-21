@@ -157,7 +157,9 @@ public final class LocalWalletSupport {
         result.put("sequence", 0xffffffffL);
         result.put("lockTime", 0L);
         result.put("minimumNonDustOutput", Long.toString(minimumP2pkhOutput(coin.currencyCode)));
-        result.put("recommendedFeePerByte", Long.toString(Math.max(1, (coin.getFeePerKb().value + 999) / 1000)));
+        trace.stage = "FEE_POLICY";
+        long rate = BitcoinyFees.perKb(coin);
+        result.put("recommendedFeePerByte", Long.toString(rate / 1000 + (rate % 1000 == 0 ? 0 : 1)));
         Set<String> referenced = new HashSet<>();
         for (Map<String, Object> output : outputs) referenced.add((String) output.get("txHash"));
         previous.keySet().retainAll(referenced);
