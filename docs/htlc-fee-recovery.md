@@ -7,8 +7,8 @@ ARRR continues using its native transaction builder and XMR uses Hub's wallet en
 
 ## Fee policy
 
-Ordinary Core wallet sends and trade funding use at least the configured fee rate
-and the connected Electrum server's reported relay minimum. An explicit wallet
+With default wallet fees, ordinary Core sends and trade funding use at least the
+configured fee rate and the connected Electrum server's reported relay minimum. An explicit wallet
 fee below that reported minimum is rejected, rather than silently increased.
 Hub's watch-only payment preparation receives the same fee recommendation.
 The existing BTC three-argument funding method retains its 20 atomic units/byte
@@ -143,3 +143,18 @@ for that public-chain verification.
 Live approval and confirmation of an underfunded DGB recovery, a new complete
 ARRR cross-chain trade/refund, concurrent long historical account scans and the
 original long-uptime QDN symptom remain release acceptance work.
+
+The final clean packaged runtime is `6.1.9-7e4a364`, from commit `7e4a364f9`,
+95,250,206 bytes. The same full selection also completed successfully against
+that shaded JAR; class-loading records verified the production implementation
+came from the packaged artifact. Its SHA-256 is:
+
+```text
+6ae325d13506c1621ad60d5392494e22698716ef8ec5a06880c27d038efb40e4
+```
+
+A second read-only run using that final JAR against `arrr.qortal.link` recovered
+the same legacy funding pair and exact redeemed classification. No live
+installation, service restart, funding, recovery broadcast or cloud upload was
+performed. The owner publishes the checked artifact as `qortal.jar` in the
+existing test share; local testing aliases point to the same checked bytes.
