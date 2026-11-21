@@ -103,7 +103,7 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 			pirates.when(PirateChain::getInstance).thenReturn(pirate);
 			clock.when(NTP::getTime).thenReturn(1000000L);
 			htlc.when(() -> PirateChainHTLC.getFundingOutput(any(), anyString(), anyString(), anyLong()))
-					.thenReturn(new UnspentOutput(new byte[32], 2, 0, 100020000L));
+					.thenReturn(new UnspentOutput(com.google.common.hash.HashCode.fromString("11".repeat(32)).asBytes(), 2, 0, 100020000L));
 			Repository spy = spy(repository);
 			MessageRepository messages = mock(MessageRepository.class);
 			doReturn(messages).when(spy).getMessageRepository();
@@ -116,9 +116,11 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 					PirateChainACCTv3.getInstance(), data, Base58.encode(new byte[32]), Common.getTestAccount(repository, "alice").getAddress()));
 			TradeBotData saved = repository.getCrossChainRepository().getAllTradeBotData().get(0);
 			assertEquals(Long.valueOf(20000L), saved.getFundingFee()); assertEquals(2, saved.getFundingOutputIndex());
+			assertEquals("11".repeat(32), saved.getFundingTxid());
 			verify(pirate).fundP2SH(anyString(), anyString(), eq(100020000L), anyString());
 			JSONObject backup = new JSONObject(Files.readString(backupDirectory.resolve("TradeBotStates.json")));
 			assertEquals(20000L, backup.getJSONArray("data").getJSONObject(0).getLong("fundingFee"));
+			assertEquals("11".repeat(32), backup.getJSONArray("data").getJSONObject(0).getString("fundingTxid"));
 			repository.discardChanges(); // The Mockito spy shares the connection, but copies the dirty flag.
 		}
 	}
@@ -132,7 +134,7 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 		TradeBotData legacyRestored = TradeBotData.fromJson(legacy);
 		assertNull(legacyRestored.getFundingFee());
 		assertEquals(0, legacyRestored.getFundingOutputIndex());
-		saved.setFundingFee(20000L); saved.setFundingOutputIndex(2);
+		saved.setFundingFee(20000L); saved.setFundingOutputIndex(2); saved.setFundingTxid("ab".repeat(32));
 		try (Repository repository = RepositoryManager.getRepository()) {
 			repository.getCrossChainRepository().save(saved); repository.saveChanges();
 		}
@@ -140,9 +142,12 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 			TradeBotData restored = repository.getCrossChainRepository().getTradeBotData(saved.getTradePrivateKey());
 			assertEquals(Long.valueOf(20000), restored.getFundingFee());
 			assertEquals(2, restored.getFundingOutputIndex());
+			assertEquals(saved.getFundingTxid(), restored.getFundingTxid());
 			assertEquals(2, repository.getCrossChainRepository().getAllTradeBotData().get(0).getFundingOutputIndex());
+			assertEquals(saved.getFundingTxid(), repository.getCrossChainRepository().getAllTradeBotData().get(0).getFundingTxid());
 			TradeBotData backup = TradeBotData.fromJson(restored.toJson());
 			assertEquals(Long.valueOf(20000), backup.getFundingFee()); assertEquals(2, backup.getFundingOutputIndex());
+			assertEquals(saved.getFundingTxid(), backup.getFundingTxid());
 		}
 	}
 
@@ -198,7 +203,7 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 				try (java.sql.ResultSet row = statement.executeQuery("SELECT funding_fee, funding_output_index FROM TradeBotStates")) {
 					assertTrue(row.next()); assertNull(row.getObject(1)); assertEquals(0, row.getInt(2));
 				}
-				assertEquals(54, org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection));
+				assertEquals(55, org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection));
 				statement.execute("SHUTDOWN");
 			}
 		}
@@ -216,7 +221,7 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 			statement.execute("INSERT INTO TradeBotStates VALUES (X'01')");
 
 			org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.updateDatabase(connection);
-			assertEquals(54, org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection));
+			assertEquals(55, org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection));
 			try (java.sql.ResultSet row = statement.executeQuery("SELECT trade_private_key, funding_fee, funding_output_index FROM TradeBotStates")) {
 				assertTrue(row.next()); assertArrayEquals(new byte[] { 1 }, row.getBytes(1));
 				assertNull(row.getObject(2)); assertEquals(0, row.getInt(3)); assertFalse(row.next());
@@ -244,7 +249,7 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 			statement.execute("CREATE TABLE TradeBotStates (funding_fee BIGINT DEFAULT NULL)");
 			statement.execute("INSERT INTO TradeBotStates VALUES (20000)");
 			org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.updateDatabase(connection);
-			assertEquals(54, org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection));
+			assertEquals(55, org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection));
 			try (java.sql.ResultSet row = statement.executeQuery("SELECT funding_fee, funding_output_index FROM TradeBotStates")) {
 				assertTrue(row.next()); assertEquals(20000L, row.getLong(1)); assertEquals(0, row.getInt(2));
 			}
@@ -260,7 +265,7 @@ public class PirateChainACCTv3TradeBotTests extends Common {
 			statement.execute("CREATE TABLE TradeBotStates (funding_output_index INT DEFAULT 0 NOT NULL)");
 			statement.execute("INSERT INTO TradeBotStates VALUES (2)");
 			org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.updateDatabase(connection);
-			assertEquals(54, org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection));
+			assertEquals(55, org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection));
 			try (java.sql.ResultSet row = statement.executeQuery("SELECT funding_fee, funding_output_index FROM TradeBotStates")) {
 				assertTrue(row.next()); assertNull(row.getObject(1)); assertEquals(2, row.getInt(2));
 			}

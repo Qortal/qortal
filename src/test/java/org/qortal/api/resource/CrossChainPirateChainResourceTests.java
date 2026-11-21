@@ -20,6 +20,40 @@ import static org.junit.Assert.*;
 public class CrossChainPirateChainResourceTests {
 
 	@Test
+	public void disabledWalletFeeQuoteUsesTheExistingForeignChainApiError() throws Exception {
+		org.qortal.test.common.Common.useDefaultSettings();
+		try (var pirate = org.mockito.Mockito.mockStatic(org.qortal.crosschain.PirateChain.class)) {
+			try {
+				new CrossChainPirateChainResource().getTradeFees();
+				fail("Expected the disabled-wallet API error");
+			} catch (org.qortal.api.ApiException error) {
+				assertEquals(org.qortal.api.ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE.getCode(), error.error);
+				assertTrue(error.message.contains("disabled"));
+			}
+		}
+	}
+
+	@Test
+	public void disabledWalletPreparationUsesTheExistingForeignChainApiError() throws Exception {
+		org.qortal.test.common.Common.useDefaultSettings();
+		try (var pirate = org.mockito.Mockito.mockStatic(org.qortal.crosschain.PirateChain.class,
+				org.mockito.Mockito.CALLS_REAL_METHODS);
+			 var security = org.mockito.Mockito.mockStatic(org.qortal.api.Security.class)) {
+			pirate.when(org.qortal.crosschain.PirateChain::getInstance).thenReturn(null);
+			var preparation = new org.qortal.api.model.crosschain.PirateChainTradePreparationRequest();
+			preparation.entropy58 = "public-unfunded-fixture";
+			preparation.requiredAmount = 1;
+			try {
+				new CrossChainPirateChainResource().prepareTrade("fixture", preparation);
+				fail("Expected the disabled-wallet API error");
+			} catch (org.qortal.api.ApiException error) {
+				assertEquals(org.qortal.api.ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE.getCode(), error.error);
+				assertTrue(error.message.contains("disabled"));
+			}
+		}
+	}
+
+	@Test
 	public void tradeFeeQuoteSerializesAtomicAmountsWithoutAWallet() throws Exception {
 		org.qortal.test.common.Common.useDefaultSettings();
 		Server server = new Server(new InetSocketAddress("127.0.0.1", 0));

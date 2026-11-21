@@ -26,7 +26,7 @@ public class HSQLDBCrossChainRepository implements CrossChainRepository {
 				+ "trade_native_public_key, trade_native_public_key_hash, "
 				+ "trade_native_address, secret, hash_of_secret, "
 				+ "foreign_blockchain, trade_foreign_public_key, trade_foreign_public_key_hash, "
-				+ "foreign_amount, foreign_key, last_transaction_signature, locktime_a, receiving_account_info, funding_fee, funding_output_index "
+				+ "foreign_amount, foreign_key, last_transaction_signature, locktime_a, receiving_account_info, funding_fee, funding_output_index, funding_txid "
 				+ "FROM TradeBotStates "
 				+ "WHERE trade_private_key = ?";
 
@@ -67,6 +67,7 @@ public class HSQLDBCrossChainRepository implements CrossChainRepository {
 			long fundingFee = resultSet.getLong(21);
 			tradeBotData.setFundingFee(resultSet.wasNull() ? null : fundingFee);
 			tradeBotData.setFundingOutputIndex(resultSet.getInt(22));
+			tradeBotData.setFundingTxid(resultSet.getString(23));
 			return tradeBotData;
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch trade-bot trading state from repository", e);
@@ -111,7 +112,7 @@ public class HSQLDBCrossChainRepository implements CrossChainRepository {
 				+ "trade_native_public_key, trade_native_public_key_hash, "
 				+ "trade_native_address, secret, hash_of_secret, "
 				+ "foreign_blockchain, trade_foreign_public_key, trade_foreign_public_key_hash, "
-				+ "foreign_amount, foreign_key, last_transaction_signature, locktime_a, receiving_account_info, funding_fee, funding_output_index "
+				+ "foreign_amount, foreign_key, last_transaction_signature, locktime_a, receiving_account_info, funding_fee, funding_output_index, funding_txid "
 				+ "FROM TradeBotStates";
 
 		List<TradeBotData> allTradeBotData = new ArrayList<>();
@@ -155,6 +156,7 @@ public class HSQLDBCrossChainRepository implements CrossChainRepository {
 				long fundingFee = resultSet.getLong(22);
 				tradeBotData.setFundingFee(resultSet.wasNull() ? null : fundingFee);
 				tradeBotData.setFundingOutputIndex(resultSet.getInt(23));
+				tradeBotData.setFundingTxid(resultSet.getString(24));
 				allTradeBotData.add(tradeBotData);
 			} while (resultSet.next());
 
@@ -190,10 +192,13 @@ public class HSQLDBCrossChainRepository implements CrossChainRepository {
 				.bind("locktime_a", tradeBotData.getLockTimeA())
 				.bind("receiving_account_info", tradeBotData.getReceivingAccountInfo())
 				.bind("funding_fee", tradeBotData.getFundingFee())
-				.bind("funding_output_index", tradeBotData.getFundingOutputIndex());
+				.bind("funding_output_index", tradeBotData.getFundingOutputIndex())
+				.bind("funding_txid", tradeBotData.getFundingTxid());
 
 		try {
 			saveHelper.execute(this.repository);
+			// Explicit saves/imports can restore a row; startup reconciliation never invokes this for tombstones.
+			this.repository.delete("TradeBotStateDeletions", "trade_private_key = ?", tradeBotData.getTradePrivateKey());
 		} catch (SQLException e) {
 			throw new DataException("Unable to save trade bot data into repository", e);
 		}
@@ -202,9 +207,21 @@ public class HSQLDBCrossChainRepository implements CrossChainRepository {
 	@Override
 	public int delete(byte[] tradePrivateKey) throws DataException {
 		try {
+			HSQLDBSaver deletion = new HSQLDBSaver("TradeBotStateDeletions");
+			deletion.bind("trade_private_key", tradePrivateKey);
+			deletion.execute(this.repository);
 			return this.repository.delete("TradeBotStates", "trade_private_key = ?", tradePrivateKey);
 		} catch (SQLException e) {
 			throw new DataException("Unable to delete trade-bot states from repository", e);
+		}
+	}
+
+	@Override
+	public boolean wasTradeBotDeleted(byte[] tradePrivateKey) throws DataException {
+		try {
+			return this.repository.exists("TradeBotStateDeletions", "trade_private_key = ?", tradePrivateKey);
+		} catch (SQLException e) {
+			throw new DataException("Unable to check definitive trade-bot deletion", e);
 		}
 	}
 

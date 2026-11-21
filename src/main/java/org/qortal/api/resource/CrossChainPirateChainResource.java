@@ -53,9 +53,20 @@ public class CrossChainPirateChainResource {
 	@Path("/tradefees")
 	@Produces(MediaType.APPLICATION_JSON)
 	@Operation(summary = "Returns ARRR trade funding and HTLC spend fees in atomic units")
-	public org.qortal.api.model.crosschain.PirateChainTradeFees getTradeFees() throws ForeignBlockchainException {
-		return new org.qortal.api.model.crosschain.PirateChainTradeFees(PirateChain.getFundingFee(),
-				PirateChain.getInstance().getP2shFee(null));
+	@ApiErrors({ ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE })
+	public org.qortal.api.model.crosschain.PirateChainTradeFees getTradeFees() {
+		try {
+			PirateChain pirate = requireWallet();
+			return new org.qortal.api.model.crosschain.PirateChainTradeFees(PirateChain.getFundingFee(), pirate.getP2shFee(null));
+		} catch (ForeignBlockchainException e) {
+			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE, e.getMessage());
+		}
+	}
+
+	private static PirateChain requireWallet() throws ForeignBlockchainException {
+		PirateChain pirate = PirateChain.getInstance();
+		if (pirate == null) throw new ForeignBlockchainException("Pirate wallet is disabled");
+		return pirate;
 	}
 
 	private static final Logger LOGGER = LogManager.getLogger(CrossChainPirateChainResource.class);
@@ -149,7 +160,7 @@ public class CrossChainPirateChainResource {
 				|| (preparation.approvedQuote != null && !preparation.approvedQuote.matches("[0-9a-f]{64}")))
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
 		try {
-			return PirateChain.getInstance().prepareTrade(preparation);
+			return requireWallet().prepareTrade(preparation);
 		} catch (ForeignBlockchainException e) {
 			this.logError("tradepreparation", e);
 			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE, e.getMessage());
@@ -267,9 +278,7 @@ public class CrossChainPirateChainResource {
 			String entropy58) {
 		Security.checkApiCallAllowed(request);
 		try {
-			PirateChain pirateChain = PirateChain.getInstance();
-			if (pirateChain == null)
-				throw new ForeignBlockchainException("Pirate wallet is disabled");
+			PirateChain pirateChain = requireWallet();
 			return pirateChain.getWalletSpendability(entropy58);
 		} catch (ForeignBlockchainException e) {
 			this.logError("spendability", e);

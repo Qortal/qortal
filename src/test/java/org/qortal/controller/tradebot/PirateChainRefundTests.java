@@ -57,6 +57,13 @@ public class PirateChainRefundTests extends Common {
         MockedStatic<PirateChain> pirates = mockStatic(PirateChain.class); statics.add(pirates);
         pirates.when(PirateChain::getInstance).thenReturn(pirate);
         htlc = mockStatic(PirateChainHTLC.class); statics.add(htlc);
+        htlc.when(() -> PirateChainHTLC.fundingTxid(any())).thenCallRealMethod();
+        htlc.when(() -> PirateChainHTLC.determineHtlcStatus(any(), anyString(), anyLong(), anyInt(), anyString(), anyInt()))
+                .thenAnswer(i -> (int) i.getArgument(3) == 1
+                        ? PirateChainHTLC.determineHtlcStatus(i.getArgument(0), i.getArgument(1), i.getArgument(2))
+                        : PirateChainHTLC.determineHtlcStatus(i.getArgument(0), i.getArgument(1), i.getArgument(2), i.getArgument(3)));
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong(), anyString(), anyInt()))
+                .thenAnswer(i -> PirateChainHTLC.getUnspentFundingOutput(i.getArgument(0), i.getArgument(1), i.getArgument(2)));
         htlc.when(() -> PirateChainHTLC.buildScript(any(), anyInt(), any(), any())).thenAnswer(i -> new byte[]{ ((byte[])i.getArgument(0))[0] });
         status(BitcoinyHTLC.Status.FUNDED);
         htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(funding(0, 10000L));
@@ -67,6 +74,49 @@ public class PirateChainRefundTests extends Common {
     private void status(BitcoinyHTLC.Status value) {
         htlc.when(() -> PirateChainHTLC.determineHtlcStatus(any(), anyString(), anyLong(), eq(3))).thenReturn(value);
     }
+    @Test public void waitingOfferRetriesOnlyItsMessageAndKeepsOneSubmissionWorker() throws Exception {
+        PirateChainACCTv3TradeBot recovery = spy(freshBot());
+        List<Runnable> queued = new ArrayList<>();
+        doAnswer(i -> { queued.add(i.getArgument(0)); return null; })
+                .when(recovery).startFundingAnnouncementWorker(any());
+        TradeBotData attempt = trade(1);
+        attempt.setState("ALICE_WAITING_FOR_AT_LOCK"); attempt.setStateValue(85); attempt.setLockTimeA(2000);
+        when(at.getIsFinished()).thenReturn(false);
+        data.mode = AcctMode.OFFERING; data.qortalCreatorTradeAddress = "creator";
+        org.qortal.repository.MessageRepository messages = mock(org.qortal.repository.MessageRepository.class);
+        when(repository.getMessageRepository()).thenReturn(messages);
+        when(messages.exists(any(), anyString(), any())).thenThrow(new DataException("temporary message repository failure")).thenReturn(false);
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.populateTradeData(repository, at)).thenReturn(data);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            try { recovery.progress(repository, attempt); fail(); } catch (DataException expected) { }
+            for (int tip = 0; tip < 4; tip++) recovery.progress(repository, attempt);
+            assertEquals(1, queued.size());
+            try (MockedStatic<RepositoryManager> repositories = mockStatic(RepositoryManager.class)) {
+                repositories.when(RepositoryManager::getRepository).thenThrow(new DataException("worker repository unavailable"));
+                queued.get(0).run();
+            }
+            recovery.progress(repository, attempt);
+            assertEquals(2, queued.size());
+        }
+        assertEquals("ALICE_WAITING_FOR_AT_LOCK", attempt.getState());
+        verify(pirate, never()).fundP2SH(anyString(), anyString(), anyLong(), anyString());
+        noBroadcast();
+    }
+
+    @Test public void ambiguousLegacyFundingNeverConfirmsOrDeletesTheRecoveryRecord() throws Exception {
+        TradeBotData legacy = trade(1); legacy.setState("ALICE_REFUNDED"); legacy.setStateValue(110);
+        legacy.setLastTransactionSignature(new PirateChainRefundState(0, 1L, TXID, true).encode());
+        htlc.when(() -> PirateChainHTLC.countFundingOutputs(any(), anyString(), anyLong())).thenReturn(2);
+        status(BitcoinyHTLC.Status.REFUNDED);
+        assertFalse(bot.refund(repository, legacy, at, data));
+        assertFalse(legacy.hasFundingOutpoint());
+        assertFalse(bot.canDelete(repository, legacy));
+        assertEquals(Boolean.FALSE, legacy.getForeignRefundConfirmed());
+        verify(cross, never()).delete(any());
+        noBroadcast();
+    }
     private TradeBotData trade(int id) {
         byte[] key = new byte[32]; key[0]=(byte)id;
         byte[] pub = new byte[33]; pub[0]=(byte)id;
@@ -76,6 +126,18 @@ public class PirateChainRefundTests extends Common {
     }
     private void noBroadcast() throws Exception {
         verify(pirate, never()).refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString(), anyLong(), anyInt());
+    }
+    @Test public void disabledWalletSkipsEverySchedulerStateBeforeRepositoryAccess() throws Exception {
+        org.mockito.Mockito.clearInvocations(repository, cross, chain, pirate);
+        @SuppressWarnings("unchecked")
+        MockedStatic<PirateChain> pirates = (MockedStatic<PirateChain>) statics.get(0);
+        pirates.when(PirateChain::getInstance).thenReturn(null);
+        for (TradeStates.State state : TradeStates.State.values()) {
+            TradeBotData disabled = trade(99);
+            disabled.setState(state.name()); disabled.setStateValue(state.value);
+            freshBot().progress(repository, disabled);
+        }
+        verifyNoInteractions(repository, cross, chain, pirate);
     }
     @Test public void acknowledgementStaysPendingAndCheckpointSurvivesBackup() throws Exception {
         TradeBotData trade = trade(1);
@@ -92,7 +154,7 @@ public class PirateChainRefundTests extends Common {
         TradeBotData trade = trade(1);
         doAnswer(i -> {
             assertNotNull(PirateChainRefundState.decode(trade.getLastTransactionSignature()));
-            verify(repository).saveChanges();
+            verify(repository, atLeastOnce()).saveChanges();
             throw new ForeignBlockchainException("lost acknowledgement");
         }).when(pirate).refundP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyInt(), anyString(), anyLong(), anyInt());
         try { bot.refund(repository, trade, at, data); fail(); } catch (ForeignBlockchainException expected) { }
@@ -138,7 +200,7 @@ public class PirateChainRefundTests extends Common {
         catch (ForeignBlockchainException.TransactionRejectedException expected) { }
         assertNull(trade.getLastTransactionSignature());
         verify(cross, atLeastOnce()).save(trade);
-        verify(repository, times(2)).saveChanges();
+        verify(repository, times(3)).saveChanges();
         assertTrue(bot.refund(repository, TradeBotData.fromJson(trade.toJson()), at, data));
     }
     @Test public void transientNetworkFailureKeepsCheckpoint() throws Exception {
@@ -252,6 +314,8 @@ public class PirateChainRefundTests extends Common {
         legacy.setLastTransactionSignature(new PirateChainRefundState(130, 1L, TXID).encode());
         assertEquals(Boolean.FALSE, legacy.getForeignRefundConfirmed());
         legacy.setLastTransactionSignature(new PirateChainRefundState(0, 1L, null, true).encode());
+        assertEquals(Boolean.FALSE, legacy.getForeignRefundConfirmed()); // Old script-only confirmation is insufficient.
+        legacy.setFundingTxid("22".repeat(32));
         assertEquals(Boolean.TRUE, legacy.getForeignRefundConfirmed());
         var context = org.eclipse.persistence.jaxb.JAXBContextFactory.createContext(new Class[]{TradeBotData.class}, null);
         var marshaller = context.createMarshaller();
@@ -294,6 +358,7 @@ public class PirateChainRefundTests extends Common {
         first.setState("ALICE_REFUNDED"); first.setStateValue(110);
         first.setLastTransactionSignature(new PirateChainRefundState(130, 1L, TXID).encode());
         second.setState("ALICE_REFUNDED"); second.setStateValue(110);
+        when(cross.getAllTradeBotData()).thenReturn(List.of(first, second));
         PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
         when(acct.populateTradeData(repository, at)).thenReturn(data);
         try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
@@ -306,6 +371,30 @@ public class PirateChainRefundTests extends Common {
             freshBot.progress(repository, second);
             assertEquals("ALICE_REFUNDING_A", second.getState()); noBroadcast();
         }
+    }
+    @Test public void unavailableAtsCannotStarveTheSixthLegacyRecordInStableOrder() throws Exception {
+        PirateChainACCTv3TradeBot fresh = freshBot();
+        List<TradeBotData> records = new ArrayList<>();
+        for (int i = 1; i <= 6; i++) {
+            TradeBotData candidate = trade(i);
+            candidate.setState("ALICE_REFUNDED"); candidate.setStateValue(110);
+            candidate.setAtAddress(i == 6 ? "AT" : "missing-" + i);
+            records.add(candidate);
+        }
+        when(cross.getAllTradeBotData()).thenReturn(records);
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.populateTradeData(repository, at)).thenReturn(data);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            for (int minute = 0; minute < 30; minute++) {
+                final long now = 1_000_000L + minute * 60_001L;
+                clock.when(NTP::getTime).thenReturn(now);
+                for (TradeBotData candidate : records) fresh.progress(repository, candidate);
+            }
+        }
+        assertEquals("ALICE_REFUNDING_A", records.get(5).getState());
+        verify(acct, atLeastOnce()).populateTradeData(repository, at);
+        noBroadcast();
     }
     @Test public void refundAllContinuesAfterOneWalletFails() throws Exception {
         TradeBotData malformed = trade(3);
@@ -380,8 +469,8 @@ public class PirateChainRefundTests extends Common {
             assertEquals(1, logs.diagnostics().size());
             String message = logs.diagnostics().get(0);
             assertTrue(message.contains("AT AT (trade native-1)"));
-            assertTrue(message.contains("phase=refund state=ALICE_REFUNDING_A reason=HTLC_UNFUNDED"));
-            assertTrue(message.contains("htlc=b-1 expectedAmount=100000000 fundingFee=null minimumAmount=100010000"));
+            assertTrue(message.contains("phase=funding-recovery state=ALICE_REFUNDING_A reason=FUNDING_OUTPOINT_UNKNOWN"));
+            assertTrue(message.contains("htlc=b-1 expectedAmount=100000000 fundingFee=null minimumAmount=100000000"));
             assertFalse(message.contains(attempt.getForeignKey()));
             assertFalse(message.contains(org.qortal.utils.Base58.encode(attempt.getTradePrivateKey())));
             assertFalse(message.contains(org.qortal.utils.Base58.encode(attempt.getSecret())));
@@ -446,6 +535,7 @@ public class PirateChainRefundTests extends Common {
 
     @Test public void fundedHistoryWithMissingUnspentOutputReportsDiscoveryMismatch() throws Exception {
         TradeBotData attempt = trade(1); attempt.setFundingFee(10000L);
+        attempt.setFundingTxid("22".repeat(32));
         htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(null);
         try (RecoveryLogCapture logs = new RecoveryLogCapture()) {
             assertFalse(freshBot().refund(repository, attempt, at, data));
@@ -481,8 +571,8 @@ public class PirateChainRefundTests extends Common {
             accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
             freshBot().progress(repository, attempt);
             assertEquals(1, logs.diagnostics().size());
-            assertTrue(logs.diagnostics().get(0).contains("phase=funding-recovery state=ALICE_WAITING_FOR_FUNDING reason=HTLC_UNFUNDED"));
-            assertTrue(logs.diagnostics().get(0).contains("confirmedFundingOutput=not-found; funding is not resubmitted"));
+            assertTrue(logs.diagnostics().get(0).contains("phase=funding-recovery state=ALICE_WAITING_FOR_FUNDING reason=FUNDING_OUTPOINT_UNKNOWN"));
+            assertTrue(logs.diagnostics().get(0).contains("funding is not resubmitted"));
         }
         assertEquals("ALICE_WAITING_FOR_FUNDING", attempt.getState());
         verify(pirate, never()).fundP2SH(anyString(), anyString(), anyLong(), anyString());

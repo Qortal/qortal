@@ -964,7 +964,7 @@ public class Controller extends Thread {
 			String exportPath = Settings.getInstance().getExportPath();
 			try {
 				Path importPath = Paths.get(exportPath, "TradeBotStates.json");
-				repository.importDataFromFile(importPath.toString());
+				repository.reconcileDataFromFile(importPath.toString());
 			} catch (FileNotFoundException e) {
 				// Do nothing, as the files will only exist in certain cases
 			}

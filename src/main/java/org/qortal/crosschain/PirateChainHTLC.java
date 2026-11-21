@@ -242,11 +242,20 @@ public class PirateChainHTLC {
 
 	/** Return the complete outpoint and value, retaining the funding output index. */
 	public static UnspentOutput getUnspentFundingOutput(BitcoinyBlockchainProvider blockchain, String p2shAddress, long minimumAmount) throws ForeignBlockchainException {
+		return getUnspentFundingOutput(blockchain, p2shAddress, minimumAmount, null, -1);
+	}
+
+	/** Select only the saved outpoint, or one unique candidate when recovering an unbound legacy record. */
+	public static UnspentOutput getUnspentFundingOutput(BitcoinyBlockchainProvider blockchain, String p2shAddress,
+			long minimumAmount, String fundingTxid, int fundingIndex) throws ForeignBlockchainException {
 		byte[] ourScriptPubKey = addressToScriptPubKey(p2shAddress);
 
 		// Note: we can't include unconfirmed transactions here because the Pirate light wallet server requires a block range
 		List<UnspentOutput> unspentOutputs = blockchain.getUnspentOutputs(p2shAddress, false);
+		UnspentOutput selected = null;
 		for (UnspentOutput unspentOutput : unspentOutputs) {
+			if (fundingTxid != null && (!fundingTxid.equals(fundingTxid(unspentOutput))
+					|| (fundingIndex >= 0 && fundingIndex != unspentOutput.index))) continue;
 
 			if (!Arrays.equals(ourScriptPubKey, unspentOutput.script)) {
 				// Not funding our specific HTLC script hash
@@ -258,12 +267,30 @@ public class PirateChainHTLC {
 				continue;
 			}
 
-			return unspentOutput;
+			if (selected != null && (!Arrays.equals(selected.hash, unspentOutput.hash) || selected.index != unspentOutput.index))
+				throw new ForeignBlockchainException("Ambiguous ARRR funding outputs; retaining recovery record");
+			selected = unspentOutput;
 		}
 
 
-		// No valid unspent outputs, so must be already spent
-		return null;
+		// Missing output is not settlement proof: the caller must check an exact confirmed spend.
+		return selected;
+	}
+
+	public static String fundingTxid(UnspentOutput funding) {
+		byte[] hash = funding.hash.clone();
+		Bytes.reverse(hash);
+		return HashCode.fromBytes(hash).toString();
+	}
+
+	/** Legacy records cannot choose between multiple deposits, including already-spent ones. */
+	public static int countFundingOutputs(BitcoinyBlockchainProvider blockchain, String address, long minimumAmount) throws ForeignBlockchainException {
+		String script = HashCode.fromBytes(addressToScriptPubKey(address)).toString();
+		int count = 0;
+		for (BitcoinyTransaction tx : blockchain.getAddressBitcoinyTransactions(address, false))
+			for (BitcoinyTransaction.Output output : tx.outputs)
+				if (script.equals(output.scriptPubKey) && output.value >= minimumAmount) count++;
+		return count;
 	}
 
 	/** Locate the HTLC output immediately after funding, including nonzero vout. */
@@ -278,11 +305,15 @@ public class PirateChainHTLC {
 			throw new ForeignBlockchainException("Unable to parse ARRR funding transaction: " + e.getMessage());
 		}
 		String script = HashCode.fromBytes(addressToScriptPubKey(address)).toString();
+		UnspentOutput selected = null;
 		for (int index = 0; index < transaction.outputs.size(); ++index) {
 			BitcoinyTransaction.Output output = transaction.outputs.get(index);
-			if (script.equals(output.scriptPubKey) && output.value >= minimumAmount)
-				return new UnspentOutput(hash, index, 0, output.value);
+			if (script.equals(output.scriptPubKey) && output.value >= minimumAmount) {
+				if (selected != null) throw new ForeignBlockchainException("Ambiguous ARRR funding outputs in acknowledged transaction");
+				selected = new UnspentOutput(hash, index, 0, output.value);
+			}
 		}
+		if (selected != null) return selected;
 		throw new ForeignBlockchainException("Funding transaction has no matching ARRR HTLC output");
 	}
 
@@ -296,8 +327,20 @@ public class PirateChainHTLC {
 	}
 
 	public static Status determineHtlcStatus(BitcoinyBlockchainProvider blockchain, String p2shAddress, long minimumAmount, int confirmations) throws ForeignBlockchainException {
+		return determineHtlcStatus(blockchain, p2shAddress, minimumAmount, confirmations, null, -1);
+	}
+
+	/** Exact settlement evidence. fundingTxid is display order; parsed previous-output hashes are wire order. */
+	public static Status determineHtlcStatus(BitcoinyBlockchainProvider blockchain, String p2shAddress, long minimumAmount,
+			int confirmations, String fundingTxid, int fundingIndex) throws ForeignBlockchainException {
 		if (confirmations < 1) throw new IllegalArgumentException("Confirmations must be positive");
-		String compoundKey = String.format("%s-%s-%d-%d-%d", blockchain.getNetId(), p2shAddress, minimumAmount, confirmations, System.currentTimeMillis() / CACHE_TIMEOUT);
+		if (fundingTxid != null && (!fundingTxid.matches("[0-9a-f]{64}") || fundingIndex < 0))
+			throw new IllegalArgumentException("Exact funding outpoint required");
+		byte[] expectedHash = fundingTxid == null ? null : HashCode.fromString(fundingTxid).asBytes();
+		if (expectedHash != null) Bytes.reverse(expectedHash);
+		String expectedInputHash = expectedHash == null ? null : HashCode.fromBytes(expectedHash).toString();
+		String compoundKey = String.format("%s-%s-%d-%d-%s-%d-%d", blockchain.getNetId(), p2shAddress, minimumAmount,
+				confirmations, fundingTxid, fundingIndex, System.currentTimeMillis() / CACHE_TIMEOUT);
 
 		Status cachedStatus = STATUS_CACHE.getOrDefault(compoundKey, null);
 		if (cachedStatus != null)
@@ -327,7 +370,10 @@ public class PirateChainHTLC {
 				// Wrong number of inputs
 				continue;
 
-			String scriptSig = bitcoinyTransaction.inputs.get(0).scriptSig;
+			BitcoinyTransaction.Input input = bitcoinyTransaction.inputs.get(0);
+			if (expectedInputHash != null && (!expectedInputHash.equals(input.outputTxHash) || fundingIndex != input.outputVout))
+				continue;
+			String scriptSig = input.scriptSig;
 
 			List<byte[]> scriptSigChunks = extractScriptSigChunks(HashCode.fromString(scriptSig).asBytes());
 			if (scriptSigChunks.size() < 3 || scriptSigChunks.size() > 4)
@@ -355,6 +401,13 @@ public class PirateChainHTLC {
 		}
 
 		String ourScriptPubKeyHex = HashCode.fromBytes(ourScriptPubKey).toString();
+
+		if (fundingTxid != null) {
+			UnspentOutput funding = getUnspentFundingOutput(blockchain, p2shAddress, minimumAmount, fundingTxid, fundingIndex);
+			cachedStatus = funding == null ? Status.UNFUNDED : funding.height > 0 ? Status.FUNDED : Status.FUNDING_IN_PROGRESS;
+			STATUS_CACHE.put(compoundKey, cachedStatus);
+			return cachedStatus;
+		}
 
 		// Check for funding
 		for (BitcoinyTransaction bitcoinyTransaction : transactions) {

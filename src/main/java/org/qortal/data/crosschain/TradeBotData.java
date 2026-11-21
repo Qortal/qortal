@@ -62,6 +62,8 @@ public class TradeBotData {
 	// Null means the original reserve is unknown (legacy trades).
 	private Long fundingFee;
 	private int fundingOutputIndex = 0;
+	// Display-order txid; null means the funding outpoint has not been established.
+	private String fundingTxid;
 
 	// Could be Bitcoin or Qortal...
 	private byte[] receivingAccountInfo;
@@ -199,7 +201,7 @@ public class TradeBotData {
 	@Schema(description = "For ARRR refund terminals, whether Core verified the foreign-chain confirmation depth")
 	public Boolean getForeignRefundConfirmed() {
 		if (!"PIRATECHAIN".equals(this.foreignBlockchain) || !"ALICE_REFUNDED".equals(this.tradeState)) return null;
-		return org.qortal.crosschain.PirateChainRefundState.isConfirmed(this.lastTransactionSignature);
+		return this.hasFundingOutpoint() && org.qortal.crosschain.PirateChainRefundState.isConfirmed(this.lastTransactionSignature);
 	}
 
 	public void setLastTransactionSignature(byte[] lastTransactionSignature) {
@@ -232,6 +234,15 @@ public class TradeBotData {
 		this.fundingOutputIndex = fundingOutputIndex;
 	}
 
+	public String getFundingTxid() { return this.fundingTxid; }
+
+	public void setFundingTxid(String txid) {
+		if (txid != null && !txid.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("Invalid funding transaction ID");
+		this.fundingTxid = txid;
+	}
+
+	public boolean hasFundingOutpoint() { return this.fundingTxid != null && this.fundingOutputIndex >= 0; }
+
 	public byte[] getReceivingAccountInfo() {
 		return this.receivingAccountInfo;
 	}
@@ -261,6 +272,7 @@ public class TradeBotData {
 		if (this.getReceivingAccountInfo() != null) jsonObject.put("receivingAccountInfo", Base58.encode(this.getReceivingAccountInfo()));
 		jsonObject.put("fundingFee", this.fundingFee);
 		jsonObject.put("fundingOutputIndex", this.fundingOutputIndex);
+		jsonObject.put("fundingTxid", this.fundingTxid);
 		return jsonObject;
 	}
 
@@ -290,6 +302,7 @@ public class TradeBotData {
 		);
 		trade.setFundingFee(json.isNull("fundingFee") ? null : json.getLong("fundingFee"));
 		trade.setFundingOutputIndex(json.optInt("fundingOutputIndex", 0));
+		trade.setFundingTxid(json.isNull("fundingTxid") ? null : json.getString("fundingTxid"));
 		return trade;
 	}
 

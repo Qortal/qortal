@@ -126,21 +126,34 @@ returns atomic `fundingFee` and `refundFee` values without initializing a wallet
 Use the matching Q-Trade `0.0.3-test.4` test build to consume that quote and the
 corrected pending/refund states.
 
-Funding now snapshots the actual redeem/refund reserve in `TradeBotData.fundingFee`
-and captures `fundingOutputIndex`. HSQLDB automatically upgrades schema 53 to 54
-with a nullable fee and output index default 0; no re-index is required. Database
-and JSON backups preserve both fields. The funding transaction fee is separate
+Funding snapshots the actual redeem/refund reserve in `TradeBotData.fundingFee`
+and captures `fundingOutputIndex`. Schema 53→54 added the nullable fee and output
+index default 0. The PR review fixes add schema 54→55: `funding_txid` binds that
+index to one transaction, and `TradeBotStateDeletions` preserves definitive local
+deletions during startup reconciliation. No blockchain re-index is required.
+Database and JSON backups preserve the funding pair. The funding transaction fee is separate
 from the reserve inside the HTLC. Later changes to `feeRequired` do not change the
 stored reserve. Sellers and legacy buyers recover the reserve and index from the
 actual unspent funding output; where the original fee remains unavailable Core
 falls back to 10000 with a warning. Preserve these fields during backup restore.
+New confirmed checkpoints and deletion eligibility require the saved outpoint;
+a spend of another output to the same script is insufficient. Ambiguous legacy
+deposits stay pending with their recovery keys retained. Existing unbound confirmed
+markers are rechecked, and cannot authorize deletion by themselves.
+
+Startup fills missing trade rows from the current backup, preserves every
+committed row and honors transactional deletion records. This also protects a
+refund retry deadline when the JSON snapshot predates funding. A fresh database
+can still recover from the backup. Authenticated **manual** import is a distinct,
+explicit restore and can replace rows/remove a deletion marker; do not import a
+stale snapshot over a funded attempt as part of an ordinary restart.
 
 The database-query test branch also used schema version 54, for a QDN index
 instead of these trade columns. A node previously running that build can report
 `object not found: FUNDING_FEE` during trade reads and sell-order creation despite
 already reporting schema 54. Core now checks the actual trade table at startup
 and adds only missing funding columns, preserving existing values, rows, QDN
-indexes and the database version. It also resumes a partially applied funding
+indexes while applying the recovery schema above. It also resumes a partially applied funding
 migration without adding an existing column twice. No re-index or manual schema
 version reset is needed. Stop Core and back up the complete configured repository,
 wallets, settings and trade backups before installing the corrected JAR; on the

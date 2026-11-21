@@ -209,6 +209,14 @@ public class HSQLDBImportExport {
      * @throws IOException
      */
     public static void importDataFromFile(String filename, Repository repository) throws DataException, IOException {
+        importDataFromFile(filename, repository, false);
+    }
+
+    public static void reconcileDataFromFile(String filename, Repository repository) throws DataException, IOException {
+        importDataFromFile(filename, repository, true);
+    }
+
+    private static void importDataFromFile(String filename, Repository repository, boolean reconcile) throws DataException, IOException {
         Path path = Paths.get(filename);
         if (!path.toFile().exists()) {
             throw new FileNotFoundException(String.format("File doesn't exist: %s", filename));
@@ -233,6 +241,11 @@ public class HSQLDBImportExport {
             JSONObject dataJsonObject = (JSONObject)iterator.next();
 
             if (type.equals("tradeBotStates")) {
+                if (reconcile) {
+                    byte[] key = Base58.decode(dataJsonObject.getString("tradePrivateKey"));
+                    if (repository.getCrossChainRepository().getTradeBotData(key) != null
+                            || repository.getCrossChainRepository().wasTradeBotDeleted(key)) continue;
+                }
                 HSQLDBImportExport.importTradeBotDataJSON(dataJsonObject, repository);
             }
             else if (type.equals("mintingAccounts")) {

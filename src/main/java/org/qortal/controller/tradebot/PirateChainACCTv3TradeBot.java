@@ -56,6 +56,9 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 	// Audit old ACK-only terminal records gradually, without scanning every wallet on every block.
 	private final java.util.Map<String, Long> auditedLegacyRefunds = new java.util.HashMap<>();
 	private long nextLegacyRefundAudit;
+	private long legacyAuditSelectionMinute = -1;
+	private String legacyAuditCandidate;
+	private final java.util.Set<String> fundingAnnouncements = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
 	// Keep ordinary wait diagnostics visible at INFO without logging every chain tip.
 	private final java.util.Map<String, RecoveryLogState> recoveryLogStates = new java.util.LinkedHashMap<>() {
@@ -297,13 +300,14 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			try {
 				UnspentOutput funding = PirateChainHTLC.getFundingOutput(PirateChain.getInstance().getBlockchainProvider(),
 						txid, p2shAddressT3, amountA);
-				tradeBotData.setFundingOutputIndex(funding.index);
+				recordFundingDetails(tradeBotData, funding, crossChainTradeData.expectedForeignAmount);
 			} catch (ForeignBlockchainException | io.grpc.StatusRuntimeException e) {
 				// A successful broadcast can precede lightwalletd visibility. Recovery re-reads the UTXO.
 				LOGGER.warn("ARRR funding {} not yet available to capture output index; will recover from UTXO", txid, e);
 			}
 			TradeBot.updateTradeBotState(repository, tradeBotData, State.ALICE_WAITING_FOR_AT_LOCK,
 					() -> "ARRR funding acknowledged; waiting for AT lock");
+			TradeBot.backupTradeBotData(repository, null); // DB remains authoritative if this best-effort snapshot fails.
 
 		} catch (ForeignBlockchainException.InsufficientFundsException | ForeignBlockchainException.TransactionRejectedException e) {
 			// These typed native validation failures establish that no transaction was sent.
@@ -329,12 +333,15 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		byte[] messageData = CrossChainUtils.buildOfferMessage(tradeBotData.getTradeForeignPublicKey(), tradeBotData.getHashOfSecret(), tradeBotData.getLockTimeA());
 		String messageRecipient = crossChainTradeData.qortalCreatorTradeAddress;
 
-		boolean isMessageAlreadySent = repository.getMessageRepository().exists(tradeBotData.getTradeNativePublicKey(), messageRecipient, messageData);
-		if (!isMessageAlreadySent) {
+		String key = tradeBotData.getTradeNativeAddress();
+		if (!fundingAnnouncements.add(key)) return;
+		boolean queued = false;
+		try {
+			if (repository.getMessageRepository().exists(tradeBotData.getTradeNativePublicKey(), messageRecipient, messageData)) return;
 			// Do this in a new thread so caller doesn't have to wait for computeNonce()
-			// In the unlikely event that the transaction doesn't validate then the buy won't happen and eventually Alice's AT will be refunded
-			new Thread(() -> {
+			startFundingAnnouncementWorker(() -> {
 				try (final Repository threadsRepository = RepositoryManager.getRepository()) {
+					if (!fundingAnnouncementIsCurrent(threadsRepository, tradeBotData)) return;
 					PrivateKeyAccount sender = new PrivateKeyAccount(threadsRepository, tradeBotData.getTradePrivateKey());
 					MessageTransaction messageTransaction = MessageTransaction.build(threadsRepository, sender, Group.NO_GROUP, messageRecipient, messageData, false, false);
 
@@ -346,6 +353,8 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 
 					// reset repository state to prevent deadlock
 					threadsRepository.discardChanges();
+					if (!fundingAnnouncementIsCurrent(threadsRepository, tradeBotData)
+							|| threadsRepository.getMessageRepository().exists(tradeBotData.getTradeNativePublicKey(), messageRecipient, messageData)) return;
 
 					if (messageTransaction.isSignatureValid()) {
 						ValidationResult result = messageTransaction.importAsUnconfirmed();
@@ -357,12 +366,29 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 					else {
 						LOGGER.warn(() -> String.format("Unable to send MESSAGE to Bob's trade-bot %s: signature invalid", messageRecipient));
 					}
-				} catch (DataException e) {
+				} catch (DataException | RuntimeException e) {
 					LOGGER.warn(() -> String.format("Unable to send MESSAGE to Bob's trade-bot %s: %s", messageRecipient, e.getMessage()));
+				} finally {
+					fundingAnnouncements.remove(key);
 				}
-			}, "TradeBot response").start();
+			});
+			queued = true;
+		} finally {
+			if (!queued) fundingAnnouncements.remove(key);
 		}
+	}
 
+	/*package*/ void startFundingAnnouncementWorker(Runnable work) { new Thread(work, "TradeBot response").start(); }
+
+	private boolean fundingAnnouncementIsCurrent(Repository repository, TradeBotData trade) throws DataException {
+		TradeBotData latest = repository.getCrossChainRepository().getTradeBotData(trade.getTradePrivateKey());
+		Long now = NTP.getTime();
+		if (latest == null || !State.ALICE_WAITING_FOR_AT_LOCK.name().equals(latest.getState())
+				|| latest.getLockTimeA() == null || now == null || now >= latest.getLockTimeA() * 1000L) return false;
+		ATData at = repository.getATRepository().fromATAddress(latest.getAtAddress());
+		if (at == null || at.getIsFinished()) return false;
+		CrossChainTradeData offer = PirateChainACCTv3.getInstance().populateTradeData(repository, at);
+		return offer != null && offer.mode == AcctMode.OFFERING;
 	}
 
 	private void recoverFunding(Repository repository, TradeBotData trade, ATData at,
@@ -371,9 +397,10 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		byte[] script = PirateChainHTLC.buildScript(trade.getTradeForeignPublicKey(), trade.getLockTimeA(),
 				data.creatorForeignPKH, trade.getHashOfSecret());
 		String address = pirate.deriveP2shAddressBPrefix(script);
+		if (!ensureFundingOutpoint(repository, pirate, trade, address)) return;
 		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address,
-				data.expectedForeignAmount + fundingFeeOrDefault(trade));
-		BitcoinyHTLC.Status status = PirateChainHTLC.determineHtlcStatus(pirate.getBlockchainProvider(), address,
+				data.expectedForeignAmount + fundingFeeOrDefault(trade), trade.getFundingTxid(), trade.getFundingOutputIndex());
+		BitcoinyHTLC.Status status = fundingStatus(repository, pirate, trade, address,
 				data.expectedForeignAmount + fundingFeeOrDefault(trade), 3);
 		if (funding == null && (status == BitcoinyHTLC.Status.UNFUNDED
 				|| status == BitcoinyHTLC.Status.FUNDING_IN_PROGRESS)) {
@@ -409,10 +436,10 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 
 		if (tradeBotState == State.ALICE_WAITING_FOR_FUNDING || tradeBotState == State.ALICE_WAITING_FOR_AT_LOCK
 				|| tradeBotState == State.ALICE_REFUNDING_A || (tradeBotState == State.ALICE_REFUNDED
-				&& !PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature()))) return false;
+				&& (!tradeBotData.hasFundingOutpoint() || !PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature())))) return false;
 
 		if (tradeBotState == State.BOB_DONE)
-			return PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature());
+			return tradeBotData.hasFundingOutpoint() && PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature());
 		if (tradeBotState == State.ALICE_DONE) {
 			ATData at = repository.getATRepository().fromATAddress(tradeBotData.getAtAddress());
 			if (at == null) return false;
@@ -439,19 +466,12 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 
 	@Override
 	public void progress(Repository repository, TradeBotData tradeBotData) throws DataException, ForeignBlockchainException {
+		if (PirateChain.getInstance() == null) return; // Wallet disabled; leave every recovery record untouched.
 		State state = State.valueOf(tradeBotData.getStateValue());
 		if (state == null) return;
 		boolean audit = state == State.ALICE_DONE || ((state == State.ALICE_REFUNDED || state == State.BOB_DONE)
-				&& !PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature()));
-		if (audit) {
-			Long now = NTP.getTime();
-			synchronized (this) {
-				if (now == null || now < nextLegacyRefundAudit
-						|| now < auditedLegacyRefunds.getOrDefault(tradeBotData.getTradeNativeAddress(), 0L)) return;
-				auditedLegacyRefunds.put(tradeBotData.getTradeNativeAddress(), now + 5 * 60_000L);
-				nextLegacyRefundAudit = now + 60_000L;
-			}
-		}
+				&& (!tradeBotData.hasFundingOutpoint() || !PirateChainRefundState.isConfirmed(tradeBotData.getLastTransactionSignature())));
+		if (audit && !claimLegacyAuditSlot(repository, tradeBotData, NTP.getTime())) return;
 		ATData at = null;
 		CrossChainTradeData data = null;
 		if (state.requiresAtData || audit) {
@@ -500,6 +520,37 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 						(now == null ? System.currentTimeMillis() : now) + 6 * 60 * 60_000L);
 			}
 		}
+	}
+
+	/** Pick the oldest due record, including rows whose AT lookup previously failed. */
+	private synchronized boolean claimLegacyAuditSlot(Repository repository, TradeBotData trade, Long now) throws DataException {
+		if (now == null || now < nextLegacyRefundAudit) return false;
+		if (now < auditedLegacyRefunds.getOrDefault(trade.getTradeNativeAddress(), 0L)) return false;
+		if (legacyAuditSelectionMinute != now / 60_000L) {
+			List<TradeBotData> records = repository.getCrossChainRepository().getAllTradeBotData();
+			// Also support an explicitly supplied record in an otherwise empty repository.
+			if (records.isEmpty()) records = java.util.Collections.singletonList(trade);
+			TradeBotData oldest = null;
+			long oldestDue = Long.MAX_VALUE;
+			java.util.Set<String> eligible = new java.util.HashSet<>();
+			for (TradeBotData candidate : records) {
+				if (!PirateChainACCTv3.NAME.equals(candidate.getAcctName())) continue;
+				State state = State.valueOf(candidate.getStateValue());
+				if (state != State.ALICE_DONE && !((state == State.ALICE_REFUNDED || state == State.BOB_DONE)
+						&& (!candidate.hasFundingOutpoint() || !PirateChainRefundState.isConfirmed(candidate.getLastTransactionSignature())))) continue;
+				String key = candidate.getTradeNativeAddress();
+				eligible.add(key);
+				long due = auditedLegacyRefunds.getOrDefault(key, 0L);
+				if (due <= now && due < oldestDue) { oldest = candidate; oldestDue = due; }
+			}
+			auditedLegacyRefunds.keySet().retainAll(eligible);
+			legacyAuditCandidate = oldest == null ? null : oldest.getTradeNativeAddress();
+			legacyAuditSelectionMinute = now / 60_000L;
+		}
+		if (!java.util.Objects.equals(legacyAuditCandidate, trade.getTradeNativeAddress())) return false;
+		auditedLegacyRefunds.put(trade.getTradeNativeAddress(), now + 5 * 60_000L);
+		nextLegacyRefundAudit = now + 60_000L;
+		return true;
 	}
 
 	private static boolean buyerReceivedQort(TradeBotData trade, ATData at, CrossChainTradeData data) {
@@ -690,7 +741,7 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			long p2shFee = fundingFeeOrDefault(tradeBotData);
 			long minimumAmountA = crossChainTradeData.expectedForeignAmount + p2shFee;
 
-			BitcoinyHTLC.Status htlcStatusA = PirateChainHTLC.determineHtlcStatus(pirateChain.getBlockchainProvider(), p2shAddress, minimumAmountA);
+			BitcoinyHTLC.Status htlcStatusA = fundingStatus(repository, pirateChain, tradeBotData, p2shAddress, minimumAmountA, 1);
 			logRecoveryWait(tradeBotData, "refund-entry", "HTLC_" + htlcStatusA,
 					"htlc=" + p2shAddress + " minimumAmount=" + minimumAmountA
 					+ " fundingFee=" + tradeBotData.getFundingFee() + " lockTime=" + lockTimeA);
@@ -724,6 +775,11 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			return;
 		}
 
+		if (crossChainTradeData.mode == AcctMode.OFFERING) {
+			// Funding is already durable. Retry only the announcement, never the funding operation.
+			announceFunding(repository, tradeBotData, crossChainTradeData);
+			return;
+		}
 		// We're waiting for AT to be in TRADE mode
 		if (crossChainTradeData.mode != AcctMode.TRADING)
 			return;
@@ -836,8 +892,7 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		byte[] script = PirateChainHTLC.buildScript(data.partnerForeignPKH, data.lockTimeA,
 				data.creatorForeignPKH, data.hashOfSecretA);
 		String address = pirate.deriveP2shAddressBPrefix(script);
-		BitcoinyHTLC.Status status = PirateChainHTLC.determineHtlcStatus(pirate.getBlockchainProvider(), address,
-				data.expectedForeignAmount, 3);
+		BitcoinyHTLC.Status status = fundingStatus(repository, pirate, trade, address, data.expectedForeignAmount, 3);
 		if (status == BitcoinyHTLC.Status.REDEEMED) {
 			PirateChainRefundState previous = PirateChainRefundState.decode(trade.getLastTransactionSignature());
 			trade.setLastTransactionSignature(new PirateChainRefundState(0, now, previous == null ? null : previous.txid, true).encode());
@@ -858,7 +913,8 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			return false;
 		}
 		if (!mayReplaceSpend(pirate, checkpoint, height, now, trade, "redeem", address)) return false;
-		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address, data.expectedForeignAmount);
+		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address,
+				data.expectedForeignAmount, trade.getFundingTxid(), trade.getFundingOutputIndex());
 		if (funding == null) return false;
 		recordFundingDetails(trade, funding, data.expectedForeignAmount);
 		trade.setLastTransactionSignature(new PirateChainRefundState(height + 30, now, null).encode());
@@ -886,6 +942,7 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			trade.setLastTransactionSignature(latest.getLastTransactionSignature());
 			trade.setFundingFee(latest.getFundingFee());
 			trade.setFundingOutputIndex(latest.getFundingOutputIndex());
+			trade.setFundingTxid(latest.getFundingTxid());
 			trade.setState(latest.getState()); trade.setStateValue(latest.getStateValue());
 		}
 	}
@@ -959,13 +1016,9 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		byte[] script = PirateChainHTLC.buildScript(tradeBotData.getTradeForeignPublicKey(), lockTime,
 				tradeData.creatorForeignPKH, tradeBotData.getHashOfSecret());
 		String address = pirate.deriveP2shAddressBPrefix(script);
-		if (tradeBotData.getFundingFee() == null) {
-			// Recover legacy reserves before applying a minimum, including reserves below 10000.
-			UnspentOutput legacyFunding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address, tradeData.expectedForeignAmount);
-			if (legacyFunding != null) recordFundingDetails(tradeBotData, legacyFunding, tradeData.expectedForeignAmount);
-		}
+		if (!ensureFundingOutpoint(repository, pirate, tradeBotData, address)) return false;
 		long minimum = tradeData.expectedForeignAmount + fundingFeeOrDefault(tradeBotData);
-		BitcoinyHTLC.Status status = PirateChainHTLC.determineHtlcStatus(pirate.getBlockchainProvider(), address, minimum, 3);
+		BitcoinyHTLC.Status status = fundingStatus(repository, pirate, tradeBotData, address, minimum, 3);
 		if (status == BitcoinyHTLC.Status.REFUNDED) {
 			logRecoveryWait(tradeBotData, "refund", "HTLC_REFUNDED", "htlc=" + address + " requiredConfirmations=3");
 			PirateChainRefundState previous = PirateChainRefundState.decode(tradeBotData.getLastTransactionSignature());
@@ -1002,7 +1055,8 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			return false;
 		}
 		if (!mayReplaceSpend(pirate, checkpoint, height, now, tradeBotData, "refund", address)) return false;
-		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address, minimum);
+		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address,
+				minimum, tradeBotData.getFundingTxid(), tradeBotData.getFundingOutputIndex());
 		if (funding == null) {
 			logRecoveryWait(tradeBotData, "refund", "NO_CONFIRMED_FUNDING_OUTPUT",
 					"htlc=" + address + " historyStatus=" + status + " minimumAmount=" + minimum
@@ -1108,13 +1162,51 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 		return 10000L;
 	}
 
-	private static void recordFundingDetails(TradeBotData trade, UnspentOutput funding, long expectedAmount) {
+	private static void recordFundingDetails(TradeBotData trade, UnspentOutput funding, long expectedAmount) throws ForeignBlockchainException {
+		String txid = PirateChainHTLC.fundingTxid(funding);
+		if (trade.hasFundingOutpoint() && (!txid.equals(trade.getFundingTxid()) || funding.index != trade.getFundingOutputIndex()))
+			throw new ForeignBlockchainException("ARRR funding outpoint changed; retaining recovery record");
+		if (!trade.hasFundingOutpoint()) {
+			PirateChainRefundState old = PirateChainRefundState.decode(trade.getLastTransactionSignature());
+			if (old != null && old.confirmed)
+				trade.setLastTransactionSignature(new PirateChainRefundState(old.retryHeight, old.attemptedAt, old.txid, false).encode());
+		}
 		if (trade.getFundingFee() == null) {
 			trade.setFundingFee(funding.value - expectedAmount);
 			LOGGER.info("Recovered ARRR funding fee {} from output {} for AT {} (trade {})",
 					trade.getFundingFee(), funding.index, trade.getAtAddress(), trade.getTradeNativeAddress());
 		}
 		trade.setFundingOutputIndex(funding.index);
+		trade.setFundingTxid(txid);
+	}
+
+	private boolean ensureFundingOutpoint(Repository repository, PirateChain pirate, TradeBotData trade, String address)
+			throws DataException, ForeignBlockchainException {
+		if (trade.hasFundingOutpoint()) return true;
+		long expected = trade.getForeignAmount();
+		long minimum = expected + (trade.getFundingFee() == null ? 0 : trade.getFundingFee());
+		if (PirateChainHTLC.countFundingOutputs(pirate.getBlockchainProvider(), address, minimum) > 1) {
+			logRecoveryWait(trade, "funding-recovery", "AMBIGUOUS_FUNDING_OUTPOINT", "htlc=" + address + "; recovery record retained");
+			return false;
+		}
+		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address, minimum);
+		if (funding == null) {
+			logRecoveryWait(trade, "funding-recovery", "FUNDING_OUTPOINT_UNKNOWN", "htlc=" + address
+					+ " expectedAmount=" + expected + " fundingFee=" + trade.getFundingFee() + " minimumAmount=" + minimum
+					+ "; no settlement proof or replacement spend; funding is not resubmitted");
+			return false;
+		}
+		recordFundingDetails(trade, funding, expected);
+		repository.getCrossChainRepository().save(trade);
+		repository.saveChanges();
+		return true;
+	}
+
+	private BitcoinyHTLC.Status fundingStatus(Repository repository, PirateChain pirate, TradeBotData trade,
+			String address, long minimum, int confirmations) throws DataException, ForeignBlockchainException {
+		if (!ensureFundingOutpoint(repository, pirate, trade, address)) return BitcoinyHTLC.Status.UNFUNDED;
+		return PirateChainHTLC.determineHtlcStatus(pirate.getBlockchainProvider(), address, minimum, confirmations,
+				trade.getFundingTxid(), trade.getFundingOutputIndex());
 	}
 
 }

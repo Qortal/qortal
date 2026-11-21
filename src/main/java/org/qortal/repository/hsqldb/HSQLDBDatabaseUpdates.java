@@ -39,6 +39,7 @@ public class HSQLDBDatabaseUpdates {
 		// Other test branches also used schema 54, without the ARRR columns. Check
 		// the actual table even when the numeric migration has already been passed.
 		ensureTradeBotFundingColumns(connection);
+		ensureTradeBotRecoveryColumns(connection);
 
 		String text = String.format("Starting Qortal Core v%s...", Controller.getInstance().getVersionStringWithoutPrefix());
 		SplashFrame.getInstance().updateStatus(text);
@@ -98,6 +99,19 @@ public class HSQLDBDatabaseUpdates {
 				LOGGER.info("Adding missing TradeBotStates.funding_output_index column");
 				stmt.execute("ALTER TABLE TradeBotStates ADD funding_output_index INT DEFAULT 0 NOT NULL");
 			}
+		}
+		connection.commit();
+	}
+
+	/** Recovery-only additions; also repair interrupted or numerically overlapping test migrations. */
+	private static void ensureTradeBotRecoveryColumns(Connection connection) throws SQLException {
+		boolean hasTxid;
+		try (ResultSet columns = connection.getMetaData().getColumns(null, "PUBLIC", "TRADEBOTSTATES", "FUNDING_TXID")) {
+			hasTxid = columns.next();
+		}
+		try (Statement stmt = connection.createStatement()) {
+			if (!hasTxid) stmt.execute("ALTER TABLE TradeBotStates ADD funding_txid VARCHAR(64) DEFAULT NULL");
+			stmt.execute("CREATE TABLE IF NOT EXISTS TradeBotStateDeletions (trade_private_key VARBINARY(32) PRIMARY KEY)");
 		}
 		connection.commit();
 	}
@@ -1113,6 +1127,11 @@ public class HSQLDBDatabaseUpdates {
 				case 53:
 					// Preserve the ARRR HTLC reserve across fee changes and its exact outpoint.
 					ensureTradeBotFundingColumns(connection);
+					break;
+
+				case 54:
+					// Bind settlement to one outpoint and preserve definitive deletions across startup imports.
+					ensureTradeBotRecoveryColumns(connection);
 					break;
 
 				default:
