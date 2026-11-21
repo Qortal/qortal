@@ -279,7 +279,7 @@ esac''')
         bundle = self.work / 'bundle'
         bundle.mkdir()
         (bundle / 'MANIFEST.txt').write_text(
-            'artifact-sha256: 55bd5979c01d424ce4b26428ac35b51aed2da2131ceb18c29443e0b46c18e018\n'
+            'artifact-sha256: 8f23a3131c6c4bcac4959cba1462420e211659dfd8bb83452eecfd0c0f7edecb\n'
             'bundle-kind: host-specific\nplatform: linux-x86_64\nnative-library: librust-linux-x86_64.so\n')
         for file in ('LICENSE-qortal-jni.txt', 'qortal-handoff.md', 'librust-linux-x86_64.so'):
             (bundle / file).write_text('fixture content; never executed')
@@ -287,9 +287,12 @@ esac''')
         (bundle / 'unexpected').mkdir()
         result = self.run_script('tools/publish-pirate-unified-qdn.sh', 'validate', 'test', str(bundle))
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn('subdirectories, symlinks, or special files', result.stderr)
         (bundle / 'unexpected').rmdir()
         (bundle / 'unexpected').symlink_to(self.work)
-        self.assertNotEqual(self.run_script('tools/publish-pirate-unified-qdn.sh', 'validate', 'test', str(bundle)).returncode, 0)
+        result = self.run_script('tools/publish-pirate-unified-qdn.sh', 'validate', 'test', str(bundle))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('subdirectories, symlinks, or special files', result.stderr)
 
     @unittest.skipUnless(shutil.which('7z'), '7z is needed for packaging verification')
     def test_zip_uses_unique_staging_and_preserves_old_output_on_failure(self):

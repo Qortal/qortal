@@ -10,7 +10,7 @@ const wallet = {
   publicSpendKey: '5a0580cfdc2bd92da8124ed3e719092d05dcf2db996b31f19c1514f9e53b5793',
   publicViewKey: 'c10a3d4ada91be735d00f1512ed3e7388e574af7af94e4b64d5f62b14b5c9a2b',
 };
-const root = new URL('../../xmr-account-test/', import.meta.url);
+const root = new URL('../', import.meta.url);
 const server = createServer(async (request, response) => {
   const file = request.url === '/' ? 'index.html' : request.url === '/probe.js' ? 'probe.js' : null;
   if (!file) return response.writeHead(404).end();

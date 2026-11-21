@@ -99,8 +99,18 @@ The owner has published the matching native bundle, and this JAR selects the
 confirmed signature above by default. Core must retrieve it from QDN and load
 the platform library on restart; an old explicit signature override prevents
 that selection. See the pinned [native testing guide](pirate-chain-wallet-library-testing.md#stage-the-jni-0310-funding-candidate).
-Retain the current signature, native bundle and JAR for rollback. Neither this
-native change nor the `qdn-performance` build adds a database migration.
+Retain the current signature, native bundle and JAR for rollback. The native
+bundle itself adds no repository migration, but the combined Core branch does:
+schema 53→54 adds `funding_fee` and `funding_output_index`; schema 54→55 adds
+`funding_txid` and the `TradeBotStateDeletions` table for recovery safety. These
+are additive node-local recovery changes; no blockchain reindex is required.
+
+Preserve the complete stopped repository, wallet files, settings and recovery
+backups. No requirement to restore an older database merely to change JARs has
+been established. An older Core does not enforce the new outpoint/reconciliation
+safeguards, however. Keep a compatible recovery build for pending/funded trades;
+do not replace their current recovery data with an older backup during rollback.
+Explicit manual data import can overwrite states; startup reconciliation cannot.
 
 Test Sapling funding, mixed-pool funding, change spending, redemption and an
 expired-contract refund on the updated test node. Direct Ironwood-only contract funding still fails early. With the matching Hub,
@@ -167,15 +177,18 @@ npx vitest run src/lib/monero src/utils/generateWallet/monero-backup.test.ts \
 
 Those tests exercise the real backup KDF/bcrypt/AES/HMAC while adapting only the test Worker boundary. [Hub's account documentation](https://github.com/crowetic/Qortal-Hub/blob/xmr-support/docs/monero-accounts.md) includes the independent Python and full Monero WASM interoperability checks.
 
-The optional browser engine/page probes run from `tools/xmr-hub-client`:
+The obsolete `tools/xmr-hub-client` wallet experiment was removed. Core and the
+integrated Hub wallet do not depend on it. The useful public account-page check
+now has its own optional harness in [`tools/xmr-account-test`](../tools/xmr-account-test/README.md):
 
 ```sh
+cd tools/xmr-account-test
 npm ci --ignore-scripts
-npm test
-npm run build
 npx playwright install chromium
-npm run test:browser
-npm run test:account-page
+npm test
 ```
 
-Set `XMR_CHROMIUM_PATH` to an existing compatible Chromium if using one instead of Playwright's installed browser. These probes use public synthetic wallets, loopback fixtures and/or a mock bridge. They do not scan a real chain or test a funded send.
+This runner uses an unfunded public fixture, a loopback server and a mock Hub
+bridge. It checks public response projection, comparison and error redaction;
+it does not scan a real chain or test a funded send. For the product engine use
+[Hub's worker verification](https://github.com/crowetic/Qortal-Hub/blob/xmr-support/docs/monero-stagenet-wallet.md#repeatable-native-verification).
