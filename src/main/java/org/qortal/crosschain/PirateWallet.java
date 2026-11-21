@@ -47,6 +47,7 @@ public class PirateWallet {
     private final boolean unifiedWallet;
     private String serverUri;
     private String seedPhrase;
+    private Integer initializedBirthday;
     private volatile String walletAddress;
     private final TransactionHistoryCache transactionHistoryCache = new TransactionHistoryCache();
     private boolean nativeEndpointPoolConfigured;
@@ -168,9 +169,12 @@ public class PirateWallet {
                     LOGGER.info("Pirate Unified Wallet height unavailable after init (height={})", ourHeight);
                     return false;
                 }
-                if (!this.isNullSeedWallet && birthday > 1 && ourHeight < birthday) {
-                    LOGGER.warn("Pirate Unified Wallet initialized below birthday {} (height {}).",
-                            birthday, ourHeight);
+                int effectiveBirthday = this.initializedBirthday == null ? birthday : this.initializedBirthday;
+                // The unscanned checkpoint is immediately BEFORE the first block to scan.
+                // Reopening a cancelled scan at birthday-1 is valid, not an init failure.
+                if (!this.isNullSeedWallet && effectiveBirthday > 1 && ourHeight < (long) effectiveBirthday - 1) {
+                    LOGGER.warn("Pirate Unified Wallet initialized below its birthday checkpoint {} (height {}).",
+                            effectiveBirthday - 1, ourHeight);
                     return false;
                 }
             } else {
@@ -373,6 +377,26 @@ public class PirateWallet {
         }
 
         this.seedPhrase = outputSeedPhrase;
+        if (this.unifiedWallet) {
+            JSONObject initialized = parseJsonObject(outputSeedResponse, "initfromseed wallet ID");
+            String walletId = initialized == null ? null : initialized.optString("wallet_id", null);
+            JSONObject registry = parseJsonObject(LiteWalletJni.invokeJson("{\"method\":\"list_wallets\"}", false), "list_wallets");
+            // initfromseed echoes the requested birthday in JNI 0.3.11, even
+            // when reopening an existing registry. Read that wallet's metadata.
+            if (walletId == null || registry == null || !registry.optBoolean("ok", false)
+                    || !(registry.opt("result") instanceof org.json.JSONArray)) return false;
+            org.json.JSONArray wallets = registry.getJSONArray("result");
+            this.initializedBirthday = null;
+            for (int i = 0; i < wallets.length(); ++i) {
+                JSONObject metadata = wallets.getJSONObject(i);
+                if (!walletId.equals(metadata.optString("id", null))) continue;
+                long actualBirthday = metadata.getLong("birthday_height");
+                if (actualBirthday < 1 || actualBirthday > Integer.MAX_VALUE) return false;
+                this.initializedBirthday = (int) actualBirthday;
+                break;
+            }
+            if (this.initializedBirthday == null) return false;
+        }
         return true;
     }
 
