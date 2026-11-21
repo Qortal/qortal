@@ -140,6 +140,39 @@ public class PirateAddressIndexTests extends Common {
         }
     }
 
+    @Test public void spentLegacyDepositBindsTheExactReferencedRawTransaction() throws Exception {
+        try (Fixture f = new Fixture()) {
+            RawTransaction spent = f.refund(HEIGHT + 2);
+            f.service.history.put(ALIAS, List.of(f.funding, spent));
+            // Duplicate alias entries must not manufacture ambiguous deposits.
+            f.service.history.put(ADDRESS, List.of(f.funding, spent));
+            assertTrue(f.client.getUnspentOutputs(ADDRESS, false).isEmpty());
+            UnspentOutput recovered = PirateChainHTLC.recoverSpentFundingOutput(f.client, ADDRESS, VALUE);
+            assertNotNull(recovered); assertArrayEquals(f.hash.toByteArray(), recovered.hash);
+            assertEquals(0, recovered.index); assertEquals(VALUE, recovered.value);
+            assertEquals(BitcoinyHTLC.Status.REFUNDED, PirateChainHTLC.determineHtlcStatus(
+                    f.client, ADDRESS, VALUE, 3, TXID, recovered.index));
+        }
+    }
+
+    @Test public void spentLegacyDepositCannotBindDifferentBytesReturnedForTheReference() throws Exception {
+        try (Fixture f = new Fixture()) {
+            f.service.history.put(ALIAS, List.of(f.funding, f.refund(HEIGHT + 2)));
+            f.service.raw = f.service.raw.clone(); f.service.raw[12] ^= 1;
+            assertNull(PirateChainHTLC.recoverSpentFundingOutput(f.client, ADDRESS, VALUE));
+        }
+    }
+
+    @Test public void multipleHistoricalDepositsCannotBeSilentlyAssignedToOneLegacyTrade() throws Exception {
+        try (Fixture f = new Fixture()) {
+            byte[] second = f.service.raw.clone(); second[12] ^= 1;
+            f.service.history.put(ALIAS, List.of(f.funding, f.refund(HEIGHT + 2),
+                    RawTransaction.newBuilder().setHeight(HEIGHT + 1).setData(ByteString.copyFrom(second)).build()));
+            try { PirateChainHTLC.recoverSpentFundingOutput(f.client, ADDRESS, VALUE); fail("Ambiguous history"); }
+            catch (ForeignBlockchainException expected) { assertTrue(expected.getMessage().contains("Ambiguous")); }
+        }
+    }
+
     private static byte[] transaction(byte[] inputScript, byte[] outputScript) {
         ByteBuffer b = ByteBuffer.allocate(1000).order(ByteOrder.LITTLE_ENDIAN);
         b.putInt(0x80000006).putInt(0xd884b698).putInt(0x37a5165b).putInt(1795161189).putInt(4221200);
@@ -215,7 +248,9 @@ public class PirateAddressIndexTests extends Common {
         RawTransaction refund(int height) throws Exception {
             byte[] redeem = HashCode.fromString(PirateChainTransaction.read(service.raw).transaction.outputs.get(1).scriptPubKey.substring(6)).asBytes();
             byte[] signature = ByteBuffer.allocate(redeem.length + 5).put(new byte[]{1, 1, 0x51, 0x4c, (byte)redeem.length}).put(redeem).array();
-            return RawTransaction.newBuilder().setHeight(height).setData(ByteString.copyFrom(transaction(signature, new byte[0]))).build();
+            byte[] raw = transaction(signature, new byte[0]);
+            System.arraycopy(hash.toByteArray(), 0, raw, 21, 32);
+            return RawTransaction.newBuilder().setHeight(height).setData(ByteString.copyFrom(raw)).build();
         }
         @Override public void close() throws Exception {
             client.closeCurrentConnection(); channel.shutdownNow().awaitTermination(3, TimeUnit.SECONDS);

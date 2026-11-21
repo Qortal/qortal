@@ -1190,6 +1190,8 @@ public class PirateChainACCTv3TradeBot implements AcctTradeBot {
 			return false;
 		}
 		UnspentOutput funding = PirateChainHTLC.getUnspentFundingOutput(pirate.getBlockchainProvider(), address, minimum);
+		if (funding == null)
+			funding = PirateChainHTLC.recoverSpentFundingOutput(pirate.getBlockchainProvider(), address, minimum);
 		if (funding == null) {
 			logRecoveryWait(trade, "funding-recovery", "FUNDING_OUTPOINT_UNKNOWN", "htlc=" + address
 					+ " expectedAmount=" + expected + " fundingFee=" + trade.getFundingFee() + " minimumAmount=" + minimum

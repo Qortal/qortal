@@ -33,6 +33,8 @@ public class PirateChainRefundTests extends Common {
         repository = mock(Repository.class);
         cross = mock(CrossChainRepository.class);
         when(repository.getCrossChainRepository()).thenReturn(cross);
+        when(cross.getTradeBotData(any(byte[].class))).thenAnswer(call -> cross.getAllTradeBotData().stream()
+                .filter(row -> Arrays.equals(row.getTradePrivateKey(), call.getArgument(0))).findFirst().orElse(null));
         ATRepository ats = mock(ATRepository.class);
         when(repository.getATRepository()).thenReturn(ats);
         at = mock(ATData.class);
@@ -335,7 +337,7 @@ public class PirateChainRefundTests extends Common {
     @Test public void staleCallerUsesTheLatestCommittedCheckpoint() throws Exception {
         TradeBotData stale = trade(1), committed = trade(1);
         committed.setLastTransactionSignature(new PirateChainRefundState(130, 999999L, TXID).encode());
-        when(cross.getTradeBotData(stale.getTradePrivateKey())).thenReturn(committed);
+        doReturn(committed).when(cross).getTradeBotData(stale.getTradePrivateKey());
         assertFalse(bot.refund(repository, stale, at, data)); noBroadcast();
     }
     @Test public void legacyAckOnlyTerminalIsReopenedWithoutBlindBroadcast() throws Exception {
@@ -760,7 +762,7 @@ public class PirateChainRefundTests extends Common {
     @Test public void staleSellerUsesCommittedCheckpointAndCannotRepeatRedemption() throws Exception {
         TradeBotData stale = seller(1, SAPLING), committed = seller(1, SAPLING); sellerData(stale);
         committed.setLastTransactionSignature(new PirateChainRefundState(130, 999999L, TXID).encode());
-        when(cross.getTradeBotData(stale.getTradePrivateKey())).thenReturn(committed);
+        doReturn(committed).when(cross).getTradeBotData(stale.getTradePrivateKey());
         PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
         when(acct.findSecretA(repository, data)).thenReturn(new byte[32]);
         try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
@@ -781,6 +783,24 @@ public class PirateChainRefundTests extends Common {
             assertFalse(bot.canDelete(repository, seller)); freshBot().progress(repository, seller);
             assertEquals("BOB_WAITING_FOR_AT_REDEEM", seller.getState());
             assertNotNull(PirateChainRefundState.decode(seller.getLastTransactionSignature()));
+            verify(pirate, never()).redeemP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), anyString(), anyLong(), anyInt());
+        }
+    }
+
+    @Test public void legacySpentSellerCanBeBoundAndConfirmedWithoutAnUnspentOutput() throws Exception {
+        TradeBotData seller = seller(1, SAPLING); sellerData(seller);
+        seller.setState("BOB_DONE"); seller.setStateValue(30);
+        htlc.when(() -> PirateChainHTLC.getUnspentFundingOutput(any(), anyString(), anyLong())).thenReturn(null);
+        htlc.when(() -> PirateChainHTLC.recoverSpentFundingOutput(any(), anyString(), anyLong())).thenReturn(funding(2, 10000L));
+        status(BitcoinyHTLC.Status.REDEEMED);
+        PirateChainACCTv3 acct = mock(PirateChainACCTv3.class);
+        when(acct.findSecretA(repository, data)).thenReturn(new byte[32]);
+        try (MockedStatic<PirateChainACCTv3> accts = mockStatic(PirateChainACCTv3.class)) {
+            accts.when(PirateChainACCTv3::getInstance).thenReturn(acct);
+            assertFalse(bot.redeem(repository, seller, at, data));
+            assertEquals(2, seller.getFundingOutputIndex()); assertTrue(seller.hasFundingOutpoint());
+            assertTrue(PirateChainRefundState.isConfirmed(seller.getLastTransactionSignature()));
+            assertTrue(bot.canDelete(repository, seller));
             verify(pirate, never()).redeemP2sh(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), anyString(), anyLong(), anyInt());
         }
     }

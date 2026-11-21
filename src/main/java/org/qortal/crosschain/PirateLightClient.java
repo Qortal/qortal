@@ -676,6 +676,29 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 	@Override
 	public List<BitcoinyTransaction> getAddressBitcoinyTransactions(String address, boolean includeUnconfirmed)
 			throws ForeignBlockchainException {
+		List<BitcoinyTransaction> transactions = new ArrayList<>();
+		for (RawTransaction raw : getAddressRawTransactionData(address, includeUnconfirmed)) {
+			try {
+				BitcoinyTransaction transaction = PirateChainTransaction.read(raw.getData().toByteArray()).transaction;
+				transaction.height = Math.toIntExact(raw.getHeight());
+				transactions.add(transaction);
+			} catch (IllegalArgumentException | TransformationException e) {
+				throw new ForeignBlockchainException("Invalid Pirate address history: " + e.getMessage());
+			}
+		}
+		return transactions;
+	}
+
+	@Override
+	public List<byte[]> getRawAddressTransactions(String address, boolean includeUnconfirmed) throws ForeignBlockchainException {
+		List<byte[]> transactions = new ArrayList<>();
+		for (RawTransaction raw : getAddressRawTransactionData(address, includeUnconfirmed))
+			transactions.add(raw.getData().toByteArray());
+		return transactions;
+	}
+
+	private List<RawTransaction> getAddressRawTransactionData(String address, boolean includeUnconfirmed)
+			throws ForeignBlockchainException {
 		CompactTxStreamerGrpc.CompactTxStreamerBlockingStub stub = getCompactTxStreamerStub();
 		try {
 			// Firstly we need to get the latest block
@@ -702,7 +725,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 				}
 			}
 
-			List<BitcoinyTransaction> transactions = new ArrayList<>();
+			List<RawTransaction> transactions = new ArrayList<>();
 
 			for (RawTransaction rawTransaction : rawTransactions.values()) {
 
@@ -715,8 +738,7 @@ public class PirateLightClient extends BitcoinyBlockchainProvider {
 				String transactionDataHex = HashCode.fromBytes(transactionData).toString();
 				BitcoinyTransaction bitcoinyTransaction = PirateChain.deserializeRawTransaction(transactionDataHex);
 				if (alias != null && !PirateChainHTLC.involvesContract(bitcoinyTransaction, address)) continue;
-				bitcoinyTransaction.height = height.intValue();
-				transactions.add(bitcoinyTransaction);
+				transactions.add(rawTransaction);
 			}
 
 			return transactions;

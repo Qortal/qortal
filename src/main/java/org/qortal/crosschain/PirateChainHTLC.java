@@ -293,6 +293,55 @@ public class PirateChainHTLC {
 		return count;
 	}
 
+	/**
+	 * Recover an already-spent legacy deposit from its spender's previous-output reference.
+	 * Do not invent a ZIP-244 txid from the full bytes. The referenced transaction must
+	 * match the unique deposit in confirmed raw address history byte for byte.
+	 */
+	public static UnspentOutput recoverSpentFundingOutput(BitcoinyBlockchainProvider blockchain, String address, long minimumAmount)
+			throws ForeignBlockchainException {
+		try {
+			Map<java.nio.ByteBuffer, byte[]> unique = new LinkedHashMap<>();
+			for (byte[] raw : blockchain.getRawAddressTransactions(address, false))
+				unique.putIfAbsent(java.nio.ByteBuffer.wrap(raw), raw);
+			if (unique.size() > 1000) throw new ForeignBlockchainException("Too much ARRR history to bind a legacy deposit safely");
+			String script = HashCode.fromBytes(addressToScriptPubKey(address)).toString();
+			byte[] deposit = null;
+			int index = -1;
+			long value = 0;
+			List<BitcoinyTransaction> history = new ArrayList<>();
+			for (byte[] raw : unique.values()) {
+				BitcoinyTransaction tx = PirateChainTransaction.read(raw).transaction;
+				history.add(tx);
+				for (int i = 0; i < tx.outputs.size(); i++) {
+					BitcoinyTransaction.Output output = tx.outputs.get(i);
+					if (!script.equals(output.scriptPubKey) || output.value < minimumAmount) continue;
+					if (deposit != null) throw new ForeignBlockchainException("Ambiguous ARRR funding history; retaining recovery record");
+					deposit = raw; index = i; value = output.value;
+				}
+			}
+			if (deposit == null) return null;
+			UnspentOutput selected = null;
+			byte[] redeemHash = addressToRedeemScriptHash(address);
+			for (BitcoinyTransaction tx : history) {
+				if (tx.inputs.size() != 1) continue;
+				BitcoinyTransaction.Input input = tx.inputs.get(0);
+				if (input.outputVout != index) continue;
+				List<byte[]> chunks = extractScriptSigChunks(HashCode.fromString(input.scriptSig).asBytes());
+				if (chunks.size() < 3 || chunks.size() > 4
+						|| !Arrays.equals(Crypto.hash160(chunks.get(chunks.size() - 1)), redeemHash)) continue;
+				byte[] hash = HashCode.fromString(input.outputTxHash).asBytes();
+				if (hash.length != 32 || !Arrays.equals(deposit, blockchain.getRawTransaction(hash))) continue;
+				if (selected != null && !Arrays.equals(selected.hash, hash))
+					throw new ForeignBlockchainException("Conflicting ARRR funding references; retaining recovery record");
+				selected = new UnspentOutput(hash, index, 0, value, HashCode.fromString(script).asBytes(), address);
+			}
+			return selected;
+		} catch (org.qortal.transform.TransformationException | IllegalArgumentException e) {
+			throw new ForeignBlockchainException("Invalid ARRR funding history: " + e.getMessage());
+		}
+	}
+
 	/** Locate the HTLC output immediately after funding, including nonzero vout. */
 	public static UnspentOutput getFundingOutput(BitcoinyBlockchainProvider blockchain, String txid, String address, long minimumAmount) throws ForeignBlockchainException {
 		// Funding ACKs use display-order txids; lightwalletd expects internal byte order.
