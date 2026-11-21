@@ -182,6 +182,24 @@ public class ArbitraryDataFileListRelayTests {
     }
 
     @Test
+    public void directOnlyReplyNeverGainsRelayCapabilityAtAnIntermediary() throws Exception {
+        request(1, requester);
+        Message incoming = new ArbitraryDataFileListMessage(signature, Arrays.asList(firstHash), NTP.getTime(), 1,
+                holder.getPeerData().getAddress().toString(), "direct-only-holder", false, true);
+        incoming.setId(1);
+        lists.onNetworkArbitraryDataFileListMessage(holder, decodedReply(incoming));
+        processReplies();
+
+        assertEquals(1, requester.sent.size());
+        ArbitraryDataFileListMessage forwarded = decodedReply(requester.sent.get(0));
+        assertTrue(forwarded.isDirectConnectable());
+        assertEquals(holder.getPeerData().getAddress().toString(), forwarded.getPeerAddress());
+        assertFalse(forwarded.isRelayPossible());
+        assertTrue(relayRoutes().isEmpty());
+        assertTrue(downloads().isEmpty());
+    }
+
+    @Test
     public void foreignRelayOnlyDiscoveryRequiresPayloadRelay() throws Exception {
         request(1, requester);
         reply(holder, 1, false, firstHash);

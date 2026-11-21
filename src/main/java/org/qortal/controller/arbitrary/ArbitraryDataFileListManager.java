@@ -739,14 +739,17 @@ public class ArbitraryDataFileListManager {
                             Integer requestHops = arbitraryDataFileListMessage.getRequestHops();
                             Boolean isDirectConnectable = arbitraryDataFileListMessage.isDirectConnectable();
                             String nodeId = arbitraryDataFileListMessage.getNodeId();
+                            // Payload relay is possible only if every upstream hop offers it.
+                            boolean canRelay = this.isRelayAvailable
+                                    && Boolean.TRUE.equals(arbitraryDataFileListMessage.isRelayPossible());
 
                             // Discovery can cross a node with payload relay disabled only if
                             // the requester can connect directly to the advertised holder.
-                            if (!this.isRelayAvailable && !Boolean.TRUE.equals(isDirectConnectable)) {
+                            if (!canRelay && !Boolean.TRUE.equals(isDirectConnectable)) {
                                 continue;
                             }
 
-                            if (this.isRelayAvailable) {
+                            if (canRelay) {
                                 Long now = NTP.getTime();
                                 for (byte[] hash : hashes) {
                                     String hash58 = Base58.encode(hash);
@@ -761,7 +764,7 @@ public class ArbitraryDataFileListManager {
                             }
 
                             ArbitraryDataFileListMessage forwardArbitraryDataFileListMessage = new ArbitraryDataFileListMessage(signature, hashes, requestTime, requestHops,
-                                    arbitraryDataFileListMessage.getPeerAddress(), nodeId, this.isRelayAvailable, isDirectConnectable);
+                                    arbitraryDataFileListMessage.getPeerAddress(), nodeId, canRelay, isDirectConnectable);
 
                             forwardArbitraryDataFileListMessage.setId(message.getId());
 
