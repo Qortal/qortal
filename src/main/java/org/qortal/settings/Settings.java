@@ -305,9 +305,9 @@ public class Settings {
 	private boolean pirateChainWalletDebugLogging = false;
 
 	/**
-	 * Optional birthday for a brand-new Pirate Unified Wallet. When omitted, a
-	 * fresh wallet begins at the current lightwallet height. Set this before first
-	 * initialization when recovering an address that could have historical funds.
+     * Explicit birthday for an uninitialized Pirate Unified Wallet. When omitted,
+     * use arrrDefaultBirthday, including on nodes without local wallet files.
+     * Missing files can mean an existing account was restored on another node.
 	 * This setting is not an in-place rescan command.
 	 */
 	private Integer arrrNewWalletBirthday = null;

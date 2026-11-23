@@ -20,6 +20,52 @@ import static org.junit.Assert.*;
 public class CrossChainPirateChainResourceTests {
 
 	@Test
+	public void initializationRejectsConflictingOrInvalidChoicesBeforeOpeningAWallet() throws Exception {
+		CrossChainPirateChainResource resource = new CrossChainPirateChainResource();
+		var request = org.mockito.Mockito.mock(javax.servlet.http.HttpServletRequest.class);
+		org.mockito.Mockito.when(request.getLocale()).thenReturn(java.util.Locale.ENGLISH);
+		var requestField = CrossChainPirateChainResource.class.getDeclaredField("request");
+		requestField.setAccessible(true);
+		requestField.set(resource, request);
+		try (var security = org.mockito.Mockito.mockStatic(org.qortal.api.Security.class)) {
+			for (int choice = 0; choice < 4; choice++) {
+				var body = new org.qortal.api.model.crosschain.PirateChainWalletInitializationRequest();
+				body.entropy58 = "unfunded-fixture";
+				if (choice == 1) body.entropy58 = null;
+				if (choice == 2) body.birthday = 0;
+				if (choice == 3) { body.birthday = 2000000; body.useCurrentHeight = true; }
+				try {
+					resource.walletInitialization("fixture", choice == 0 ? null : body);
+					fail("Expected invalid criteria");
+				} catch (org.qortal.api.ApiException error) {
+					assertEquals(org.qortal.api.ApiError.INVALID_CRITERIA.getCode(), error.error);
+				}
+			}
+		}
+	}
+
+	@Test
+	public void initializationInspectionPassesNoImplicitHeightChoiceToController() throws Exception {
+		org.qortal.test.common.Common.useDefaultSettings();
+		var controller = org.mockito.Mockito.mock(org.qortal.controller.PirateChainWalletController.class);
+		var body = new org.qortal.api.model.crosschain.PirateChainWalletInitializationRequest();
+		body.entropy58 = "unfunded-fixture";
+		org.mockito.Mockito.when(controller.walletInitialization(body.entropy58, null, false))
+				.thenReturn(new org.json.JSONObject().put("needsSelection", true));
+		try (var security = org.mockito.Mockito.mockStatic(org.qortal.api.Security.class);
+			 var pirate = org.mockito.Mockito.mockStatic(org.qortal.crosschain.PirateChain.class);
+			 var wallets = org.mockito.Mockito.mockStatic(org.qortal.controller.PirateChainWalletController.class)) {
+			pirate.when(org.qortal.crosschain.PirateChain::getInstance)
+					.thenReturn(org.mockito.Mockito.mock(org.qortal.crosschain.PirateChain.class));
+			wallets.when(org.qortal.controller.PirateChainWalletController::getInstance).thenReturn(controller);
+			assertTrue(new org.json.JSONObject(new CrossChainPirateChainResource()
+					.walletInitialization("fixture", body)).getBoolean("needsSelection"));
+			org.mockito.Mockito.verify(controller).walletInitialization(body.entropy58, null, false);
+			org.mockito.Mockito.verifyNoMoreInteractions(controller);
+		}
+	}
+
+	@Test
 	public void disabledWalletFeeQuoteUsesTheExistingForeignChainApiError() throws Exception {
 		org.qortal.test.common.Common.useDefaultSettings();
 		try (var pirate = org.mockito.Mockito.mockStatic(org.qortal.crosschain.PirateChain.class)) {

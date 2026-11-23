@@ -72,8 +72,8 @@ public class PirateWalletMigrationTests {
     }
 
     @Test
-    public void freshUnifiedWalletUsesLiveHeightButRecoveryPathsKeepConfiguredBirthday() {
-        assertEquals(4_095_410, PirateWallet.chooseUnifiedWalletBirthday(
+    public void missingLocalFilesCannotMakeARestoredAccountSkipHistoricalFunds() {
+        assertEquals(2_000_000, PirateWallet.chooseUnifiedWalletBirthday(
                 2_000_000, null, false, false, false, 4_095_410));
         assertEquals(2_000_000, PirateWallet.chooseUnifiedWalletBirthday(
                 2_000_000, null, false, true, false, 4_095_410));

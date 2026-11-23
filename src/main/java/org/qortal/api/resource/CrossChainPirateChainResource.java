@@ -49,6 +49,29 @@ import java.util.List;
 @Tag(name = "Cross-Chain (Pirate Chain)")
 public class CrossChainPirateChainResource {
 
+	@POST
+	@Path("/walletinitialization")
+	@Produces(MediaType.APPLICATION_JSON)
+	@Operation(summary = "Inspect or select an uninitialized ARRR wallet's scan start",
+		description = "Omit birthday/useCurrentHeight to inspect without opening a wallet. An explicit selection applies only before initialization; existing wallet files and scan state are never replaced.")
+	@SecurityRequirement(name = "apiKey")
+	@ApiErrors({ ApiError.INVALID_CRITERIA, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE })
+	public String walletInitialization(@HeaderParam(Security.API_KEY_HEADER) String apiKey,
+			org.qortal.api.model.crosschain.PirateChainWalletInitializationRequest initialization) {
+		Security.checkApiCallAllowed(request);
+		if (initialization == null || initialization.entropy58 == null
+				|| (initialization.birthday != null && initialization.birthday < 1)
+				|| (initialization.birthday != null && initialization.useCurrentHeight))
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+		try {
+			requireWallet();
+			return PirateChainWalletController.getInstance().walletInitialization(initialization.entropy58,
+					initialization.birthday, initialization.useCurrentHeight).toString();
+		} catch (ForeignBlockchainException e) {
+			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE, e.getMessage());
+		}
+	}
+
 	@GET
 	@Path("/tradefees")
 	@Produces(MediaType.APPLICATION_JSON)
@@ -159,8 +182,11 @@ public class CrossChainPirateChainResource {
 				|| (preparation.maxFee != null && preparation.maxFee != PirateChain.getFundingFee())
 				|| (preparation.approvedQuote != null && !preparation.approvedQuote.matches("[0-9a-f]{64}")))
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+		this.logRequest("tradepreparation", "approved=" + (preparation.approvedQuote != null));
 		try {
-			return requireWallet().prepareTrade(preparation);
+			String response = requireWallet().prepareTrade(preparation);
+			this.logResponse("tradepreparation", response, false);
+			return response;
 		} catch (ForeignBlockchainException e) {
 			this.logError("tradepreparation", e);
 			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FOREIGN_BLOCKCHAIN_NETWORK_ISSUE, e.getMessage());

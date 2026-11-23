@@ -83,6 +83,34 @@ final class PirateTransactionHistory {
         return new RecoveredRecipients(txId, outputs, memo);
     }
 
+    /** Accept only complete recipient evidence from the bounded native history API. */
+    static RecoveredRecipients parsePartialRecipients(JSONObject history, String txId,
+            Set<String> internalAddresses, String myAddress) throws ForeignBlockchainException {
+        JSONArray rows = history.optJSONArray("transactions");
+        if (rows == null)
+            throw new ForeignBlockchainException("Pirate bounded history omitted transactions");
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.getJSONObject(i);
+            if (!txId.equals(row.optString("txid", null))) continue;
+            if (!Boolean.TRUE.equals(row.opt("metadata_complete")))
+                throw new ForeignBlockchainException("Pirate recipient metadata is incomplete");
+            JSONArray metadata = row.optJSONArray("outgoing_metadata");
+            if (metadata == null)
+                throw new ForeignBlockchainException("Pirate bounded history omitted outgoing metadata");
+            JSONArray recipients = new JSONArray();
+            for (int j = 0; j < metadata.length(); j++) {
+                JSONObject entry = metadata.getJSONObject(j);
+                recipients.put(new JSONObject()
+                        .put("address", requireString(entry, "address", "bounded history"))
+                        .put("amount", requireLong(entry, "value", "bounded history"))
+                        .put("memo", entry.opt("memo")));
+            }
+            return parseTransactionDetails(new JSONObject().put("txid", txId)
+                    .put("recipients", recipients), internalAddresses, myAddress);
+        }
+        throw new ForeignBlockchainException("Pirate bounded history omitted requested transaction");
+    }
+
     static List<SimpleTransaction> overlayRecoveredRecipients(List<SimpleTransaction> transactions,
             Map<String, RecoveredRecipients> recoveredByTransaction) {
         if (transactions == null || transactions.isEmpty() || recoveredByTransaction.isEmpty()) {

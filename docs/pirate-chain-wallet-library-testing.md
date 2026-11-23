@@ -945,10 +945,12 @@ an ARRR address. The latter is deterministically derived from the Qortal
 account entropy. On startup, Core logs the exact selected QDN transaction.
 
 A clean entropy-backed Unified Wallet with no local registry or legacy cache
-starts at the current lightwallet height. This avoids scanning old history for
-a genuinely new wallet, and the Unified registry persists that starting point.
-Existing Unified storage and legacy-cache migrations continue to use the
-configured `arrrDefaultBirthday`.
+defaults to `arrrDefaultBirthday` (2000000). Missing local files can mean an
+existing account was restored on another node. The matching Hub asks before first
+use: recover history by default, or explicitly confirm the wallet has never
+received funds and start at the current block. The choice is local to this wallet
+and node. Existing Unified storage and legacy-cache migrations keep their prior
+policy. See [the November 23 diagnosis and recovery guide](arrr-nov23-recovery.md).
 
 When restoring a Qortal account whose derived ARRR address may already have
 received funds, set a positive `arrrNewWalletBirthday` before that storage
@@ -1056,7 +1058,7 @@ load failure as a retryable status instead of claiming that the library is ready
 ## Validation for wallet initialization, recovery, and server readiness
 
 The ordinary unit suite now checks that a clean entropy-backed wallet defaults
-to the live tip, explicit recovery birthdays are honored before first
+to the configured historical height unless explicitly selected, recovery birthdays are honored before first
 initialization, existing wallet paths keep the configured birthday, every JNI
 entrypoint is serialized, server chain identity and height corroboration are
 enforced, and a server is not admitted unless bounded `GetLightdInfo` and

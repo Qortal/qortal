@@ -26,6 +26,81 @@ import static org.junit.Assert.fail;
 public class PirateTransactionHistoryTests extends Common {
 
     @Test
+    public void backgroundRecoveryUsesBoundedNativeHistoryAndReleasesTheWalletLane() throws Exception {
+        PirateChain pirate = org.mockito.Mockito.mock(PirateChain.class, org.mockito.Mockito.CALLS_REAL_METHODS);
+        PirateWallet wallet = org.mockito.Mockito.mock(PirateWallet.class);
+        org.mockito.Mockito.when(wallet.getWalletAddress()).thenReturn("zs-wallet");
+        org.mockito.Mockito.when(wallet.isNativeEndpointPoolConfigured()).thenReturn(true);
+        var controller = org.mockito.Mockito.mock(org.qortal.controller.PirateChainWalletController.class);
+        org.mockito.Mockito.when(controller.tryBeginCurrentWalletUse(wallet)).thenReturn(true);
+        org.mockito.Mockito.when(controller.getCurrentWallet()).thenReturn(wallet);
+        PirateChain.RecipientEnrichmentCache cache = new PirateChain.RecipientEnrichmentCache(10);
+        List<SimpleTransaction> transactions = List.of(unresolvedTransaction("target"));
+        assertEquals("target", cache.claimNext(transactions, 0));
+        try (var controllers = org.mockito.Mockito.mockStatic(org.qortal.controller.PirateChainWalletController.class)) {
+            controllers.when(org.qortal.controller.PirateChainWalletController::getInstance).thenReturn(controller);
+            org.mockito.Mockito.doAnswer(call -> {
+                JSONObject request = call.getArgument(0);
+                if ("get_active_wallet".equals(request.getString("method")))
+                    return new JSONObject("{\"ok\":true,\"result\":\"fixture-wallet\"}");
+                assertEquals("Background reads must not use the long generic details RPC",
+                        "qortal_list_transactions_partial", request.getString("method"));
+                assertEquals("fixture-wallet", request.getString("wallet_id"));
+                return new JSONObject().put("ok", true).put("result", new JSONObject().put("transactions",
+                        new JSONArray().put(new JSONObject().put("txid", "target").put("metadata_complete", true)
+                                .put("outgoing_metadata", new JSONArray().put(new JSONObject()
+                                        .put("address", "zs-recipient").put("value", 25))))));
+            }).when(pirate).queryNativeWallet(org.mockito.ArgumentMatchers.any(JSONObject.class),
+                    org.mockito.ArgumentMatchers.anyString());
+            var method = PirateChain.class.getDeclaredMethod("enrichTransactionRecipient", PirateWallet.class,
+                    String.class, PirateChain.RecipientEnrichmentCache.class);
+            method.setAccessible(true);
+            method.invoke(pirate, wallet, "target", cache);
+            assertEquals("zs-recipient", cache.overlay(transactions).get(0).getOutputs().get(0).getAddress());
+            org.mockito.Mockito.verify(controller).endWalletUse();
+        }
+    }
+
+    @Test
+    public void boundedHistoryAcceptsOnlyCompleteMetadataForTheRequestedTransaction() throws Exception {
+        JSONObject row = new JSONObject().put("txid", "target").put("metadata_complete", true)
+                .put("outgoing_metadata", new JSONArray()
+                        .put(new JSONObject().put("address", "zs-recipient").put("value", "25").put("memo", "memo"))
+                        .put(new JSONObject().put("address", "zs-change").put("value", "75")));
+        JSONObject history = new JSONObject().put("transactions", new JSONArray().put(row));
+        PirateTransactionHistory.RecoveredRecipients result = PirateTransactionHistory.parsePartialRecipients(
+                history, "target", Set.of("zs-change"), "zs-wallet");
+        assertEquals("target", result.getTxId());
+        assertEquals(1, result.getOutputs().size());
+        assertEquals("zs-recipient", result.getOutputs().get(0).getAddress());
+        assertEquals(25L, result.getOutputs().get(0).getAmount());
+        for (Object incomplete : List.of(false, "true", JSONObject.NULL)) {
+            row.put("metadata_complete", incomplete);
+            try {
+                PirateTransactionHistory.parsePartialRecipients(history, "target", Set.of(), "zs-wallet");
+                fail("Incomplete/invalid metadata must remain unresolved");
+            } catch (ForeignBlockchainException expected) { }
+        }
+        row.put("metadata_complete", true);
+        try {
+            PirateTransactionHistory.parsePartialRecipients(history, "another-transaction", Set.of(), "zs-wallet");
+            fail("Never substitute another transaction's recipients");
+        } catch (ForeignBlockchainException expected) { }
+    }
+
+    @Test
+    public void boundedHistoryDoesNotPromoteFractionalRecipientAmounts() throws Exception {
+        JSONObject row = new JSONObject().put("txid", "target").put("metadata_complete", true)
+                .put("outgoing_metadata", new JSONArray().put(new JSONObject()
+                        .put("address", "zs-recipient").put("value", new BigDecimal("1.5"))));
+        try {
+            PirateTransactionHistory.parsePartialRecipients(new JSONObject()
+                    .put("transactions", new JSONArray().put(row)), "target", Set.of(), "zs-wallet");
+            fail("Must not truncate an atomic amount");
+        } catch (ForeignBlockchainException expected) { }
+    }
+
+    @Test
     public void unifiedHistoryRejectsFractionalAndOverflowingAtomicAmounts() throws Exception {
         for (Object invalid : List.of(new BigDecimal("1.5"), new BigInteger("9223372036854775808"), 9007199254740992.0)) {
             for (String field : List.of("amount", "fee", "timestamp")) {

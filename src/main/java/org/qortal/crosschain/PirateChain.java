@@ -518,9 +518,8 @@ public class PirateChain extends Bitcoiny {
 			// adds network calls and can defer every row while normal sync catches up.
 			stage = "endpoint-pool";
 
-			JSONObject activeWallet = parseLitewalletResponse(
-					LiteWalletJni.invokeJson("{\"method\":\"get_active_wallet\"}", false),
-					"get_active_wallet");
+			JSONObject activeWallet = this.queryNativeWallet(
+					new JSONObject().put("method", "get_active_wallet"), "get_active_wallet");
 			String walletId = getUnifiedEnvelopeString(activeWallet, "get_active_wallet");
 			if (!wallet.isNativeEndpointPoolConfigured()) {
 				this.configureNativeEndpointPool(walletId, wallet);
@@ -528,17 +527,19 @@ public class PirateChain extends Bitcoiny {
 			}
 
 			stage = "transaction-details";
+			// The generic details API performs memo and recipient RPC with long
+			// retry budgets. This optional background read owns the wallet lane:
+			// use JNI 0.3.11's single five-second recovery budget instead.
 			JSONObject request = new JSONObject()
-					.put("method", "get_transaction_details")
+					.put("method", "qortal_list_transactions_partial")
 					.put("wallet_id", walletId)
-					.put("txid", txId);
-			JSONObject response = parseLitewalletResponse(
-					LiteWalletJni.invokeJson(request.toString(), false), "get_transaction_details");
-			JSONObject details = getUnifiedEnvelopeObject(response, "get_transaction_details");
+					.put("limit", JSONObject.NULL);
+			JSONObject response = this.queryNativeWallet(request, "qortal_list_transactions_partial");
+			JSONObject details = getUnifiedEnvelopeObject(response, "qortal_list_transactions_partial");
 			stage = "recipient-decode";
 			PirateTransactionHistory.RecoveredRecipients recovered =
-					PirateTransactionHistory.parseTransactionDetails(
-							details, recipientCache.getInternalAddresses(), walletAddress);
+					PirateTransactionHistory.parsePartialRecipients(
+							details, txId, recipientCache.getInternalAddresses(), walletAddress);
 			if (!txId.equals(recovered.getTxId()) || recovered.getOutputs().isEmpty()) {
 				throw new ForeignBlockchainException("Pirate recipient recovery returned no external recipients");
 			}
@@ -558,6 +559,10 @@ public class PirateChain extends Bitcoiny {
 				walletController.endWalletUse();
 			}
 		}
+	}
+
+	JSONObject queryNativeWallet(JSONObject request, String command) throws ForeignBlockchainException {
+		return parseLitewalletResponse(LiteWalletJni.invokeJson(request.toString(), false), command);
 	}
 
 	private void configureNativeEndpointPool(String walletId, PirateWallet wallet)

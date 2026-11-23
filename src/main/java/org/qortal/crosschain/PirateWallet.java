@@ -140,8 +140,11 @@ public class PirateWallet {
                 }
 
                 Integer requestedNewWalletBirthday = Settings.getInstance().getArrrNewWalletBirthday();
-                boolean fetchCurrentHeight = this.isNullSeedWallet
-                        || (!hasUnifiedWalletRegistry && !hasLegacyWalletCache && requestedNewWalletBirthday == null);
+                Integer selectedBirthday = new PirateWalletInitialization(this.entropyBytes).savedBirthday();
+                if (selectedBirthday != null) requestedNewWalletBirthday = selectedBirthday;
+                // Missing local files do not distinguish a new account from a
+                // restored account. Never silently skip its earlier deposits.
+                boolean fetchCurrentHeight = this.isNullSeedWallet;
                 Integer currentHeight = fetchCurrentHeight ? this.getCurrentLightwalletHeight(provider) : null;
                 int birthday = PirateWallet.chooseUnifiedWalletBirthday(
                         configuredBirthday,
@@ -151,13 +154,8 @@ public class PirateWallet {
                         hasLegacyWalletCache,
                         currentHeight);
 
-                if (!this.isNullSeedWallet && !hasUnifiedWalletRegistry && !hasLegacyWalletCache
-                        && requestedNewWalletBirthday == null && currentHeight != null) {
-                    LOGGER.info("Creating fresh Pirate Unified Wallet at current lightwallet height {}", birthday);
-                } else {
-                    LOGGER.info("Initializing Pirate Unified Wallet with birthday {} (registryExists={}, legacyCacheExists={})",
-                            birthday, hasUnifiedWalletRegistry, hasLegacyWalletCache);
-                }
+                LOGGER.info("Initializing Pirate Unified Wallet with birthday {} (registryExists={}, legacyCacheExists={})",
+                        birthday, hasUnifiedWalletRegistry, hasLegacyWalletCache);
 
                 if (!this.initFromSeed(serverUri, inputSeedPhrase, birthday)) {
                     LOGGER.info("Pirate wallet initFromSeed failed (birthday={})", birthday);
@@ -321,10 +319,9 @@ public class PirateWallet {
 
     /**
      * A stored Unified wallet or a legacy cache might represent historic funds,
-     * so it must retain the conservative configured birthday. A clean,
-     * entropy-backed Unified namespace uses the current tip by default to avoid
-     * scanning old history. Recovery callers can set arrrNewWalletBirthday
-     * before the namespace is first initialized.
+     * so it must retain the conservative configured birthday. A clean namespace
+     * can also be an account restored on another node. Only an explicit birthday
+     * may skip its history; the public null-seed lookup wallet may use the tip.
      */
     static int chooseUnifiedWalletBirthday(int configuredBirthday, Integer requestedNewWalletBirthday,
                                            boolean nullSeedWallet, boolean hasUnifiedWalletRegistry,
@@ -342,8 +339,7 @@ public class PirateWallet {
             return requestedNewWalletBirthday;
         }
 
-        return currentLightwalletHeight != null && currentLightwalletHeight > 0
-                ? currentLightwalletHeight : configuredBirthday;
+        return configuredBirthday;
     }
 
     private boolean initFromSeed(String serverUri, String inputSeedPhrase, int birthday) {

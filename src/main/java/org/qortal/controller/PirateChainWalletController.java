@@ -801,6 +801,37 @@ public class PirateChainWalletController extends Thread {
         }
     }
 
+    /** Serialize first-use choices with initialization, without selecting a native wallet. */
+    public JSONObject walletInitialization(String entropy58, Integer birthday, boolean useCurrentHeight)
+            throws ForeignBlockchainException {
+        byte[] entropy;
+        try {
+            entropy = Base58.decode(entropy58);
+        } catch (RuntimeException e) {
+            throw new ForeignBlockchainException("Invalid entropy bytes");
+        }
+        if (entropy == null || entropy.length != 32)
+            throw new ForeignBlockchainException("Invalid entropy bytes");
+        if (!Settings.getInstance().isPirateChainWalletUnified())
+            throw new ForeignBlockchainException("Pirate wallet initialization choice requires Unified storage");
+        if (!this.acquireWalletLock(SWITCH_LOCK_TIMEOUT_MS))
+            throw new ForeignBlockchainException("Wallet busy. Please try again later.");
+        try {
+            org.qortal.crosschain.PirateWalletInitialization initialization =
+                    new org.qortal.crosschain.PirateWalletInitialization(entropy);
+            JSONObject status = initialization.status();
+            if (!status.getBoolean("needsSelection") || (birthday == null && !useCurrentHeight)) return status;
+            if (useCurrentHeight) birthday = PirateChain.getInstance().getBlockchainHeight();
+            if (birthday == null || birthday < 1)
+                throw new ForeignBlockchainException("Pirate chain height unavailable");
+            return initialization.select(birthday);
+        } catch (IOException e) {
+            throw new ForeignBlockchainException("Unable to read or save Pirate wallet scan-height choice");
+        } finally {
+            this.releaseWalletLockIfHeld();
+        }
+    }
+
     public void beginNullSeedWalletUse(boolean requireSync) throws ForeignBlockchainException {
         this.beginWalletUse(NULL_SEED_ENTROPY58, true, requireSync, false);
     }
