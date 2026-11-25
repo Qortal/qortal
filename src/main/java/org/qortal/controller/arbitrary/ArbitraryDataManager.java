@@ -218,6 +218,11 @@ public class ArbitraryDataManager extends Thread {
 
 		// Loop through the names in the list and fetch transactions for each
 		for (String name : followedNames) {
+			// Each name runs a fresh repository query; without this check the loop kept going
+			// after shutdown closed the repository, logging one error per remaining name.
+			if (isStopping) {
+				return;
+			}
 			this.fetchAndProcessTransactions(name);
 		}
 	}
@@ -227,6 +232,10 @@ public class ArbitraryDataManager extends Thread {
 	}
 
 	private void fetchAndProcessTransactions(String name) throws InterruptedException {
+		if (isStopping) {
+			return;
+		}
+
 		ArbitraryDataStorageManager storageManager = ArbitraryDataStorageManager.getInstance();
 
 		// Paginate queries when fetching arbitrary transactions
