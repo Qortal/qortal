@@ -290,7 +290,7 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 
 		long p2shFee;
 		try {
-			p2shFee = Bitcoin.getInstance().getP2shFee(now);
+			p2shFee = BitcoinyHtlcFees.fundingReserve(Bitcoin.getInstance(), now);
 		} catch (ForeignBlockchainException e) {
 			LOGGER.debug("Couldn't estimate Bitcoin fees?");
 			return ResponseResult.NETWORK_ISSUE;
@@ -302,7 +302,9 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 		long totalFundsRequired = fundsRequiredForP2shA + fundsRequiredForP2shB;
 
 		// As buildSpend also adds a fee, this is more pessimistic than required
-		Transaction fundingCheckTransaction = Bitcoin.getInstance().buildSpend(xprv58, tradeForeignAddress, totalFundsRequired);
+		Transaction fundingCheckTransaction;
+		try { fundingCheckTransaction = Bitcoin.getInstance().buildSpend(xprv58, tradeForeignAddress, totalFundsRequired); }
+		catch (ForeignBlockchainException e) { return ResponseResult.NETWORK_ISSUE; }
 		if (fundingCheckTransaction == null)
 			return ResponseResult.BALANCE_ISSUE;
 
@@ -315,7 +317,9 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 		// Do not include fee for funding transaction as this is covered by buildSpend()
 		long amountA = crossChainTradeData.expectedForeignAmount - P2SH_B_OUTPUT_AMOUNT + p2shFee /*redeeming/refunding P2SH-A*/;
 
-		Transaction p2shFundingTransaction = Bitcoin.getInstance().buildSpend(tradeBotData.getForeignKey(), p2shAddress, amountA);
+		Transaction p2shFundingTransaction;
+		try { p2shFundingTransaction = Bitcoin.getInstance().buildSpend(tradeBotData.getForeignKey(), p2shAddress, amountA); }
+		catch (ForeignBlockchainException e) { return ResponseResult.NETWORK_ISSUE; }
 		if (p2shFundingTransaction == null) {
 			LOGGER.debug("Unable to build P2SH-A funding transaction - lack of funds?");
 			return ResponseResult.BALANCE_ISSUE;
@@ -497,9 +501,7 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 		String p2shAddressA = bitcoin.deriveP2shAddress(redeemScriptA);
 
 		// Fee for redeem/refund is subtracted from P2SH-A balance.
-		long feeTimestampA = calcP2shAFeeTimestamp(tradeBotData.getLockTimeA(), crossChainTradeData.tradeTimeout);
-		long p2shFeeA = bitcoin.getP2shFee(feeTimestampA);
-		long minimumAmountA = crossChainTradeData.expectedForeignAmount - P2SH_B_OUTPUT_AMOUNT + p2shFeeA;
+		long minimumAmountA = crossChainTradeData.expectedForeignAmount - P2SH_B_OUTPUT_AMOUNT;
 		BitcoinyHTLC.Status htlcStatusA = BitcoinyHTLC.determineHtlcStatus(bitcoin.getBlockchainProvider(), p2shAddressA, minimumAmountA);
 
 		switch (htlcStatusA) {
@@ -619,8 +621,8 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 			String p2shAddressA = bitcoin.deriveP2shAddress(redeemScriptA);
 
 			long feeTimestampA = calcP2shAFeeTimestamp(lockTimeA, crossChainTradeData.tradeTimeout);
-			long p2shFeeA = bitcoin.getP2shFee(feeTimestampA);
-			final long minimumAmountA = tradeBotData.getForeignAmount() - P2SH_B_OUTPUT_AMOUNT + p2shFeeA;
+			// Require a sufficient reserve before committing QORT to a new trade.
+			final long minimumAmountA = Math.addExact(tradeBotData.getForeignAmount() - P2SH_B_OUTPUT_AMOUNT, BitcoinyHtlcFees.fundingReserve(bitcoin, feeTimestampA));
 
 			BitcoinyHTLC.Status htlcStatusA = BitcoinyHTLC.determineHtlcStatus(bitcoin.getBlockchainProvider(), p2shAddressA, minimumAmountA);
 
@@ -646,6 +648,8 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 					// Fall-through out of switch...
 					break;
 			}
+
+			BitcoinyHtlcFees.uniqueFunding(bitcoin.getUnspentOutputs(p2shAddressA, false), redeemScriptA, minimumAmountA);
 
 			// Good to go - send MESSAGE to AT
 
@@ -716,9 +720,7 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 			byte[] redeemScriptA = BitcoinyHTLC.buildScript(tradeBotData.getTradeForeignPublicKeyHash(), lockTimeA, crossChainTradeData.creatorForeignPKH, tradeBotData.getHashOfSecret());
 			String p2shAddressA = bitcoin.deriveP2shAddress(redeemScriptA);
 
-			long feeTimestampA = calcP2shAFeeTimestamp(lockTimeA, crossChainTradeData.tradeTimeout);
-			long p2shFeeA = bitcoin.getP2shFee(feeTimestampA);
-			long minimumAmountA = crossChainTradeData.expectedForeignAmount - P2SH_B_OUTPUT_AMOUNT + p2shFeeA;
+			long minimumAmountA = crossChainTradeData.expectedForeignAmount - P2SH_B_OUTPUT_AMOUNT;
 			BitcoinyHTLC.Status htlcStatusA = BitcoinyHTLC.determineHtlcStatus(bitcoin.getBlockchainProvider(), p2shAddressA, minimumAmountA);
 
 			switch (htlcStatusA) {
@@ -785,10 +787,10 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 		String p2shAddressB = bitcoin.deriveP2shAddress(redeemScriptB);
 
 		long feeTimestampB = calcP2shBFeeTimestamp(lockTimeA, lockTimeB);
-		long p2shFeeB = bitcoin.getP2shFee(feeTimestampB);
+		long p2shFeeB = BitcoinyHtlcFees.fundingReserve(bitcoin, feeTimestampB);
 
 		// Have we funded P2SH-B already?
-		final long minimumAmountB = P2SH_B_OUTPUT_AMOUNT + p2shFeeB;
+		final long minimumAmountB = P2SH_B_OUTPUT_AMOUNT;
 
 		BitcoinyHTLC.Status htlcStatusB = BitcoinyHTLC.determineHtlcStatus(bitcoin.getBlockchainProvider(), p2shAddressB, minimumAmountB);
 
@@ -862,10 +864,8 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 		byte[] redeemScriptB = BitcoinyHTLC.buildScript(crossChainTradeData.partnerForeignPKH, crossChainTradeData.lockTimeB, crossChainTradeData.creatorForeignPKH, crossChainTradeData.hashOfSecretB);
 		String p2shAddressB = bitcoin.deriveP2shAddress(redeemScriptB);
 
-		long feeTimestampB = calcP2shBFeeTimestamp(crossChainTradeData.lockTimeA, crossChainTradeData.lockTimeB);
-		long p2shFeeB = bitcoin.getP2shFee(feeTimestampB);
 
-		final long minimumAmountB = P2SH_B_OUTPUT_AMOUNT + p2shFeeB;
+		final long minimumAmountB = P2SH_B_OUTPUT_AMOUNT;
 
 		BitcoinyHTLC.Status htlcStatusB = BitcoinyHTLC.determineHtlcStatus(bitcoin.getBlockchainProvider(), p2shAddressB, minimumAmountB);
 
@@ -897,7 +897,7 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 		List<TransactionOutput> fundingOutputs = bitcoin.getUnspentOutputs(p2shAddressB, false);
 		byte[] receivingAccountInfo = tradeBotData.getReceivingAccountInfo();
 
-		Transaction p2shRedeemTransaction = BitcoinyHTLC.buildRedeemTransaction(bitcoin.getNetworkParameters(), redeemAmount, redeemKey,
+		Transaction p2shRedeemTransaction = BitcoinyHtlcFees.buildRedeemTransaction(bitcoin, redeemAmount, redeemKey,
 				fundingOutputs, redeemScriptB, tradeBotData.getSecret(), receivingAccountInfo);
 
 		bitcoin.broadcastTransaction(p2shRedeemTransaction);
@@ -934,9 +934,7 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 		byte[] redeemScriptB = BitcoinyHTLC.buildScript(tradeBotData.getTradeForeignPublicKeyHash(), crossChainTradeData.lockTimeB, crossChainTradeData.creatorForeignPKH, crossChainTradeData.hashOfSecretB);
 		String p2shAddressB = bitcoin.deriveP2shAddress(redeemScriptB);
 
-		long feeTimestampB = calcP2shBFeeTimestamp(crossChainTradeData.lockTimeA, crossChainTradeData.lockTimeB);
-		long p2shFeeB = bitcoin.getP2shFee(feeTimestampB);
-		final long minimumAmountB = P2SH_B_OUTPUT_AMOUNT + p2shFeeB;
+		final long minimumAmountB = P2SH_B_OUTPUT_AMOUNT;
 
 		BitcoinyHTLC.Status htlcStatusB = BitcoinyHTLC.determineHtlcStatus(bitcoin.getBlockchainProvider(), p2shAddressB, minimumAmountB);
 
@@ -1040,9 +1038,7 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 		String p2shAddressA = bitcoin.deriveP2shAddress(redeemScriptA);
 
 		// Fee for redeem/refund is subtracted from P2SH-A balance.
-		long feeTimestampA = calcP2shAFeeTimestamp(lockTimeA, crossChainTradeData.tradeTimeout);
-		long p2shFeeA = bitcoin.getP2shFee(feeTimestampA);
-		long minimumAmountA = crossChainTradeData.expectedForeignAmount - P2SH_B_OUTPUT_AMOUNT + p2shFeeA;
+		long minimumAmountA = crossChainTradeData.expectedForeignAmount - P2SH_B_OUTPUT_AMOUNT;
 		BitcoinyHTLC.Status htlcStatusA = BitcoinyHTLC.determineHtlcStatus(bitcoin.getBlockchainProvider(), p2shAddressA, minimumAmountA);
 
 		switch (htlcStatusA) {
@@ -1066,7 +1062,7 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 				ECKey redeemKey = ECKey.fromPrivate(tradeBotData.getTradePrivateKey());
 				List<TransactionOutput> fundingOutputs = bitcoin.getUnspentOutputs(p2shAddressA, false);
 
-				Transaction p2shRedeemTransaction = BitcoinyHTLC.buildRedeemTransaction(bitcoin.getNetworkParameters(), redeemAmount, redeemKey,
+				Transaction p2shRedeemTransaction = BitcoinyHtlcFees.buildRedeemTransaction(bitcoin, redeemAmount, redeemKey,
 						fundingOutputs, redeemScriptA, secretA, receivingAccountInfo);
 
 				bitcoin.broadcastTransaction(p2shRedeemTransaction);
@@ -1106,9 +1102,7 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 		byte[] redeemScriptB = BitcoinyHTLC.buildScript(tradeBotData.getTradeForeignPublicKeyHash(), lockTimeB, crossChainTradeData.creatorForeignPKH, crossChainTradeData.hashOfSecretB);
 		String p2shAddressB = bitcoin.deriveP2shAddress(redeemScriptB);
 
-		long feeTimestampB = calcP2shBFeeTimestamp(crossChainTradeData.lockTimeA, lockTimeB);
-		long p2shFeeB = bitcoin.getP2shFee(feeTimestampB);
-		final long minimumAmountB = P2SH_B_OUTPUT_AMOUNT + p2shFeeB;
+		final long minimumAmountB = P2SH_B_OUTPUT_AMOUNT;
 
 		BitcoinyHTLC.Status htlcStatusB = BitcoinyHTLC.determineHtlcStatus(bitcoin.getBlockchainProvider(), p2shAddressB, minimumAmountB);
 
@@ -1142,7 +1136,7 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 				String receiveAddress = bitcoin.getUnusedReceiveAddress(tradeBotData.getForeignKey());
 				Address receiving = Address.fromString(bitcoin.getNetworkParameters(), receiveAddress);
 
-				Transaction p2shRefundTransaction = BitcoinyHTLC.buildRefundTransaction(bitcoin.getNetworkParameters(), refundAmount, refundKey,
+				Transaction p2shRefundTransaction = BitcoinyHtlcFees.buildRefundTransaction(bitcoin, refundAmount, refundKey,
 						fundingOutputs, redeemScriptB, lockTimeB, receiving.getHash());
 
 				bitcoin.broadcastTransaction(p2shRefundTransaction);
@@ -1177,9 +1171,7 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 		String p2shAddressA = bitcoin.deriveP2shAddress(redeemScriptA);
 
 		// Fee for redeem/refund is subtracted from P2SH-A balance.
-		long feeTimestampA = calcP2shAFeeTimestamp(lockTimeA, crossChainTradeData.tradeTimeout);
-		long p2shFeeA = bitcoin.getP2shFee(feeTimestampA);
-		long minimumAmountA = crossChainTradeData.expectedForeignAmount - P2SH_B_OUTPUT_AMOUNT + p2shFeeA;
+		long minimumAmountA = crossChainTradeData.expectedForeignAmount - P2SH_B_OUTPUT_AMOUNT;
 		BitcoinyHTLC.Status htlcStatusA = BitcoinyHTLC.determineHtlcStatus(bitcoin.getBlockchainProvider(), p2shAddressA, minimumAmountA);
 
 		switch (htlcStatusA) {
@@ -1208,7 +1200,7 @@ public class BitcoinACCTv1TradeBot implements AcctTradeBot {
 				String receiveAddress = bitcoin.getUnusedReceiveAddress(tradeBotData.getForeignKey());
 				Address receiving = Address.fromString(bitcoin.getNetworkParameters(), receiveAddress);
 
-				Transaction p2shRefundTransaction = BitcoinyHTLC.buildRefundTransaction(bitcoin.getNetworkParameters(), refundAmount, refundKey,
+				Transaction p2shRefundTransaction = BitcoinyHtlcFees.buildRefundTransaction(bitcoin, refundAmount, refundKey,
 						fundingOutputs, redeemScriptA, lockTimeA, receiving.getHash());
 
 				bitcoin.broadcastTransaction(p2shRefundTransaction);

@@ -3,6 +3,8 @@ package org.qortal.crosschain;
 import pirate.wallet.sdk.rpc.CompactFormats.CompactBlock;
 import com.google.common.hash.HashCode;
 import com.google.common.primitives.Bytes;
+import org.bitcoinj.core.Transaction;
+import org.bitcoinj.core.TransactionOutput;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.json.simple.JSONArray;
@@ -14,7 +16,6 @@ import org.qortal.crypto.Crypto;
 import org.qortal.utils.BitTwiddling;
 
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.text.DecimalFormat;
@@ -40,7 +41,9 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 	// See: https://electrumx.readthedocs.io/en/latest/protocol-changes.html
 	private static final double MIN_PROTOCOL_VERSION = 1.2;
-	private static final double MAX_PROTOCOL_VERSION = 2.0; // Higher than current latest, for hopeful future-proofing
+	// Advertise only implemented semantics: 1.6 changes header responses and 1.7
+	// removes the blockchain.scripthash methods used for wallet discovery/spending.
+	private static final double MAX_PROTOCOL_VERSION = 1.4;
 	private static final int MIN_TARGET_CONNECTIONS = 2;
 	private static final int DEFAULT_TARGET_CONNECTIONS = 3;
 	private static final double TARGET_CONNECTIONS_FRACTION = 0.75d;
@@ -52,6 +55,7 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 	// "message": "daemon error: DaemonError({'code': -5, 'message': 'No such mempool or blockchain transaction. Use gettransaction for wallet transactions.'})"
 	private static final Pattern DAEMON_ERROR_REGEX = Pattern.compile("DaemonError\\(\\{.*'code': ?(-?[0-9]+).*\\}\\)\\z"); // Capture 'code' inside curly-brace content
+	private static final long JSON_RPC_METHOD_NOT_FOUND = -32601L;
 
 	/** Error message sent by some ElectrumX servers when they don't support returning verbose transactions. */
 	private static final String VERBOSE_TRANSACTIONS_UNSUPPORTED_MESSAGE = "verbose transactions are currently unsupported";
@@ -211,6 +215,18 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 	@Override
 	public String getNetId() {
 		return this.netId;
+	}
+
+	@Override
+	public long getMinimumRelayFeePerKb() throws ForeignBlockchainException {
+		Object response = this.rpc("blockchain.relayfee").getResponse();
+		try {
+			long fee = BitcoinyAmounts.atomicUnits(response);
+			if (fee < 0) throw new IllegalArgumentException("Negative relay fee");
+			return fee;
+		} catch (IllegalArgumentException | ArithmeticException e) {
+			throw new ForeignBlockchainException("Invalid network relay fee response");
+		}
 	}
 
 	/**
@@ -502,12 +518,13 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 				inputs.add(new BitcoinyTransaction.Input(scriptSig, sequence, outputTxHash, outputVout));
 			}
 
+			List<Long> outputValues = transactionOutputValues(txHash, transactionJson, (JSONArray) outputsObj);
 			List<BitcoinyTransaction.Output> outputs = new ArrayList<>();
 			for (Object outputObj : (JSONArray) outputsObj) {
 				JSONObject outputJson = (JSONObject) outputObj;
 
 				String scriptPubKey = (String) ((JSONObject) outputJson.get("scriptPubKey")).get("hex");
-				long value = BigDecimal.valueOf((Double) outputJson.get("value")).setScale(8).unscaledValue().longValue();
+				long value = outputValues.get(outputs.size());
 
 				// address too, if present in the "addresses" array
 				List<String> addresses = null;
@@ -558,6 +575,50 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		this.connections.remove(serverResponse.getElectrumServer());
 		serverResponse.getElectrumServer().closeServer(this.getClass().getSimpleName(), "Unexpected JSON format from ElectrumX blockchain.transaction.get RPC");
 		return getTransaction(txHash);
+	}
+
+	/**
+	 * JSON numbers can be integers, or doubles with fractional-satoshi artifacts.
+	 * Keep exact decimal replies cheap. If precision is insufficient, recover all
+	 * output amounts from verified transaction bytes instead of rounding money.
+	 */
+	private List<Long> transactionOutputValues(String txHash, JSONObject transactionJson, JSONArray outputsJson)
+			throws ForeignBlockchainException {
+		List<Long> values = new ArrayList<>(outputsJson.size());
+		for (Object outputObj : outputsJson) {
+			try {
+				values.add(BitcoinyAmounts.atomicUnits(((JSONObject) outputObj).get("value")));
+			} catch (ArithmeticException e) {
+				return rawTransactionOutputValues(txHash, transactionJson, outputsJson);
+			} catch (IllegalArgumentException e) {
+				throw new ForeignBlockchainException.NetworkException("Invalid transaction output amount from ElectrumX");
+			}
+		}
+		return values;
+	}
+
+	private List<Long> rawTransactionOutputValues(String txHash, JSONObject transactionJson, JSONArray outputsJson)
+			throws ForeignBlockchainException {
+		try {
+			Object hex = transactionJson.get("hex");
+			byte[] bytes = hex instanceof String ? HashCode.fromString((String) hex).asBytes() : getRawTransaction(txHash);
+			Transaction transaction = this.blockchain.deserializeTransaction(bytes);
+			if (!transaction.getTxId().toString().equalsIgnoreCase(txHash)
+					|| transaction.getOutputs().size() != outputsJson.size())
+				throw new ForeignBlockchainException.NetworkException("Raw transaction identity/output count mismatch from ElectrumX");
+			List<Long> values = new ArrayList<>(outputsJson.size());
+			for (int index = 0; index < outputsJson.size(); ++index) {
+				TransactionOutput output = transaction.getOutput(index);
+				JSONObject script = (JSONObject) ((JSONObject) outputsJson.get(index)).get("scriptPubKey");
+				if (!HashCode.fromBytes(output.getScriptBytes()).toString().equalsIgnoreCase((String) script.get("hex"))
+						|| output.getValue().value < 0)
+					throw new ForeignBlockchainException.NetworkException("Raw transaction output mismatch from ElectrumX");
+				values.add(output.getValue().value);
+			}
+			return values;
+		} catch (RuntimeException e) {
+			throw new ForeignBlockchainException.NetworkException("Invalid raw transaction output data from ElectrumX");
+		}
 	}
 
 	/**
@@ -994,25 +1055,39 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 			ElectrumServer electrumServer = acquireServer();
 
-			Object response = null;
+			while (true) {
+				Object response;
 
-			while(response == null) {
-
-				response = connectedRpc(electrumServer, method, params);
-
-				// If we have more servers and this one replied slowly, try another
-				if (!this.availableConnections.isEmpty()) {
-					long averageResponseTime = electrumServer.averageResponseTime();
-					if (averageResponseTime > MAX_AVG_RESPONSE_TIME) {
-						String message = String.format("Slow average response time %dms from %s - trying another server...", averageResponseTime, electrumServer.getServer());
-						LOGGER.info(message);
-						electrumServer.closeServer(this.getClass().getSimpleName(), message);
-						break;
-					}
+				try {
+					response = connectedRpc(electrumServer, method, params);
+				} catch (UnsupportedRpcMethodException e) {
+					ChainableServer unsupportedServer = electrumServer.getServer();
+					recordFailure(unsupportedServer);
+					this.connections.remove(electrumServer);
+					electrumServer.closeServer(this.getClass().getSimpleName(),
+							String.format("ElectrumX server does not support RPC method %s", method));
+					LOGGER.warn("{} ElectrumX server {} does not support {}; trying another server",
+							this.blockchain.getCurrencyCode(), unsupportedServer, method);
+					electrumServer = acquireServer();
+					continue;
+				} catch (ForeignBlockchainException e) {
+					// The server returned a valid error response, so keep the connection available.
+					releaseServer(electrumServer);
+					throw e;
 				}
 
 				if (response != null) {
-					releaseServer(electrumServer);
+					// A slow but successful reply still completes this RPC. Retire the
+					// connection for future calls without discarding or repeating it.
+					long averageResponseTime = electrumServer.averageResponseTime();
+					if (!this.availableConnections.isEmpty() && averageResponseTime > MAX_AVG_RESPONSE_TIME) {
+						String message = String.format("Slow average response time %dms from %s - retiring after completed RPC", averageResponseTime, electrumServer.getServer());
+						LOGGER.info(message);
+						this.connections.remove(electrumServer);
+						electrumServer.closeServer(this.getClass().getSimpleName(), message);
+					} else {
+						releaseServer(electrumServer);
+					}
 					this.lastRpcTimeMs = System.currentTimeMillis();
 					return new ElectrumServerResponse(electrumServer, response);
 				}
@@ -1024,10 +1099,6 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 				electrumServer.closeServer(this.getClass().getSimpleName(), NULL_RESPONSE_FROM_ELECTRUM_X_SERVER);
 				electrumServer = acquireServer();
 			}
-
-			// Failed to perform RPC - maybe lack of servers?
-			LOGGER.info("Error: No connected Electrum servers when trying to make RPC call");
-			throw new ForeignBlockchainException.NetworkException(String.format("Failed to perform ElectrumX RPC %s", method));
 		} finally {
 			this.inFlightRpcCount.decrementAndGet();
 		}
@@ -1350,6 +1421,9 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 
 			String message = (String) messageObj;
 
+			if (isUnsupportedRpcMethodError(errorJson.get("code"), message))
+				throw new UnsupportedRpcMethodException(message, server.getServer());
+
 			// Some error 'messages' are actually wrapped upstream bitcoind errors:
 			// "message": "daemon error: DaemonError({'code': -5, 'message': 'No such mempool or blockchain transaction. Use gettransaction for wallet transactions.'})"
 			// We want to detect these and extract the upstream error code for caller's use
@@ -1366,6 +1440,23 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		}
 
 		return responseJson.get("result");
+	}
+
+	static boolean isUnsupportedRpcMethodError(Object code, String message) {
+		if (code instanceof Number && ((Number) code).longValue() == JSON_RPC_METHOD_NOT_FOUND)
+			return true;
+
+		if (message == null)
+			return false;
+
+		String normalizedMessage = message.toLowerCase(Locale.ROOT);
+		return normalizedMessage.contains("unknown method") || normalizedMessage.contains("method not found");
+	}
+
+	private static class UnsupportedRpcMethodException extends ForeignBlockchainException.NetworkException {
+		private UnsupportedRpcMethodException(String message, Object server) {
+			super(message, server);
+		}
 	}
 
 	@Override

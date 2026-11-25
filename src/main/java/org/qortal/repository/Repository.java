@@ -66,6 +66,9 @@ public interface Repository extends AutoCloseable {
 
 	public void importDataFromFile(String filename) throws DataException, IOException;
 
+	/** Fill missing startup data without replacing committed states or definitive deletions. */
+	public void reconcileDataFromFile(String filename) throws DataException, IOException;
+
 	public void checkConsistency() throws DataException;
 
 	public static void attemptRecovery(String connectionUrl, String name) throws DataException {}

@@ -1,9 +1,9 @@
 #!/bin/sh
 
 # There's no need to run as root, so don't allow it, for security reasons
-if [ "$USER" = "root" ]; then
+if [ "$(id -u)" -eq 0 ]; then
 	echo "Please su to non-root user before running"
-	exit
+	exit 1
 fi
 
 # Validate Java is installed and the minimum version is available
@@ -23,12 +23,28 @@ else
   exit 1
 fi
 
-# No qortal.jar but we have a Maven built one?
-# Be helpful and copy across to correct location
-if [ ! -e qortal.jar -a -f target/qortal*.jar ]; then
-	echo "Copying Maven-built Qortal JAR to correct pathname"
-	cp target/qortal*.jar qortal.jar
+# Refuse a second launch when a live process still owns the recorded PID.
+if [ -f run.pid ]; then
+    pid=$(cat run.pid) || exit 1
+    case $pid in
+        ''|*[!0-9]*|0|1) echo 'Invalid run.pid; inspect it before starting' >&2; exit 1 ;;
+    esac
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "Process $pid is still running; inspect it before starting another Core" >&2
+        exit 1
+    fi
 fi
+
+# Copy exactly one packaged JAR; never pick arbitrarily among multiple builds.
+if [ ! -e qortal.jar ]; then
+    set -- target/qortal*.jar
+    if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+        echo 'Expected one target/qortal*.jar, or an installed qortal.jar' >&2
+        exit 1
+    fi
+    cp -- "$1" qortal.jar || exit 1
+fi
+[ -r qortal.jar ] || { echo 'qortal.jar is not readable' >&2; exit 1; }
 
 # Limits Java JVM stack size and maximum heap usage.
 # Comment out for bigger systems, e.g. non-routers
@@ -45,6 +61,7 @@ JVM_MEMORY_ARGS="-XX:MaxRAMPercentage=50 -XX:+UseG1GC -Xss1024k"
 # by default in Java 11, on some platforms (e.g. FreeBSD 12),
 # it is overridden to be true by default. Hence we explicitly
 # set it to false to obtain desired behaviour.
+set -f # JVM options are split on whitespace without pathname expansion.
 nohup nice -n 20 java \
 	-Djava.net.preferIPv4Stack=false \
 	${JVM_MEMORY_ARGS} \

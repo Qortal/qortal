@@ -15,6 +15,7 @@ import org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates;
 import org.qortal.settings.Settings;
 import org.qortal.transaction.ArbitraryTransaction;
 import org.qortal.utils.Base58;
+import org.qortal.utils.ByteArray;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -26,6 +27,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,8 +41,11 @@ public class ArbitraryDataCacheManager extends Thread {
     private static ArbitraryDataCacheManager instance;
     private volatile boolean isStopping = false;
 
-    /** Queue of arbitrary transactions that require cache updates */
-    private final List<ArbitraryTransactionData> updateQueue = Collections.synchronizedList(new ArrayList<>());
+    // Chunk receipts can notify us many times for the same transaction. Keep one
+    // pending refresh per signature, preserving the order of distinct transactions.
+    private final Map<ByteArray, ArbitraryTransactionData> updateQueue =
+            Collections.synchronizedMap(new LinkedHashMap<>());
+    static final int MAX_UPDATE_BATCH_SIZE = 128;
 
     private static final NumberFormat FORMATTER = NumberFormat.getNumberInstance();
 
@@ -238,15 +244,18 @@ public class ArbitraryDataCacheManager extends Thread {
         }
 
         try (final Repository repository = RepositoryManager.getRepository()) {
-            // Take a snapshot of resourceQueue, so we don't need to lock it while processing
-            List<ArbitraryTransactionData> resourceQueueCopy = List.copyOf(this.updateQueue);
-
-            for (ArbitraryTransactionData transactionData : resourceQueueCopy) {
+            int maxUpdates = Controller.isStopping() ? this.updateQueue.size()
+                    : Math.min(this.updateQueue.size(), MAX_UPDATE_BATCH_SIZE);
+            for (int i = 0; i < maxUpdates; i++) {
+                // Remove only the transaction about to be processed. If processing
+                // aborts, the rest remain queued; a new receipt can requeue this one.
+                List<ArbitraryTransactionData> next = drainUpdateQueue(1);
+                if (next.isEmpty()) {
+                    break;
+                }
+                ArbitraryTransactionData transactionData = next.get(0);
                 // Best not to return when controller is stopping, as ideally we need to finish processing
 
-
-                // Remove from the queue regardless of outcome
-                this.updateQueue.remove(transactionData);
 
                 // Update arbitrary resource caches
                 try {
@@ -285,7 +294,26 @@ public class ArbitraryDataCacheManager extends Thread {
     }
 
     public void addToUpdateQueue(ArbitraryTransactionData transactionData) {
-        this.updateQueue.add(transactionData);
+        if (transactionData == null || transactionData.getSignature() == null) {
+            return;
+        }
+        this.updateQueue.put(ByteArray.copyOf(transactionData.getSignature()), transactionData);
+    }
+
+    List<ArbitraryTransactionData> drainUpdateQueue() {
+        return drainUpdateQueue(MAX_UPDATE_BATCH_SIZE);
+    }
+
+    private List<ArbitraryTransactionData> drainUpdateQueue(int maxItems) {
+        List<ArbitraryTransactionData> batch = new ArrayList<>(Math.min(maxItems, MAX_UPDATE_BATCH_SIZE));
+        synchronized (this.updateQueue) {
+            Iterator<ArbitraryTransactionData> iterator = this.updateQueue.values().iterator();
+            while (iterator.hasNext() && batch.size() < maxItems) {
+                batch.add(iterator.next());
+                iterator.remove();
+            }
+        }
+        return batch;
     }
 
     public boolean needsArbitraryResourcesCacheRebuild(Repository repository) throws DataException {

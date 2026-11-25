@@ -28,23 +28,23 @@ public class PirateChainHTLC {
 	private static final long CACHE_TIMEOUT = 30_000L;
 
 	@SuppressWarnings("serial")
-	private static final Map<String, byte[]> SECRET_CACHE = new LinkedHashMap<>(MAX_CACHE_ENTRIES + 1, 0.75F, true) {
+	private static final Map<String, byte[]> SECRET_CACHE = Collections.synchronizedMap(new LinkedHashMap<>(MAX_CACHE_ENTRIES + 1, 0.75F, true) {
 		// This method is called just after a new entry has been added
 		@Override
 		public boolean removeEldestEntry(Map.Entry<String, byte[]> eldest) {
 			return size() > MAX_CACHE_ENTRIES;
 		}
-	};
+	});
 	private static final byte[] NO_SECRET_CACHE_ENTRY = new byte[0];
 
 	@SuppressWarnings("serial")
-	private static final Map<String, Status> STATUS_CACHE = new LinkedHashMap<>(MAX_CACHE_ENTRIES + 1, 0.75F, true) {
+	private static final Map<String, Status> STATUS_CACHE = Collections.synchronizedMap(new LinkedHashMap<>(MAX_CACHE_ENTRIES + 1, 0.75F, true) {
 		// This method is called just after a new entry has been added
 		@Override
 		public boolean removeEldestEntry(Map.Entry<String, Status> eldest) {
 			return size() > MAX_CACHE_ENTRIES;
 		}
-	};
+	});
 
 	/*
 	 * OP_RETURN + OP_PUSHDATA1 + bytes (not part of actual redeem script - used for "push only" secondary output when funding P2SH)
@@ -236,11 +236,26 @@ public class PirateChainHTLC {
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	public static String getUnspentFundingTxid(BitcoinyBlockchainProvider blockchain, String p2shAddress, long minimumAmount) throws ForeignBlockchainException {
+		UnspentOutput funding = getUnspentFundingOutput(blockchain, p2shAddress, minimumAmount);
+		return funding == null ? null : HashCode.fromBytes(funding.hash).toString();
+	}
+
+	/** Return the complete outpoint and value, retaining the funding output index. */
+	public static UnspentOutput getUnspentFundingOutput(BitcoinyBlockchainProvider blockchain, String p2shAddress, long minimumAmount) throws ForeignBlockchainException {
+		return getUnspentFundingOutput(blockchain, p2shAddress, minimumAmount, null, -1);
+	}
+
+	/** Select only the saved outpoint, or one unique candidate when recovering an unbound legacy record. */
+	public static UnspentOutput getUnspentFundingOutput(BitcoinyBlockchainProvider blockchain, String p2shAddress,
+			long minimumAmount, String fundingTxid, int fundingIndex) throws ForeignBlockchainException {
 		byte[] ourScriptPubKey = addressToScriptPubKey(p2shAddress);
 
 		// Note: we can't include unconfirmed transactions here because the Pirate light wallet server requires a block range
 		List<UnspentOutput> unspentOutputs = blockchain.getUnspentOutputs(p2shAddress, false);
+		UnspentOutput selected = null;
 		for (UnspentOutput unspentOutput : unspentOutputs) {
+			if (fundingTxid != null && (!fundingTxid.equals(fundingTxid(unspentOutput))
+					|| (fundingIndex >= 0 && fundingIndex != unspentOutput.index))) continue;
 
 			if (!Arrays.equals(ourScriptPubKey, unspentOutput.script)) {
 				// Not funding our specific HTLC script hash
@@ -252,12 +267,103 @@ public class PirateChainHTLC {
 				continue;
 			}
 
-			return HashCode.fromBytes(unspentOutput.hash).toString();
+			if (selected != null && (!Arrays.equals(selected.hash, unspentOutput.hash) || selected.index != unspentOutput.index))
+				throw new ForeignBlockchainException("Ambiguous ARRR funding outputs; retaining recovery record");
+			selected = unspentOutput;
 		}
 
 
-		// No valid unspent outputs, so must be already spent
-		return null;
+		// Missing output is not settlement proof: the caller must check an exact confirmed spend.
+		return selected;
+	}
+
+	public static String fundingTxid(UnspentOutput funding) {
+		byte[] hash = funding.hash.clone();
+		Bytes.reverse(hash);
+		return HashCode.fromBytes(hash).toString();
+	}
+
+	/** Legacy records cannot choose between multiple deposits, including already-spent ones. */
+	public static int countFundingOutputs(BitcoinyBlockchainProvider blockchain, String address, long minimumAmount) throws ForeignBlockchainException {
+		String script = HashCode.fromBytes(addressToScriptPubKey(address)).toString();
+		int count = 0;
+		for (BitcoinyTransaction tx : blockchain.getAddressBitcoinyTransactions(address, false))
+			for (BitcoinyTransaction.Output output : tx.outputs)
+				if (script.equals(output.scriptPubKey) && output.value >= minimumAmount) count++;
+		return count;
+	}
+
+	/**
+	 * Recover an already-spent legacy deposit from its spender's previous-output reference.
+	 * Do not invent a ZIP-244 txid from the full bytes. The referenced transaction must
+	 * match the unique deposit in confirmed raw address history byte for byte.
+	 */
+	public static UnspentOutput recoverSpentFundingOutput(BitcoinyBlockchainProvider blockchain, String address, long minimumAmount)
+			throws ForeignBlockchainException {
+		try {
+			Map<java.nio.ByteBuffer, byte[]> unique = new LinkedHashMap<>();
+			for (byte[] raw : blockchain.getRawAddressTransactions(address, false))
+				unique.putIfAbsent(java.nio.ByteBuffer.wrap(raw), raw);
+			if (unique.size() > 1000) throw new ForeignBlockchainException("Too much ARRR history to bind a legacy deposit safely");
+			String script = HashCode.fromBytes(addressToScriptPubKey(address)).toString();
+			byte[] deposit = null;
+			int index = -1;
+			long value = 0;
+			List<BitcoinyTransaction> history = new ArrayList<>();
+			for (byte[] raw : unique.values()) {
+				BitcoinyTransaction tx = PirateChainTransaction.read(raw).transaction;
+				history.add(tx);
+				for (int i = 0; i < tx.outputs.size(); i++) {
+					BitcoinyTransaction.Output output = tx.outputs.get(i);
+					if (!script.equals(output.scriptPubKey) || output.value < minimumAmount) continue;
+					if (deposit != null) throw new ForeignBlockchainException("Ambiguous ARRR funding history; retaining recovery record");
+					deposit = raw; index = i; value = output.value;
+				}
+			}
+			if (deposit == null) return null;
+			UnspentOutput selected = null;
+			byte[] redeemHash = addressToRedeemScriptHash(address);
+			for (BitcoinyTransaction tx : history) {
+				if (tx.inputs.size() != 1) continue;
+				BitcoinyTransaction.Input input = tx.inputs.get(0);
+				if (input.outputVout != index) continue;
+				List<byte[]> chunks = extractScriptSigChunks(HashCode.fromString(input.scriptSig).asBytes());
+				if (chunks.size() < 3 || chunks.size() > 4
+						|| !Arrays.equals(Crypto.hash160(chunks.get(chunks.size() - 1)), redeemHash)) continue;
+				byte[] hash = HashCode.fromString(input.outputTxHash).asBytes();
+				if (hash.length != 32 || !Arrays.equals(deposit, blockchain.getRawTransaction(hash))) continue;
+				if (selected != null && !Arrays.equals(selected.hash, hash))
+					throw new ForeignBlockchainException("Conflicting ARRR funding references; retaining recovery record");
+				selected = new UnspentOutput(hash, index, 0, value, HashCode.fromString(script).asBytes(), address);
+			}
+			return selected;
+		} catch (org.qortal.transform.TransformationException | IllegalArgumentException e) {
+			throw new ForeignBlockchainException("Invalid ARRR funding history: " + e.getMessage());
+		}
+	}
+
+	/** Locate the HTLC output immediately after funding, including nonzero vout. */
+	public static UnspentOutput getFundingOutput(BitcoinyBlockchainProvider blockchain, String txid, String address, long minimumAmount) throws ForeignBlockchainException {
+		// Funding ACKs use display-order txids; lightwalletd expects internal byte order.
+		byte[] hash = HashCode.fromString(txid).asBytes();
+		com.google.common.primitives.Bytes.reverse(hash);
+		BitcoinyTransaction transaction;
+		try {
+			transaction = PirateChainTransaction.read(blockchain.getRawTransaction(hash)).transaction;
+		} catch (org.qortal.transform.TransformationException e) {
+			throw new ForeignBlockchainException("Unable to parse ARRR funding transaction: " + e.getMessage());
+		}
+		String script = HashCode.fromBytes(addressToScriptPubKey(address)).toString();
+		UnspentOutput selected = null;
+		for (int index = 0; index < transaction.outputs.size(); ++index) {
+			BitcoinyTransaction.Output output = transaction.outputs.get(index);
+			if (script.equals(output.scriptPubKey) && output.value >= minimumAmount) {
+				if (selected != null) throw new ForeignBlockchainException("Ambiguous ARRR funding outputs in acknowledged transaction");
+				selected = new UnspentOutput(hash, index, 0, output.value);
+			}
+		}
+		if (selected != null) return selected;
+		throw new ForeignBlockchainException("Funding transaction has no matching ARRR HTLC output");
 	}
 
 	/**
@@ -266,7 +372,24 @@ public class PirateChainHTLC {
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	public static Status determineHtlcStatus(BitcoinyBlockchainProvider blockchain, String p2shAddress, long minimumAmount) throws ForeignBlockchainException {
-		String compoundKey = String.format("%s-%s-%d", blockchain.getNetId(), p2shAddress, System.currentTimeMillis() / CACHE_TIMEOUT);
+		return determineHtlcStatus(blockchain, p2shAddress, minimumAmount, 1);
+	}
+
+	public static Status determineHtlcStatus(BitcoinyBlockchainProvider blockchain, String p2shAddress, long minimumAmount, int confirmations) throws ForeignBlockchainException {
+		return determineHtlcStatus(blockchain, p2shAddress, minimumAmount, confirmations, null, -1);
+	}
+
+	/** Exact settlement evidence. fundingTxid is display order; parsed previous-output hashes are wire order. */
+	public static Status determineHtlcStatus(BitcoinyBlockchainProvider blockchain, String p2shAddress, long minimumAmount,
+			int confirmations, String fundingTxid, int fundingIndex) throws ForeignBlockchainException {
+		if (confirmations < 1) throw new IllegalArgumentException("Confirmations must be positive");
+		if (fundingTxid != null && (!fundingTxid.matches("[0-9a-f]{64}") || fundingIndex < 0))
+			throw new IllegalArgumentException("Exact funding outpoint required");
+		byte[] expectedHash = fundingTxid == null ? null : HashCode.fromString(fundingTxid).asBytes();
+		if (expectedHash != null) Bytes.reverse(expectedHash);
+		String expectedInputHash = expectedHash == null ? null : HashCode.fromBytes(expectedHash).toString();
+		String compoundKey = String.format("%s-%s-%d-%d-%s-%d-%d", blockchain.getNetId(), p2shAddress, minimumAmount,
+				confirmations, fundingTxid, fundingIndex, System.currentTimeMillis() / CACHE_TIMEOUT);
 
 		Status cachedStatus = STATUS_CACHE.getOrDefault(compoundKey, null);
 		if (cachedStatus != null)
@@ -296,7 +419,10 @@ public class PirateChainHTLC {
 				// Wrong number of inputs
 				continue;
 
-			String scriptSig = bitcoinyTransaction.inputs.get(0).scriptSig;
+			BitcoinyTransaction.Input input = bitcoinyTransaction.inputs.get(0);
+			if (expectedInputHash != null && (!expectedInputHash.equals(input.outputTxHash) || fundingIndex != input.outputVout))
+				continue;
+			String scriptSig = input.scriptSig;
 
 			List<byte[]> scriptSigChunks = extractScriptSigChunks(HashCode.fromString(scriptSig).asBytes());
 			if (scriptSigChunks.size() < 3 || scriptSigChunks.size() > 4)
@@ -310,17 +436,27 @@ public class PirateChainHTLC {
 				// Not spending our specific HTLC redeem script
 				continue;
 
+			boolean confirmed = bitcoinyTransaction.height > 0 && (confirmations == 1
+					|| blockchain.getCurrentHeight() - bitcoinyTransaction.height + 1 >= confirmations);
+
 			if (scriptSigChunks.size() == 4)
 				// If we have 4 chunks, then secret is present, hence redeem
-				cachedStatus = bitcoinyTransaction.height == 0 ? Status.REDEEM_IN_PROGRESS : Status.REDEEMED;
+				cachedStatus = confirmed ? Status.REDEEMED : Status.REDEEM_IN_PROGRESS;
 			else
-				cachedStatus = bitcoinyTransaction.height == 0 ? Status.REFUND_IN_PROGRESS : Status.REFUNDED;
+				cachedStatus = confirmed ? Status.REFUNDED : Status.REFUND_IN_PROGRESS;
 
 			STATUS_CACHE.put(compoundKey, cachedStatus);
 			return cachedStatus;
 		}
 
 		String ourScriptPubKeyHex = HashCode.fromBytes(ourScriptPubKey).toString();
+
+		if (fundingTxid != null) {
+			UnspentOutput funding = getUnspentFundingOutput(blockchain, p2shAddress, minimumAmount, fundingTxid, fundingIndex);
+			cachedStatus = funding == null ? Status.UNFUNDED : funding.height > 0 ? Status.FUNDED : Status.FUNDING_IN_PROGRESS;
+			STATUS_CACHE.put(compoundKey, cachedStatus);
+			return cachedStatus;
+		}
 
 		// Check for funding
 		for (BitcoinyTransaction bitcoinyTransaction : transactions) {
@@ -351,45 +487,52 @@ public class PirateChainHTLC {
 		return cachedStatus;
 	}
 
-	private static List<byte[]> extractScriptSigChunks(byte[] scriptSigBytes) {
+	private static List<byte[]> extractScriptSigChunks(byte[] script) {
 		List<byte[]> chunks = new ArrayList<>();
-
 		int offset = 0;
-		int previousOffset = 0;
-		while (offset < scriptSigBytes.length) {
-			byte pushOp = scriptSigBytes[offset++];
-
-			if (pushOp < 0 || pushOp > 0x4c)
-				// Unacceptable OP
-				return Collections.emptyList();
-
-			// Special treatment for OP_PUSHDATA1
-			if (pushOp == 0x4c) {
-				if (offset >= scriptSigBytes.length)
-					// Run out of scriptSig bytes?
-					return Collections.emptyList();
-
-				pushOp = scriptSigBytes[offset++];
+		while (offset < script.length) {
+			int op = Byte.toUnsignedInt(script[offset++]);
+			if (op == 0x4f || (op >= 0x51 && op <= 0x60)) {
+				chunks.add(new byte[] { (byte) (op == 0x4f ? 0x81 : op - 0x50) });
+				continue;
 			}
-
-			previousOffset = offset;
-			offset += Byte.toUnsignedInt(pushOp);
-
-			byte[] chunk = Arrays.copyOfRange(scriptSigBytes, previousOffset, offset);
-			chunks.add(chunk);
+			long length = op;
+			if (op >= 0x4c && op <= 0x4e) {
+				int sizeBytes = op == 0x4c ? 1 : op == 0x4d ? 2 : 4;
+				if (offset + sizeBytes > script.length) return Collections.emptyList();
+				length = 0;
+				for (int i=0; i<sizeBytes; i++) length |= (long) Byte.toUnsignedInt(script[offset++]) << (8*i);
+			} else if (op > 0x4b) return Collections.emptyList();
+			if (length > script.length - offset) return Collections.emptyList();
+			chunks.add(Arrays.copyOfRange(script, offset, offset + (int) length));
+			offset += (int) length;
 		}
-
 		return chunks;
 	}
 
-	private static byte[] addressToScriptPubKey(String p2shAddress) {
+	/** Filter address-index aliases by the actual contract, never by the returned address label. */
+	static boolean involvesContract(BitcoinyTransaction transaction, String address) {
+		String script = HashCode.fromBytes(addressToScriptPubKey(address)).toString();
+		for (BitcoinyTransaction.Output output : transaction.outputs)
+			if (script.equals(output.scriptPubKey)) return true;
+		byte[] hash = addressToRedeemScriptHash(address);
+		for (BitcoinyTransaction.Input input : transaction.inputs) {
+			List<byte[]> chunks = extractScriptSigChunks(HashCode.fromString(input.scriptSig).asBytes());
+			if (!chunks.isEmpty() && Arrays.equals(hash, Crypto.hash160(chunks.get(chunks.size() - 1))))
+				return true;
+		}
+		return false;
+	}
+
+	static byte[] addressToScriptPubKey(String p2shAddress) {
 		// We want the HASH160 part of the P2SH address
 		byte[] p2shAddressBytes = Base58.decode(p2shAddress);
 
 		byte[] scriptPubKey = new byte[1 + 1 + 20 + 1];
 		scriptPubKey[0x00] = (byte) 0xa9; /* OP_HASH160 */
 		scriptPubKey[0x01] = (byte) 0x14; /* PUSH 0x14 bytes */
-		System.arraycopy(p2shAddressBytes, 1, scriptPubKey, 2, 0x14);
+		// Both the one-byte b prefix and two-byte t3 prefix precede the same hash.
+		System.arraycopy(p2shAddressBytes, p2shAddressBytes.length - 24, scriptPubKey, 2, 0x14);
 		scriptPubKey[0x16] = (byte) 0x87; /* OP_EQUAL */
 
 		return scriptPubKey;
@@ -399,7 +542,7 @@ public class PirateChainHTLC {
 		// We want the HASH160 part of the P2SH address
 		byte[] p2shAddressBytes = Base58.decode(p2shAddress);
 
-		return Arrays.copyOfRange(p2shAddressBytes, 1, 1 + 20);
+		return Arrays.copyOfRange(p2shAddressBytes, p2shAddressBytes.length - 24, p2shAddressBytes.length - 4);
 	}
 
 }

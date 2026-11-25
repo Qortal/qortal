@@ -235,7 +235,7 @@ public class BitcoinyHTLC {
 		List<byte[]> rawTransactions = bitcoiny.getAddressTransactions(p2shAddress);
 
 		for (byte[] rawTransaction : rawTransactions) {
-			Transaction transaction = new Transaction(params, rawTransaction);
+			Transaction transaction = bitcoiny.deserializeTransaction(rawTransaction);
 
 			// Cycle through inputs, looking for one that spends our HTLC
 			for (TransactionInput input : transaction.getInputs()) {
@@ -285,7 +285,7 @@ public class BitcoinyHTLC {
 	 * @throws ForeignBlockchainException if error occurs
 	 */
 	public static Status determineHtlcStatus(BitcoinyBlockchainProvider blockchain, String p2shAddress, long minimumAmount) throws ForeignBlockchainException {
-		String compoundKey = String.format("%s-%s-%d", blockchain.getNetId(), p2shAddress, System.currentTimeMillis() / CACHE_TIMEOUT);
+		String compoundKey = String.format("%s-%s-%d-%d", blockchain.getNetId(), p2shAddress, minimumAmount, System.currentTimeMillis() / CACHE_TIMEOUT);
 
 		Status cachedStatus = STATUS_CACHE.getOrDefault(compoundKey, null);
 		if (cachedStatus != null)

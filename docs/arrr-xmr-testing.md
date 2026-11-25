@@ -1,0 +1,194 @@
+# Combined ARRR / XMR test build
+
+## What is included
+
+The Core `qdn-performance` branch includes owner `xmr-support` at `27b741c7a6391fde10ea39b20942cd4d878f0940` and `pirate-changes` at `7dfdc5cbb0c4484c4cb40a970fcfe982ffa689bb`. It retains the QDN cache optimizations, ARRR recovery/diagnostics, native packaging correction and shared Bitcoin-family witness-aware transaction reader. The latest XMR change adds an optional wallet-network hint without changing Qortal consensus or its database schema.
+
+The resulting `target/qortal-qdn-arrr-xmr-testing.jar` includes those ARRR/Core changes and the XMR address/network/amount foundations. **It does not implement an XMR wallet service in Core.** Wallet key creation/recovery, local wallet functionality and the public account request require the separate owner [Qortal Hub `xmr-support` branch](https://github.com/crowetic/Qortal-Hub/tree/xmr-support).
+
+| Can test now | Not implemented by this Core JAR |
+| --- | --- |
+| Existing ARRR wallet/trade recovery, using the selected QDN JNI publication | Core XMR chain scanning, balances and history |
+| Hub XMR account keys and ordinary Qortal backup recovery | Core XMR payments, transaction broadcast and QORT/XMR cross-chain trades |
+| Mainnet versus stagenet selection and permissioned public XMR addresses | An XMR wallet tile or complete wallet flow in Q-Wallets |
+| Offline XMR primitives, local WASM feasibility and wallet compatibility regressions | A public Monero daemon fleet or Core XMR RPC connector |
+
+Use a new unfunded Qortal account for the account/recovery checks below. Follow [Monero stagenet testing](monero-stagenet-testing.md) with the matching Hub for wallet acceptance; this JAR supplies the network hint. The shipped synthetic fixtures are public and must never receive funds.
+
+## ARRR address-index compatibility
+
+The Core lightwallet provider now discovers confirmed P2SH funding and spends
+when a Pirate node stores them under the wrong address-index category. It
+merges both buckets, filters the actual contract script, verifies UTXOs against
+raw outputs and rejects conflicting/incomplete replies. See the
+[Musiqo evidence and recovery instructions](arrr-address-index-compatibility.md).
+Update both buyer and seller Core. Existing JNI 0.3.11 and matching frontend
+builds remain compatible; no migration or additional publication is required.
+
+## Wallet amount precision
+
+Wallet history uses the shared Electrum parser for BTC, LTC, DOGE, DGB and RVN.
+The previous JAR included the raw/witness reader and slow-response fixes, but
+its separate verbose-history parser could still throw `Rounding necessary`.
+This release accepts exact integer/decimal JSON values and recovers ambiguous
+or insufficiently precise amounts from transaction bytes. The existing complete
+wire decoder verifies those bytes; identity, output count and scripts must also
+match. Embedded hex avoids another request, with one raw RPC when absent.
+Amounts are never rounded into history, and failures are not cached.
+
+The same exact conversion guards the legacy ARRR provider. ARRR local history
+now rejects fractional, overflowing or imprecise atomic values in both native
+history formats. QORT API amount conversion also rejects overflow instead of
+silently truncating it. XMR retains its separate exact 12-decimal conversion.
+These changes add no database migration or consensus change.
+
+The new native library also supports [owned Sapling preparation](arrr-sapling-preparation-testing.md)
+with matching Hub `xmr-support` commit `7dd8c07c6f31cd64af1625f1b1948a7715b4d6f2`
+or newer. All eight published files match the verified five-platform bundle.
+
+## Core artifact and installation
+
+The JAR's companion `.build.json` and `.sha256` files identify its exact source commit, tests and checksum. Check the receipt rather than identifying it only by the `6.1.9` base version. ARRR native libraries are deliberately absent from the JAR: Core retrieves the selected immutable publication from QDN and loads its platform library from disk. Retain the previous ARRR QDN signature and wallet cache for rollback; do not repack native libraries into the JAR.
+
+This test build selects the confirmed JNI 0.3.11 publication by default:
+
+```text
+2wr3xfLyLqtX93Ev3GraiJhnP9UDyyEGmCEUcaN1kWcZMjUMfyRhoDXUSYfunXJhWLdEwf8VZVD2ZhS91czpEHiZ
+```
+
+It is `PirateChainWallet` / `LiteWalletJNI-v0.3.11-test-20261119T225818Z-2544011`,
+confirmed at Qortal block **2802716**. An explicit
+`pirateChainWalletQdnSignature` setting still wins: remove an older override or
+replace it with this signature to exercise the new native fix. Restart the JVM
+to load it. The [test announcement](qdn-arrr-xmr-test-announcement.txt) is ready
+to accompany the JAR and its checksum/receipt.
+
+For an owner-operated test node:
+
+1. Stop that Core through its existing lifecycle. Preserve the current `qortal.jar`, settings, complete configured repository and wallet directories, and trade recovery backups together. Do not copy a running database as a backup.
+2. Verify `sha256sum -c qortal-qdn-arrr-xmr-testing.jar.sha256` from the downloaded artifact directory. Replace only the test node's `qortal.jar` with this verified JAR.
+3. Restart through the normal lifecycle. Confirm `/admin/info` and the startup log report the build version recorded in `.build.json`. Confirm the expected QDN native signature if exercising ARRR; retain the diagnostic/recovery checkpoints.
+4. If another node is running, use a separate working directory, repository/data/wallet directories, and API/P2P/QDN ports. Select that local Core in Hub. A testnet Core must use separate data from a mainnet Core; do not toggle a production database between networks.
+
+No node is installed or restarted by this source/build task. See [ARRR testing and recovery](pirate-chain-wallet-library-testing.md) for the native publication, restore-birthday and pending-refund rules. For a code rollback, stop the test node and restore its retained JAR while preserving current repository/wallet/recovery records. Do not erase an ambiguous funding/refund intent or independently replace its data with an older snapshot.
+
+If you set the optional `moneroNetwork` override for testing, remove it when
+restoring the previous Core/settings. Removing it restores the automatic
+mainnet/mainnet and Qortal-testnet/Monero-stagenet pairing.
+
+## Pirate contract funding compatibility
+
+The November 18 Musiqo log shows a funding broadcast rejected with
+`bad-txns-acprivacy-chain`, followed by `ALICE_WAITING_FOR_FUNDING`; it does not
+show a funded refund failing. The native selector could choose Ironwood-only
+inputs, whereas Pirate v6.0.14's P2SH exception requires a Sapling spend. The
+archive has no rejected raw transaction, so that exact input selection remains
+unverified.
+
+The companion [Qortal JNI 0.3.10 fix](https://github.com/crowetic/Stashi-Wallet/commit/72a423ae845cef2ae638fd490f63936f01bde9e8)
+in the owner's Stashi-Wallet fork reserves a
+positive-value Sapling input and allows Ironwood inputs to supplement it.
+Contract change returns to Sapling so mixed funding can leave a spendable input
+for the next trade once confirmed. With
+no spendable Sapling note in the source key group, it returns a clear
+`Transaction build error:` before broadcasting. Existing Core code recognizes
+that early rejection. Broadcast and transport failures still retain the
+duplicate-funding quarantine; this update does not clear existing intents.
+
+The owner has published the matching native bundle, and this JAR selects the
+confirmed signature above by default. Core must retrieve it from QDN and load
+the platform library on restart; an old explicit signature override prevents
+that selection. See the pinned [native testing guide](pirate-chain-wallet-library-testing.md#stage-the-jni-0310-funding-candidate).
+Retain the current signature, native bundle and JAR for rollback. The native
+bundle itself adds no repository migration, but the combined Core branch does:
+schema 53→54 adds `funding_fee` and `funding_output_index`; schema 54→55 adds
+`funding_txid` and the `TradeBotStateDeletions` table for recovery safety. These
+are additive node-local recovery changes; no blockchain reindex is required.
+
+Preserve the complete stopped repository, wallet files, settings and recovery
+backups. No requirement to restore an older database merely to change JARs has
+been established. An older Core does not enforce the new outpoint/reconciliation
+safeguards, however. Keep a compatible recovery build for pending/funded trades;
+do not replace their current recovery data with an older backup during rollback.
+Explicit manual data import can overwrite states; startup reconciliation cannot.
+
+Test Sapling funding, mixed-pool funding, change spending, redemption and an
+expired-contract refund on the updated test node. Direct Ironwood-only contract funding still fails early. With the matching Hub,
+use the separately approved owned Sapling preparation before funding. Automated selection, serialization
+and error-contract checks do not establish that a live funded refund succeeded.
+
+## Run the matching Hub
+
+Use the owner's current Hub `xmr-support` branch, including support for the
+`moneroNetwork` hint in `/admin/info`. An older Hub can ignore that hint. For a
+browser-based account test, native desktop packaging is not needed:
+
+```sh
+cd /path/to/Qortal-Hub
+git switch xmr-support
+npm ci
+npm run dev -- --host 127.0.0.1
+```
+
+Use Hub's supported Node toolchain (CI uses Node 22; Node 20.19.2 also passed these tests). Open the local URL printed by Vite, select the local test Core and create a new unfunded account. If using a previously unlocked test session, log out and unlock again so Hub reconstructs its XMR record. For desktop builds, follow Hub's normal renderer build, Capacitor sync and platform packaging instructions; this Core JAR does not update Hub.
+
+## Manual account and backup test
+
+A small read-only Q-App is included so the test does not require choosing a frame in developer tools. From this Core source checkout:
+
+```sh
+python3 -m http.server 8173 --bind 127.0.0.1 --directory tools/xmr-account-test
+```
+
+In the updated Hub, with a **local Core** selected, open **Apps → Development Mode** and add a developer app with domain `127.0.0.1` and port `8173`. Core's development proxy injects the normal Q-App bridge. Do not open the page directly in a separate tab: that has no Hub request bridge. No QDN publication or fee is needed for this developer-mode test.
+
+1. Click **Request public XMR account**, approve Hub's wallet permission, and leave the remember/always-allow box unchecked if you want to test denial afterward.
+2. With a normal Core and no Monero override (`/admin/info` has `isTestNet: false` and `moneroNetwork: "mainnet"`), expect `network: "mainnet"`, `derivationVersion: 1`, and a 95-character address. The response contains exactly five public fields: address, network, derivation version, public spend key and public view key. No private key or seed is requested or displayed.
+3. Record the public address and the Qortal account address. Download the ordinary Qortal backup through Hub's account backup flow. There is no separate XMR backup file.
+4. In a fresh browser profile, open the same updated Hub and import/unlock **only that Qortal backup**. Select the same Core/network, reopen the developer app, request the account and paste the earlier public address into the comparison field. Expect **PASS: the recovered public address matches**, with the original Qortal address too.
+5. Create/select a different unfunded Qortal account and request again. Its XMR address must differ. Switch back to the restored account and confirm its original address returns.
+6. For stagenet on a Qortal-mainnet test node, set `"moneroNetwork": "STAGENET"` through the owner-operated [test setup](monero-stagenet-testing.md). `/admin/info` must still show `isTestNet: false`, with `moneroNetwork: "stagenet"`. Alternatively, a separately configured Qortal testnet Core selects stagenet by default. Explicit names are case-insensitive, and invalid values stop Core startup. Request again: expect `network: "stagenet"` and a different address from mainnet. Restore that account on the same test mode and confirm its stagenet address is stable. Monero's separate `testnet` is not used, and a Q-App cannot override the Core-selected wallet network.
+7. Decline a wallet permission in a fresh app session/profile: the page must show a failed/declined request and no new wallet data. Missing/invalid Core mode, account/Core switching during approval, or an old key record must fail rather than return a wallet for another account/network.
+
+The page makes only `GET_USER_WALLET` with `coin: "XMR"`. It never imports a key, requests a balance, signs or broadcasts. It does not exercise balance, history, wallet-info or send requests; those depend on the matching Hub wallet implementation and are not supplied by this Core JAR. The page's automated test uses a mock Hub bridge; the manual steps above are the actual Hub acceptance check, not something established by the page test alone.
+
+To stop the helper, press Ctrl-C in its terminal and close the developer app. Its public display/comparison has no separate key store or recovery state.
+
+## Automated verification
+
+Core, with JDK 11 and cached Maven dependencies:
+
+```sh
+JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64 mvn -o -B \
+  -Dmaven.gitcommitid.nativegit=true -DskipJUnitTests=false \
+  -Dtest=MoneroAddressTests,MoneroAmountsTests,MoneroNetworkSelectionTests,BitcoinyWalletParsingTests,LocalWalletPreparationTests,PirateChainRefundTests,PirateChainACCTv3TradeBotTests,PirateChainWalletControllerTests,PirateRecoveryRpcTests,PirateSpendResponseTests \
+  test
+```
+
+Omit `-o` if dependencies must be downloaded. Use an isolated worktree for packaging so IDE-generated classes and old native staging cannot contaminate the artifact. No native/live/funded opt-in property is required for these checks.
+
+Hub, on its `xmr-support` branch:
+
+```sh
+npx vitest run src/lib/monero src/utils/generateWallet/monero-backup.test.ts \
+  src/qortal/monero-wallet.test.ts src/qortal/__tests__/moneroWallet.test.ts \
+  src/utils/chromeStorage.foreign-wallet.test.ts
+```
+
+Those tests exercise the real backup KDF/bcrypt/AES/HMAC while adapting only the test Worker boundary. [Hub's account documentation](https://github.com/crowetic/Qortal-Hub/blob/xmr-support/docs/monero-accounts.md) includes the independent Python and full Monero WASM interoperability checks.
+
+The obsolete `tools/xmr-hub-client` wallet experiment was removed. Core and the
+integrated Hub wallet do not depend on it. The useful public account-page check
+now has its own optional harness in [`tools/xmr-account-test`](../tools/xmr-account-test/README.md):
+
+```sh
+cd tools/xmr-account-test
+npm ci --ignore-scripts
+npx playwright install chromium
+npm test
+```
+
+This runner uses an unfunded public fixture, a loopback server and a mock Hub
+bridge. It checks public response projection, comparison and error redaction;
+it does not scan a real chain or test a funded send. For the product engine use
+[Hub's worker verification](https://github.com/crowetic/Qortal-Hub/blob/xmr-support/docs/monero-stagenet-wallet.md#repeatable-native-verification).

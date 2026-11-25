@@ -59,18 +59,21 @@ public class PirateWalletMigrationTests {
     }
 
     @Test
-    public void unifiedAddressComesFromTheSameExportEntryAsItsKey() {
-        String export = "[{\"address\":\"zironwood-active\",\"private_key\":\"secret\"},"
-                + "{\"address\":\"zsapling-old\",\"private_key\":\"old-secret\"}]";
+    public void unifiedReceiveAddressUsesAddressOnlyServiceResult() {
+        String address = "pirate1lyp0g5438qkp9s5me5epku9ak9k0dxqsfyt9z894zym8qw38sps488ljyee27yw29vc2cyj8mse";
 
-        assertEquals("zironwood-active", PirateWallet.getUnifiedExportAddress(export));
-        assertNull(PirateWallet.getUnifiedExportAddress("[]"));
-        assertNull(PirateWallet.getUnifiedExportAddress("not-json"));
+        assertEquals(address, PirateWallet.getUnifiedReceiveAddress(
+                "{\"ok\":true,\"result\":\"" + address + "\"}"));
+        assertNull(PirateWallet.getUnifiedReceiveAddress("{\"ok\":false,\"result\":\"" + address + "\"}"));
+        assertNull(PirateWallet.getUnifiedReceiveAddress("{\"ok\":true,\"result\":null}"));
+        assertNull(PirateWallet.getUnifiedReceiveAddress("{\"ok\":true,\"result\":123}"));
+        assertNull(PirateWallet.getUnifiedReceiveAddress("{\"ok\":true,\"result\":\"invalid\"}"));
+        assertNull(PirateWallet.getUnifiedReceiveAddress("not-json"));
     }
 
     @Test
-    public void freshUnifiedWalletUsesLiveHeightButRecoveryPathsKeepConfiguredBirthday() {
-        assertEquals(4_095_410, PirateWallet.chooseUnifiedWalletBirthday(
+    public void missingLocalFilesCannotMakeARestoredAccountSkipHistoricalFunds() {
+        assertEquals(2_000_000, PirateWallet.chooseUnifiedWalletBirthday(
                 2_000_000, null, false, false, false, 4_095_410));
         assertEquals(2_000_000, PirateWallet.chooseUnifiedWalletBirthday(
                 2_000_000, null, false, true, false, 4_095_410));

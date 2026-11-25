@@ -688,6 +688,11 @@ public class HSQLDBRepository implements Repository {
 	}
 
 	@Override
+	public void reconcileDataFromFile(String filename) throws DataException, IOException {
+		HSQLDBImportExport.reconcileDataFromFile(filename, this);
+	}
+
+	@Override
 	public void checkConsistency() throws DataException {
 		this.getATRepository().checkConsistency();
 	}

@@ -1,0 +1,80 @@
+Combined QDN / ARRR / XMR testing JAR
+
+The qdn-performance testing build combines QDN cache performance changes,
+Pirate wallet/trade recovery, approved owned-Sapling preparation and support
+for the matching Hub's XMR stagenet testing. This is a testing build.
+
+Artifact: qortal-qdn-arrr-xmr-testing.jar
+The companion .build.json identifies the exact commit, verification and hashes.
+The generated qortal-qdn-arrr-xmr-testing-announcement.txt beside the artifact
+contains the cloud announcement with its final version and checksums.
+
+PR #391 recovery follow-up: ARRR commits an acknowledged funding transaction ID
+before looking up its output. An unknown output index is represented as -1;
+restart recovery retries the saved transaction without funding again or binding
+another deposit. Sellers skip old spent offer candidates instead of closing an
+open offer, and unresolved legacy confirmed-marker records retain their audit
+cooldown so later recoverable records can progress.
+
+ARRR contract discovery: reads both Pirate address-index categories when a
+server misclassifies P2SH funding or spends. Matches contract scripts, verifies
+raw output values/indexes, merges duplicate and mixed index entries, and fails
+on incomplete/conflicting evidence. This fixes the confirmed Musiqo funding
+being reported as HTLC_UNFUNDED. Update buyer and seller Core; existing JNI
+0.3.11 and matching frontend builds remain compatible. No new native publication
+or migration is required. Live refund and complete trade acceptance remain to
+be tested. See arrr-address-index-compatibility.md.
+
+New wallet-history correction: the previous test JAR retained an unsafe verbose
+Electrum decimal conversion, separate from the earlier raw/witness reader fix.
+BTC, LTC, DOGE, DGB and RVN now share exact numeric conversion, with verified
+wire-output recovery when the JSON value lacks atomic precision. Ordinary exact
+replies need no extra request. Recovery checks transaction ID, output count,
+scripts and complete transaction bytes. It does not round monetary values.
+ARRR history rejects fractional/overflowing atomic amounts; both QORT API amount
+conversions reject overflow. XMR retains its exact 12-decimal amount handling.
+
+ARRR now selects the confirmed five-platform JNI 0.3.11 publication:
+
+2wr3xfLyLqtX93Ev3GraiJhnP9UDyyEGmCEUcaN1kWcZMjUMfyRhoDXUSYfunXJhWLdEwf8VZVD2ZhS91czpEHiZ
+
+QDN name: PirateChainWallet
+Identifier: LiteWalletJNI-v0.3.11-test-20261119T225818Z-2544011
+Confirmed Qortal block: 2802716
+All eight published files match the verified staged bundle.
+
+Core downloads the native library from QDN. Remove any older explicit
+pirateChainWalletQdnSignature override, or replace it with the signature above,
+and restart Core. No additional publication is required.
+
+Use matching Hub xmr-support commit 7dd8c07c6f31cd64af1625f1b1948a7715b4d6f2
+or newer for ARRR preparation. If Ironwood funds need preparation, Hub requests
+separate approval for an owned Sapling self-payment costing 0.0001 ARRR. It
+moves the source key group's currently spendable Ironwood balance minus that
+fee. The self-payment remains even if the intended trade fails or is cancelled.
+Hub waits for confirmed, scanned eligibility before contract funding. Pending
+retries/restarts reuse the saved transaction; declining starts no trade.
+See arrr-sapling-preparation-testing.md for acceptance and recovery details.
+Continue Q-Wallets TESTING 1.4.0-xmr.2 and Q-Trade 0.0.3-test.4.
+
+For XMR stagenet testing, use the matching Hub and add
+"moneroNetwork": "STAGENET" to the existing test Core settings. Keep Qortal
+"isTestNet" false or absent. Network names accept either case; invalid explicit
+names stop startup. After restarting, /admin/info should report Qortal mainnet
+and moneroNetwork "stagenet". Use XMR stagenet coins. This does not activate
+QORT/XMR cross-chain trades.
+
+This follow-up adds no migration beyond recovery schema 55 and requires no
+blockchain reindex. Upgrades from older builds can still apply the existing
+53-to-54 and 54-to-55 recovery migrations. The separate general database
+index/query improvements are not included. Keep current repository, wallet,
+pending preparation and trade recovery data. For rollback, stop Core first and
+use an executable compatible with every current recovery record. Older builds
+reject the new -1 unknown-index value; retain this build while such records are
+unresolved. Never replace current data with a pre-funding snapshot or delete
+pending transaction records to force another payment.
+
+Live funded ARRR refund acceptance and the original long-running QDN stall
+remain unverified. Native dependency audit/deny checks still report inherited
+issues. Please report exact versions, timestamps, public AT/trade addresses
+and relevant logs, without private keys, seeds or API keys.

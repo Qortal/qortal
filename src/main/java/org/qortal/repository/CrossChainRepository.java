@@ -18,4 +18,7 @@ public interface CrossChainRepository {
 	/** Delete trade-bot states using passed private key. */
 	public int delete(byte[] tradePrivateKey) throws DataException;
 
+	/** Definitive local deletion, kept separately so a stale startup backup cannot resurrect it. */
+	public boolean wasTradeBotDeleted(byte[] tradePrivateKey) throws DataException;
+
 }

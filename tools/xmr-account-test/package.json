@@ -1,0 +1,9 @@
+{
+  "name": "qortal-xmr-public-account-test",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20.19.0" },
+  "scripts": { "test": "node scripts/page-smoke.mjs" },
+  "devDependencies": { "playwright": "1.62.1" }
+}

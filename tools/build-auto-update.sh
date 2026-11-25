@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -e
+set -eo pipefail
 
 # Check we are within a git repo
 git_dir=$( git rev-parse --show-toplevel )
@@ -10,7 +10,7 @@ if [ -z "${git_dir}" ]; then
 fi
 
 # Change to git top-level
-cd ${git_dir}
+cd "${git_dir}"
 
 # Check we are in 'master' branch
 branch_name=$( git symbolic-ref -q HEAD || echo )
@@ -39,7 +39,7 @@ if [ ! -z "${uncommitted}" ]; then
 fi
 
 # Determine project name
-project=$( perl -n -e 'if (m/<artifactId>(\w+)<.artifactId>/) { print $1; exit }' pom.xml $)
+project=$( perl -n -e 'if (m/<artifactId>([\w.-]+)<\/artifactId>/) { print $1; exit }' pom.xml )
 if [ -z "${project}" ]; then
 	echo "Unable to determine project name from pom.xml?"
 	exit 1
@@ -47,16 +47,17 @@ fi
 
 # Actually rebuild JAR
 echo "Building ${project} JAR..."
-mvn clean package 1>/tmp/${project}-mvn-build.log 2>&1
-if [ "$?" != "0" -o ! -r target/${project}*.jar ]; then
+if ! mvn clean package >"/tmp/${project}-mvn-build.log" 2>&1; then
 	echo "Maven build failed. For details, see /tmp/${project}-mvn-build.log"
 	exit 1
 fi
+shopt -s nullglob
+jars=(target/"$project"*.jar)
+(( ${#jars[@]} == 1 )) || { echo 'Expected exactly one packaged JAR' >&2; exit 1; }
 
 # Convert packaged JAR to XORed update form
 echo "Building ${project}.update..."
-java -cp target/${project}*.jar org.qortal.XorUpdate target/${project}*.jar ${project}.update
-if [ "$?" != "0" ]; then
+if ! java -cp "${jars[0]}" org.qortal.XorUpdate "${jars[0]}" "${project}.update"; then
 	echo "Failed to create XORed auto-update JAR"
 	exit 1
 fi
@@ -64,21 +65,6 @@ fi
 # Create auto-update branch from this commit
 update_branch=auto-update-${short_hash}
 
-if git show-ref --quiet --verify refs/heads/${update_branch}; then
-	echo "Existing auto-update branch based on this commit (${short_hash}) - deleting..."
-	git branch --delete --force ${update_branch}
-fi
-
-echo "Checking out new auto-update branch based on this commit (${short_hash})..."
-git checkout --orphan ${update_branch}
-git rm --cached -fr . 1>/dev/null
-
-git add ${project}.update
-
-git commit --message "XORed, auto-update JAR based on commit ${short_hash}"
-git push --set-upstream origin --force-with-lease ${update_branch}
-
-branch_name=${branch_name-master}
-
-echo "Changing back to '${branch_name}' branch"
-git checkout --force ${branch_name}
+bash tools/create-auto-update-branch.sh "${project}.update" "$update_branch" \
+  "XORed, auto-update JAR based on commit ${short_hash}"
+git push --set-upstream origin "$update_branch"

@@ -302,6 +302,7 @@ public class AdminResource {
 		nodeInfo.buildTimestamp = Controller.getInstance().getBuildTimestamp();
 		nodeInfo.nodeId = Network.getInstance().getOurNodeId();
 		nodeInfo.isTestNet = Settings.getInstance().isTestNet();
+		nodeInfo.moneroNetwork = Settings.getInstance().getMoneroNetwork().name().toLowerCase(java.util.Locale.ROOT);
 		nodeInfo.type = getNodeType();
 
 		return nodeInfo;
