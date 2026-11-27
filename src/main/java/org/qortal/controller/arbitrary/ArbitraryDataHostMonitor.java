@@ -5,6 +5,7 @@ import org.apache.logging.log4j.Logger;
 import org.qortal.data.transaction.ArbitraryHostedDataItemInfo;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.TransactionData;
+import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
 import org.qortal.settings.Settings;
@@ -35,6 +36,19 @@ public class ArbitraryDataHostMonitor extends Thread{
      * Where all the monitored data hosts are collected.
      */
     private List<ArbitraryHostedDataItemInfo> hostedDataItemInfos = new ArrayList<>();
+
+    /**
+     * Maximum signatures looked up per repository session.
+     *
+     * Each batch runs in its own short-lived session so no single transaction stays open for the
+     * whole scan. HSQLDB's automatic (log-size) CHECKPOINT waits for every in-flight transaction
+     * and queues every other session's table reads and writes behind it, so one long session here
+     * stalls the node for its full duration. Matches TransactionImporter.MAX_SIGNATURE_DB_BATCH.
+     */
+    private static final int DB_BATCH_SIZE = 200;
+
+    /** Pause between batches so the scan does not monopolise repository connections. */
+    private static final long DB_BATCH_PAUSE_MS = 10;
 
     private static ArbitraryDataHostMonitor instance;
     private volatile boolean isStopping = false;
@@ -123,14 +137,12 @@ public class ArbitraryDataHostMonitor extends Thread{
                     currentSignaturesDecoded.add(Base58.decode(currentSignature));
                 }
 
-                // get all transaction data for current signatures
-                List<TransactionData> currentTransactions;
-                try (final Repository repository = RepositoryManager.getRepository()) {
+                // get all transaction data for current signatures, one short repository session per batch
+                List<TransactionData> currentTransactions = fetchTransactionsInBatches(currentSignaturesDecoded, DB_BATCH_SIZE);
 
-                    currentTransactions = repository.getTransactionRepository().fromSignatures(currentSignaturesDecoded);
+                if( isStopping ) break;
 
-                    LOGGER.info("data count = {}", currentTransactions.size());
-                }
+                LOGGER.info("data count = {}", currentTransactions.size());
 
                 List<ArbitraryHostedDataItemInfo> hostedTransactions = new ArrayList<>(currentTransactions.size());
 
@@ -160,6 +172,35 @@ public class ArbitraryDataHostMonitor extends Thread{
                 LOGGER.error(e.getMessage(), e);
             }
         }
+    }
+
+    /**
+     * Fetch Transactions In Batches
+     *
+     * @param signatures the decoded signatures to look up
+     * @param batchSize the maximum signatures per repository session
+     *
+     * @return the transactions found, unknown signatures are skipped
+     *
+     * @throws DataException
+     * @throws InterruptedException
+     */
+    public List<TransactionData> fetchTransactionsInBatches(List<byte[]> signatures, int batchSize) throws DataException, InterruptedException {
+        List<TransactionData> transactions = new ArrayList<>(signatures.size());
+
+        for (int from = 0; from < signatures.size(); from += batchSize) {
+            if( isStopping ) break;
+
+            List<byte[]> batch = signatures.subList(from, Math.min(signatures.size(), from + batchSize));
+
+            try (final Repository repository = RepositoryManager.getRepository()) {
+                transactions.addAll(repository.getTransactionRepository().fromSignatures(batch));
+            }
+
+            Thread.sleep(DB_BATCH_PAUSE_MS);
+        }
+
+        return transactions;
     }
 
     /**
