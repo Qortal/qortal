@@ -408,6 +408,9 @@ public class Controller extends Thread {
 
 		LOGGER.info("Starting up...");
 
+		// After an auto-update restart, start.sh did not launch us, so its run.pid is stale
+		PidFile.refreshIfPresent(PidFile.DEFAULT_PATH);
+
 		// Potential GUI startup with splash screen, etc.
 		Gui.getInstance();
 
