@@ -84,6 +84,12 @@ public class Synchronizer extends Thread {
 	/** Temporary estimate of blocks remaining for SysTray use. */
 	private volatile int blocksRemaining = 0;
 
+	/** Minimum interval between "not enough peers for sync" INFO lines. */
+	private static final long NOT_ENOUGH_PEERS_LOG_INTERVAL = 60_000L; // ms
+	/** When the current "not enough peers" stretch began (0 = we currently have enough). Synchronizer thread only. */
+	private long notEnoughPeersSince = 0;
+	private long lastNotEnoughPeersLog = 0;
+
 	private static volatile boolean requestSync = false;
 	private boolean syncRequestPending = false;
 
@@ -276,9 +282,28 @@ public class Synchronizer extends Thread {
 		// Check we have enough peers to potentially synchronize
 		final int minBlockchainPeers = Settings.getInstance().getMinBlockchainPeers();
 		if (peers.size() < minBlockchainPeers) {
-			LOGGER.trace(String.format("Not enough peers for sync. Required: %d, Available: %d (filtered from %d handshaked peers)", 
-					minBlockchainPeers, peers.size(), initialPeerCount));
+			// Logged at INFO (rate-limited) rather than TRACE: while this holds, sync is silently
+			// skipped and the node drifts behind / reports not-synced. In test-22 (musiqo, 4 peers)
+			// this caused multi-minute stalls that left no trace in the log at all.
+			long now = System.currentTimeMillis();
+			if (this.notEnoughPeersSince == 0) {
+				this.notEnoughPeersSince = now;
+			}
+			if (now - this.lastNotEnoughPeersLog >= NOT_ENOUGH_PEERS_LOG_INTERVAL) {
+				this.lastNotEnoughPeersLog = now;
+				LOGGER.info("Not enough peers for sync for {}s: need {}, have {} usable of {} handshaked "
+								+ "(misbehaved: {}, genesis-only: {}, no recent block: {}, old version: {})",
+						(now - this.notEnoughPeersSince) / 1000, minBlockchainPeers, peers.size(), initialPeerCount,
+						misbehavedPeers.size(), genesisOnlyPeers.size(), noRecentBlockPeers.size(), oldVersionPeers.size());
+			}
 			return true;
+		}
+
+		if (this.notEnoughPeersSince != 0) {
+			LOGGER.info("Enough peers for sync again after {}s ({} usable)",
+					(System.currentTimeMillis() - this.notEnoughPeersSince) / 1000, peers.size());
+			this.notEnoughPeersSince = 0;
+			this.lastNotEnoughPeersLog = 0;
 		}
 
 		// Disregard peers that have no block signature or the same block signature as us

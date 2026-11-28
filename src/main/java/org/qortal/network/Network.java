@@ -334,6 +334,7 @@ public class Network {
         //maxPeers = Settings.getInstance().getMaxPeers();
         var settings = Settings.getInstance();
         maxPeers = settings.getIpMaxPeers() + settings.getReticulumMaxPeers();
+        warnIfPeerTargetsTooLow(settings);
 
         // Worker pool: message handling only (MessageTask, PingTask, ConnectTask, BroadcastTask).
         // I/O (select/read/write) runs on dedicated ioThread; workers never touch sockets.
@@ -486,6 +487,24 @@ public class Network {
 
     public static Network getInstance() {
         return SingletonContainer.INSTANCE;
+    }
+
+    /**
+     * Sync and the "up to date" status need at least minBlockchainPeers usable peers, after peers
+     * that misbehaved in the last 10 min or lack a recent block are dropped. With a very small
+     * outbound target or IP peer cap, one slow peer plus one disconnect is enough to stall sync
+     * for minutes (test-22, musiqo: maxPeers 4, minOutboundPeers 2). Warn so it shows in the log.
+     */
+    private static void warnIfPeerTargetsTooLow(Settings settings) {
+        int minBlockchainPeers = settings.getMinBlockchainPeers();
+        // Headroom: as many spare peers again as sync needs, to absorb misbehaving/churning peers.
+        int recommended = 2 * minBlockchainPeers;
+        if (settings.getMinOutboundPeers() < recommended || settings.getIpMaxPeers() < recommended) {
+            LOGGER.warn("Peer targets are very low (minOutboundPeers={}, ipMaxPeers={}) for minBlockchainPeers={}: "
+                            + "sync and the synced status may stall whenever a peer misbehaves or disconnects. "
+                            + "Recommended: at least {} for both, or remove the overrides to use the defaults.",
+                    settings.getMinOutboundPeers(), settings.getIpMaxPeers(), minBlockchainPeers, recommended);
+        }
     }
 
     public int getMaxPeers() {

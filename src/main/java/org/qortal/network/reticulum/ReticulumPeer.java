@@ -1523,16 +1523,21 @@ public class ReticulumPeer implements Peer {
      * legacy Peer compatibility
      */
     public Long getPeersVersion() {
-        // Must be >= minPeerVersion (default "6.1.0" = 0x600010000L) so the
-        // Synchronizer's hasOldVersion predicate does not filter out Reticulum peers.
-        return 0x600010000L; // 6.1.0
+        // Use the version from the peer's announce appData (QAN1) when we have it. The old fixed
+        // 6.1.0 floor sat below the default minPeerVersion (6.1.6), so Controller.hasOldVersion
+        // dropped EVERY Reticulum peer in Synchronizer/isUpToDate: the mesh never took part in
+        // chain sync on any node (test-22 analysis: 0 Reticulum sync rounds across all logs).
+        // Unknown version (no announce heard yet, e.g. a cached-identity reconnect) keeps the
+        // floor; updatePeerVersions() fills it in on the remote's next announce.
+        long announced = RNSAnnounceCodec.parseVersionToLong(this.peersVersionString);
+        return announced > 0 ? announced : 0x600010000L; // 6.1.0
     }
 
     public String getPeersVersionString() {
         // Real version comes from the peer's announce appData (QAN1), set via setPeersVersionString()
         // from RNS.getNewPeer()/onIncomingPeerIdentified(). Falls back to the historical floor until
-        // that peer's announce has been seen. Display-only; getPeersVersion() (the numeric min-
-        // version gate) is intentionally left at the floor.
+        // that peer's announce has been seen. getPeersVersion() parses the same string for the
+        // numeric min-version gate.
         return this.peersVersionString != null ? this.peersVersionString : "6.1.0";
     }
 

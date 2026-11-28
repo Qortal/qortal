@@ -204,7 +204,7 @@ final class RNSAnnounceHandler implements AnnounceHandler {
         newPeer.setIsInitiator(true);
         newPeer.setMessageMagic(this.messageMagic);
         // Version advertised in the announce appData (may be null if not present); surfaced via
-        // /peers/reticulum. Display-only — the numeric min-version gate is unaffected.
+        // /peers/reticulum and used by ReticulumPeer.getPeersVersion() for the min-version gate.
         if (announcedVersion != null) {
             newPeer.setPeersVersionString(announcedVersion);
         }
