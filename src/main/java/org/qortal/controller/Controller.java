@@ -1339,100 +1339,100 @@ public class Controller extends Thread {
 				shutdownWatchdog.setDaemon(true);
 				shutdownWatchdog.start();
 
-				LOGGER.info("Shutting down synchronizer");
-				Synchronizer.getInstance().shutdown();
-				try {
-					Synchronizer.getInstance().join();
-				} catch (InterruptedException e) {
-					// We were interrupted while waiting for thread to join
-				}
-
-				LOGGER.info("Shutting down API");
-				ApiService.getInstance().stop();
-
-				LOGGER.info("Shutting down wallets");
-				PirateChainWalletController pirateWalletController = PirateChainWalletController.getInstance();
-				if (pirateWalletController != null) {
-					pirateWalletController.shutdown();
-				}
-
-				if (Settings.getInstance().isAutoUpdateEnabled()) {
-					LOGGER.info("Shutting down auto-update");
-					AutoUpdate.getInstance().shutdown();
-				}
-
-				// Chat
-				LOGGER.info("Shutting down chat delegate");
-				ChatTransactionDelegate.getInstance().shutdown();
-
-			// Arbitrary data controllers
-			LOGGER.info("Shutting down arbitrary-transaction controllers");
-			ArbitraryDataManager.getInstance().shutdown();
-			ArbitraryDataFileManager.getInstance().shutdown();
-			ArbitraryDataFileListManager.getInstance().shutdown();
-			ArbitraryDataCacheManager.getInstance().shutdown();
-			ArbitraryDataBuildManager.getInstance().shutdown();
-			ArbitraryDataCleanupManager.getInstance().shutdown();
-			ArbitraryDataStorageManager.getInstance().shutdown();
-			ArbitraryDataRenderManager.getInstance().shutdown();
-			ArbitraryDataHostMonitor.getInstance().shutdown();
-
-				LOGGER.info("Shutting down online accounts manager");
-				OnlineAccountsManager.getInstance().shutdown();
-
-				LOGGER.info("Shutting down foreign fees manager");
-				ForeignFeesManager.getInstance().shutdown();
-
-				LOGGER.info("Shutting down transaction importer");
-				TransactionImporter.getInstance().shutdown();
-
-				if (blockMinter != null) {
-					LOGGER.info("Shutting down block minter");
-					blockMinter.shutdown();
+				// Every step runs through shutdownStep(), which catches Throwable: one failing
+				// subsystem must not abort the rest of the sequence. In darlood/test-21 a poisoned
+				// RNS singleton threw NoClassDefFoundError at "Shutting down Reticulum", so
+				// networking was never stopped and the repository was never closed — the JVM then
+				// hung on non-daemon threads until it was force-killed.
+				shutdownStep("synchronizer", () -> {
+					Synchronizer.getInstance().shutdown();
 					try {
-						blockMinter.join();
+						Synchronizer.getInstance().join();
 					} catch (InterruptedException e) {
 						// We were interrupted while waiting for thread to join
 					}
+				});
+
+				shutdownStep("API", () -> ApiService.getInstance().stop());
+
+				shutdownStep("wallets", () -> {
+					PirateChainWalletController pirateWalletController = PirateChainWalletController.getInstance();
+					if (pirateWalletController != null) {
+						pirateWalletController.shutdown();
+					}
+				});
+
+				if (Settings.getInstance().isAutoUpdateEnabled()) {
+					shutdownStep("auto-update", () -> AutoUpdate.getInstance().shutdown());
+				}
+
+				// Chat
+				shutdownStep("chat delegate", () -> ChatTransactionDelegate.getInstance().shutdown());
+
+				// Arbitrary data controllers
+				shutdownStep("arbitrary-transaction controllers", () -> {
+					shutdownSubStep("ArbitraryDataManager", () -> ArbitraryDataManager.getInstance().shutdown());
+					shutdownSubStep("ArbitraryDataFileManager", () -> ArbitraryDataFileManager.getInstance().shutdown());
+					shutdownSubStep("ArbitraryDataFileListManager", () -> ArbitraryDataFileListManager.getInstance().shutdown());
+					shutdownSubStep("ArbitraryDataCacheManager", () -> ArbitraryDataCacheManager.getInstance().shutdown());
+					shutdownSubStep("ArbitraryDataBuildManager", () -> ArbitraryDataBuildManager.getInstance().shutdown());
+					shutdownSubStep("ArbitraryDataCleanupManager", () -> ArbitraryDataCleanupManager.getInstance().shutdown());
+					shutdownSubStep("ArbitraryDataStorageManager", () -> ArbitraryDataStorageManager.getInstance().shutdown());
+					shutdownSubStep("ArbitraryDataRenderManager", () -> ArbitraryDataRenderManager.getInstance().shutdown());
+					shutdownSubStep("ArbitraryDataHostMonitor", () -> ArbitraryDataHostMonitor.getInstance().shutdown());
+				});
+
+				shutdownStep("online accounts manager", () -> OnlineAccountsManager.getInstance().shutdown());
+
+				shutdownStep("foreign fees manager", () -> ForeignFeesManager.getInstance().shutdown());
+
+				shutdownStep("transaction importer", () -> TransactionImporter.getInstance().shutdown());
+
+				if (blockMinter != null) {
+					shutdownStep("block minter", () -> {
+						blockMinter.shutdown();
+						try {
+							blockMinter.join();
+						} catch (InterruptedException e) {
+							// We were interrupted while waiting for thread to join
+						}
+					});
 				}
 
 				// Export local data
-				LOGGER.info("Backing up local data");
-				this.exportRepositoryData();
+				shutdownStep("local data backup", this::exportRepositoryData);
 
-                // shutdown Reticulum mesh before Network for a chance to tear down ACTIVE links gracefully
-                LOGGER.info("Shutting down Reticulum");
-                RNS.getInstance().shutdown();
+				// shutdown Reticulum mesh before Network for a chance to tear down ACTIVE links gracefully
+				shutdownStep("Reticulum", () -> RNS.getInstance().shutdown());
 
-				LOGGER.info("Shutting down networking");
-				// Close BOTH listen sockets before either teardown starts. These calls are
-				// non-blocking; the shutdown() calls below are not. In test-17 Network.shutdown()
-				// stalled, so NetworkData.shutdown() was never reached and the QDN socket kept
-				// completing handshakes for the full 120s until stop.sh force-killed the node.
-				Network.getInstance().stopAcceptingConnections();
-				NetworkData.getInstance().stopAcceptingConnections();
-				Network.getInstance().shutdown();
-				NetworkData.getInstance().shutdown();
-				PeerSendManagement.getInstance().shutdown();
+				shutdownStep("networking", () -> {
+					// Close BOTH listen sockets before either teardown starts. These calls are
+					// non-blocking; the shutdown() calls below are not. In test-17 Network.shutdown()
+					// stalled, so NetworkData.shutdown() was never reached and the QDN socket kept
+					// completing handshakes for the full 120s until stop.sh force-killed the node.
+					shutdownSubStep("Network listen socket", () -> Network.getInstance().stopAcceptingConnections());
+					shutdownSubStep("NetworkData listen socket", () -> NetworkData.getInstance().stopAcceptingConnections());
+					shutdownSubStep("Network", () -> Network.getInstance().shutdown());
+					shutdownSubStep("NetworkData", () -> NetworkData.getInstance().shutdown());
+					shutdownSubStep("PeerSendManagement", () -> PeerSendManagement.getInstance().shutdown());
+				});
 
-				LOGGER.info("Shutting down controller");
-				this.interrupt();
-				try {
-					this.join();
-				} catch (InterruptedException e) {
-					// We were interrupted while waiting for thread to join
-				}
+				shutdownStep("controller", () -> {
+					this.interrupt();
+					try {
+						this.join();
+					} catch (InterruptedException e) {
+						// We were interrupted while waiting for thread to join
+					}
+				});
 
-				LOGGER.info("Shutting down TradeBot");
-				TradeBot.getInstance().shutdown();
+				shutdownStep("TradeBot", () -> TradeBot.getInstance().shutdown());
 
 				// Shutdown database cache timers before closing repository
-				LOGGER.info("Shutting down database cache timers");
-				HSQLDBCacheUtils.shutdown();
+				shutdownStep("database cache timers", HSQLDBCacheUtils::shutdown);
 
 				// Shutdown arbitrary metadata manager scheduler before closing repository
-				LOGGER.info("Shutting down arbitrary metadata manager");
-				ArbitraryMetadataManager.getInstance().shutdown();
+				shutdownStep("arbitrary metadata manager", () -> ArbitraryMetadataManager.getInstance().shutdown());
 
 				// Make sure we're the only thread modifying the blockchain when shutting down the repository
 				ReentrantLock blockchainLock = Controller.getInstance().getBlockchainLock();
@@ -1446,22 +1446,24 @@ public class Controller extends Thread {
 				}
 
 				try {
-					LOGGER.info("Shutting down repository");
-					RepositoryManager.closeRepositoryFactory();
-				} catch (DataException e) {
-					LOGGER.error("Error occurred while shutting down repository", e);
-				}
-
-				// Release the lock if we acquired it
-				if (blockchainLock.isHeldByCurrentThread()) {
-					blockchainLock.unlock();
+					shutdownStep("repository", () -> {
+						try {
+							RepositoryManager.closeRepositoryFactory();
+						} catch (DataException e) {
+							LOGGER.error("Error occurred while shutting down repository", e);
+						}
+					});
+				} finally {
+					// Release the lock if we acquired it
+					if (blockchainLock.isHeldByCurrentThread()) {
+						blockchainLock.unlock();
+					}
 				}
 
 				// if thread dumps are scheduled, then this will shutdown
-				ThreadDumpScheduler.getInstance().shutdown();
+				shutdownStep("thread dump scheduler", () -> ThreadDumpScheduler.getInstance().shutdown());
 
-				LOGGER.info("Shutting down NTP");
-				NTP.shutdownNow();
+				shutdownStep("NTP", NTP::shutdownNow);
 
 				// Clean shutdown reached the end — stand the watchdog down so it doesn't dump.
 				shutdownComplete.set(true);
@@ -1469,6 +1471,28 @@ public class Controller extends Thread {
 
 				LOGGER.info("Shutdown complete!");
 			}
+		}
+	}
+
+	/**
+	 * Runs one shutdown step, logging "Shutting down {name}" first. Any Throwable is logged and
+	 * swallowed so the remaining steps — above all closing the repository — still run.
+	 */
+	private static void shutdownStep(String name, Runnable step) {
+		LOGGER.info("Shutting down {}", name);
+		runShutdownStep(name, step);
+	}
+
+	/** Like {@link #shutdownStep} but without the INFO line, for parts of a grouped step. */
+	private static void shutdownSubStep(String name, Runnable step) {
+		runShutdownStep(name, step);
+	}
+
+	private static void runShutdownStep(String name, Runnable step) {
+		try {
+			step.run();
+		} catch (Throwable t) {
+			LOGGER.error("Shutdown step '{}' failed — continuing with the remaining steps", name, t);
 		}
 	}
 

@@ -149,6 +149,17 @@ public class RNS {
             reticulum = new Reticulum(defaultConfigPath);
         } catch (IOException e) {
             log.error("unable to create Reticulum network", e);
+        } catch (VirtualMachineError e) {
+            throw e;
+        } catch (Throwable e) {
+            // Must not escape: this runs inside SingletonContainer's static initializer, so any
+            // throwable here permanently poisons the class — every later RNS.getInstance() throws
+            // NoClassDefFoundError, an Error that bypasses the usual catch(Exception) guards and
+            // killed Network-Scheduler, Synchronizer, the Controller loop and shutdown itself
+            // (darlood, test-21: duplicate key in jreticulum.db known_destinations). Leave
+            // reticulum null instead: start() refuses, and the node runs without the mesh.
+            reticulum = null;
+            log.error("unable to create Reticulum network — node will run without the Reticulum mesh", e);
         }
         log.info("reticulum instance created");
         log.debug("reticulum instance created: {}", reticulum);
